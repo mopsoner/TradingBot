@@ -35,7 +35,7 @@ Définir une base claire pour implémenter un bot de trading avec une logique SM
 4. Démarrer en `paper` avant tout passage en `live`.
 
 ## Remarque
-Ce dépôt est volontairement **docs-first** : il ne contient pas encore le code d’exécution (connecteurs exchange, moteur backtest, exécution d’ordres).
+Ce dépôt inclut maintenant une implémentation Python exécutable (pipeline signal/risk/backtest/paper/live simulé + journal), avec alimentation market data Binance et fallback de recherche.
 
 ## Validation de la PR
 Exécuter la validation locale du scaffold :
@@ -46,3 +46,11 @@ python scripts/validate_scaffold.py
 
 La même vérification est exécutée automatiquement via GitHub Actions (`.github/workflows/validate-scaffold.yml`).
 
+
+
+## État actuel
+- Binance klines intégrées pour market-data.
+- Détection SMC/Wyckoff stricte (sweep, Spring/UTAD, displacement, BOS, fib).
+- Gardes risque/backtest actives.
+- Paper trading avec slippage/frais simulés et limite de position par symbole.
+- Journal JSONL détaillé des setups acceptés/rejetés.
