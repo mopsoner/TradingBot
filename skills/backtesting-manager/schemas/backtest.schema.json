@@ -1,0 +1,46 @@
+{
+  "title": "Backtest Report",
+  "type": "object",
+  "required": [
+    "symbol",
+    "timeframe",
+    "period",
+    "setup",
+    "results",
+    "recommendation"
+  ],
+  "properties": {
+    "symbol": {
+      "type": "string"
+    },
+    "timeframe": {
+      "type": "string"
+    },
+    "period": {
+      "type": "string"
+    },
+    "setup": {
+      "type": "string"
+    },
+    "entries_tested": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "results": {
+      "type": "object"
+    },
+    "best_entry": {
+      "type": "string"
+    },
+    "recommendation": {
+      "type": "string",
+      "enum": [
+        "enable_live",
+        "paper_only",
+        "reject"
+      ]
+    }
+  }
+}

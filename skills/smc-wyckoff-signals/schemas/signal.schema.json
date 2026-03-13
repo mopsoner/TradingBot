@@ -1,0 +1,82 @@
+{
+  "title": "Signal Setup",
+  "type": "object",
+  "required": [
+    "symbol",
+    "timeframe_context",
+    "pattern",
+    "direction",
+    "liquidity_zone",
+    "sweep_level",
+    "displacement",
+    "bos_level",
+    "fib_entry_zone",
+    "entry_zone",
+    "stop_loss",
+    "targets",
+    "setup_valid"
+  ],
+  "properties": {
+    "symbol": {
+      "type": "string"
+    },
+    "timeframe_context": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "pattern": {
+      "type": "string",
+      "enum": [
+        "spring",
+        "utad",
+        "none"
+      ]
+    },
+    "direction": {
+      "type": "string",
+      "enum": [
+        "long",
+        "short",
+        "none"
+      ]
+    },
+    "liquidity_zone": {
+      "type": "object"
+    },
+    "sweep_level": {
+      "type": "number"
+    },
+    "displacement": {
+      "type": "boolean"
+    },
+    "bos_level": {
+      "type": "number"
+    },
+    "fib_entry_zone": {
+      "type": "object"
+    },
+    "entry_zone": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      }
+    },
+    "stop_loss": {
+      "type": "number"
+    },
+    "targets": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      }
+    },
+    "setup_valid": {
+      "type": "boolean"
+    },
+    "confidence": {
+      "type": "number"
+    }
+  }
+}
