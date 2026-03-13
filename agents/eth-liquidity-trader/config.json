@@ -1,0 +1,36 @@
+{
+  "name": "eth-liquidity-trader",
+  "symbol_universe": [
+    "ETHUSDT",
+    "BTCUSDT"
+  ],
+  "modes": [
+    "research",
+    "paper",
+    "live"
+  ],
+  "timeframes": {
+    "context": [
+      "4H",
+      "1H"
+    ],
+    "entry": [
+      "15m",
+      "1H"
+    ]
+  },
+  "signal_model": [
+    "liquidity_zone",
+    "liquidity_sweep",
+    "spring_or_utad",
+    "displacement",
+    "bos",
+    "fib_entry"
+  ],
+  "fib_levels": [
+    0.5,
+    0.618,
+    0.705
+  ],
+  "default_mode": "paper"
+}
