@@ -47,10 +47,16 @@ class OpenClawBot:
                 decisions[symbol] = decision
                 continue
 
-            context = self.market_data.fetch_ohlcv(symbol, self.config.context_tf[-1], 220)
-            entry = self.market_data.fetch_ohlcv(symbol, self.config.entry_tf, 220)
-            setup = self.signals.detect(symbol, context, entry, list(self.config.context_tf))
+            try:
+                context = self.market_data.fetch_ohlcv(symbol, self.config.context_tf[-1], 220, allow_synthetic_fallback=allow_fallback)
+                entry = self.market_data.fetch_ohlcv(symbol, self.config.entry_tf, 220, allow_synthetic_fallback=allow_fallback)
+            except Exception:
+                decision = Decision(status="no_trade", reason="market_data_unavailable")
+                self.journal.log_decision(symbol, decision)
+                decisions[symbol] = decision
+                continue
 
+            setup = self.signals.detect(symbol, context, entry, list(self.config.context_tf))
             if not setup.setup_valid:
                 decision = Decision(status="rejected_setup", reason="signal_validation_failed", setup=setup)
                 self.journal.log_decision(symbol, decision)
@@ -84,9 +90,7 @@ class OpenClawBot:
                 metadata={"confidence": setup.confidence, "backtest": backtest.recommendation},
             )
 
-            if self.config.mode == "research":
-                decision = Decision(status="valid_setup", reason="research_only", setup=setup)
-            elif self.config.mode == "paper":
+            if self.config.mode == "paper":
                 order_id = self.paper.place(trade)
                 decision = Decision(
                     status="valid_setup",

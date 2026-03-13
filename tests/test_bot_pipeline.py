@@ -29,15 +29,8 @@ def mk_candles(n: int, base: float = 100.0) -> list[Candle]:
     return out
 
 
-def test_session_filter():
-    sf = SessionFilter((7, 20))
-    assert sf.is_allowed(datetime(2026, 1, 1, 10, tzinfo=timezone.utc))
-    assert not sf.is_allowed(datetime(2026, 1, 1, 2, tzinfo=timezone.utc))
-
-
-def test_risk_manager_requires_approval():
-    rm = RiskManager()
-    setup = SignalSetup(
+def mk_setup() -> SignalSetup:
+    return SignalSetup(
         symbol="ETHUSDT",
         timeframe_context=["4H", "1H"],
         pattern="spring",
@@ -53,9 +46,33 @@ def test_risk_manager_requires_approval():
         setup_valid=True,
         confidence=0.8,
     )
-    decision = rm.evaluate(setup, backtest_approved=True, explicit_approval=False)
+
+
+def test_session_filter():
+    sf = SessionFilter((7, 20))
+    assert sf.is_allowed(datetime(2026, 1, 1, 10, tzinfo=timezone.utc))
+    assert not sf.is_allowed(datetime(2026, 1, 1, 2, tzinfo=timezone.utc))
+
+
+def test_risk_manager_requires_approval():
+    rm = RiskManager()
+    decision = rm.evaluate(mk_setup(), backtest_approved=True, explicit_approval=False)
     assert not decision.approved
     assert decision.reason == "risk_approval_required"
+
+
+def test_risk_manager_blocks_portfolio_limits():
+    rm = RiskManager(account_balance=10_000)
+    decision = rm.evaluate(
+        mk_setup(),
+        backtest_approved=True,
+        explicit_approval=True,
+        open_positions_for_symbol=1,
+        daily_realized_pnl=-250,
+        weekly_realized_pnl=-100,
+    )
+    assert not decision.approved
+    assert decision.reason == "max_open_positions_per_symbol_reached"
 
 
 def test_backtesting_report_shape():
@@ -76,9 +93,10 @@ def test_backtesting_report_shape():
         setup_valid=True,
         confidence=0.8,
     )
-    report = bt.run("BTCUSDT", "1H", mk_candles(120, base=105), setup)
+    report = bt.run("BTCUSDT", "1H", mk_candles(140, base=105), setup)
     assert report.symbol == "BTCUSDT"
     assert report.recommendation in {"enable_live", "paper_only", "reject"}
+    assert "metrics" in report.results
 
 
 def test_bot_runs_and_outputs_decisions():
