@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
 
 from .models import Decision
 
@@ -18,7 +18,20 @@ class TradeJournal:
             "symbol": symbol,
             "status": decision.status,
             "reason": decision.reason,
-            "setup_valid": decision.setup.setup_valid if decision.setup else False,
+            "metadata": decision.metadata,
+            "setup": {
+                "valid": decision.setup.setup_valid if decision.setup else False,
+                "direction": decision.setup.direction if decision.setup else "none",
+                "pattern": decision.setup.pattern if decision.setup else "none",
+                "liquidity_zone": decision.setup.liquidity_zone if decision.setup else {},
+                "sweep_level": decision.setup.sweep_level if decision.setup else 0.0,
+                "displacement": decision.setup.displacement if decision.setup else False,
+                "bos_level": decision.setup.bos_level if decision.setup else 0.0,
+                "entry_zone": decision.setup.entry_zone if decision.setup else [],
+                "stop_loss": decision.setup.stop_loss if decision.setup else 0.0,
+                "targets": decision.setup.targets if decision.setup else [],
+                "confidence": decision.setup.confidence if decision.setup else 0.0,
+            },
         }
         with self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(payload) + "\n")
