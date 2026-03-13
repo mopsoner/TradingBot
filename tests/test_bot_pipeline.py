@@ -1,25 +1,28 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
+from urllib.error import URLError
 
 from openclaw.backtesting_manager import BacktestingManager
 from openclaw.bot import BotConfig, OpenClawBot
-from openclaw.models import Candle, SignalSetup
+from openclaw.market_data import MarketDataService
+from openclaw.models import Candle, Decision, SignalSetup
 from openclaw.risk_manager import RiskManager
 from openclaw.session_filter import SessionFilter
+from openclaw.trade_journal import TradeJournal
 
 
 def mk_candles(n: int, base: float = 100.0) -> list[Candle]:
     out: list[Candle] = []
-    for i in range(n):
-        price = base + i * 0.1
+    for _ in range(n):
         out.append(
             Candle(
                 ts=datetime.now(timezone.utc),
-                open=price,
-                high=price * 1.01,
-                low=price * 0.99,
-                close=price * 1.001,
+                open=base,
+                high=base * 1.01,
+                low=base * 0.99,
+                close=base,
                 volume=1000,
             )
         )
@@ -83,3 +86,59 @@ def test_bot_runs_and_outputs_decisions():
     decisions = bot.run_once(risk_approval=False, backtest_approval=True)
     assert set(decisions.keys()) == {"ETHUSDT", "BTCUSDT"}
     assert all(d.status in {"valid_setup", "rejected_setup", "no_trade"} for d in decisions.values())
+
+
+def test_trade_journal_logs_rejected_and_valid_setup(tmp_path):
+    path = tmp_path / "journal.jsonl"
+    journal = TradeJournal(str(path))
+    rejected = SignalSetup(
+        symbol="ETHUSDT",
+        timeframe_context=["4H", "1H"],
+        pattern="spring",
+        direction="long",
+        liquidity_zone={"low": 90, "high": 110},
+        sweep_level=90,
+        displacement=True,
+        bos_level=110,
+        fib_entry_zone={"levels": [0.5], "prices": [100]},
+        entry_zone=[99, 101],
+        stop_loss=95,
+        targets=[110],
+        setup_valid=False,
+        confidence=0.2,
+    )
+    journal.log_decision("ETHUSDT", decision=Decision(status="rejected_setup", reason="x", setup=rejected))
+    lines = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert lines[0]["status"] == "rejected_setup"
+    assert lines[0]["setup"]["direction"] == "long"
+
+
+def test_market_data_uses_binance_payload(monkeypatch):
+    service = MarketDataService()
+
+    def fake_fetch_binance_klines(symbol: str, interval: str, limit: int):
+        assert symbol == "ETHUSDT"
+        assert interval == "1h"
+        assert limit == 10
+        return [
+            [1700000000000, "100", "101", "99", "100.5", "1200", 0],
+            [1700003600000, "100.5", "102", "100", "101.5", "1400", 0],
+            [1700007200000, "101.5", "103", "101", "102.5", "1600", 0],
+        ]
+
+    monkeypatch.setattr(service, "_fetch_binance_klines", fake_fetch_binance_klines)
+    candles = service.fetch_ohlcv("ETHUSDT", "1H", 3)
+    assert len(candles) == 3
+    assert candles[-1].close == 102.5
+
+
+def test_market_data_falls_back_to_synthetic_on_error(monkeypatch):
+    service = MarketDataService()
+
+    def failing_fetch_binance_klines(symbol: str, interval: str, limit: int):
+        raise URLError("network down")
+
+    monkeypatch.setattr(service, "_fetch_binance_klines", failing_fetch_binance_klines)
+    candles = service.fetch_ohlcv("BTCUSDT", "1H", 20)
+    assert len(candles) == 20
+    assert all(c.high >= c.low for c in candles)

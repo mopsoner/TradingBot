@@ -41,6 +41,7 @@ class Decision:
     status: Literal["valid_setup", "rejected_setup", "no_trade"]
     reason: str
     setup: SignalSetup | None = None
+    metadata: dict = field(default_factory=dict)
 
 
 @dataclass(slots=True)
