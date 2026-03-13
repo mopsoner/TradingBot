@@ -1,0 +1,41 @@
+{
+  "template_version": "openclaw-reference-compatible-v1",
+  "project": {
+    "name": "eth-liquidity-trader",
+    "symbols": ["ETHUSDT", "BTCUSDT"],
+    "modes": ["research", "paper", "live"],
+    "default_mode": "paper"
+  },
+  "strategy": {
+    "signal_stack": [
+      "liquidity_zone",
+      "liquidity_sweep",
+      "spring_or_utad",
+      "displacement",
+      "bos",
+      "fib_entry"
+    ],
+    "fib_levels": [0.5, 0.618, 0.705],
+    "forbidden_indicators": ["RSI", "MACD", "EMA", "moving_average_crossovers", "oscillator_only_entries"]
+  },
+  "components": [
+    "market-data",
+    "smc-wyckoff-signals",
+    "session-filter",
+    "risk-manager",
+    "backtesting-manager",
+    "paper-trade-manager",
+    "trade-execution",
+    "trade-journal"
+  ],
+  "pipelines": {
+    "research": ["market-data", "smc-wyckoff-signals", "backtesting-manager", "reports"],
+    "paper": ["market-data", "smc-wyckoff-signals", "risk-manager", "paper-trade-manager", "trade-journal"],
+    "live": ["market-data", "smc-wyckoff-signals", "risk-manager", "trade-execution", "trade-journal"]
+  },
+  "safety": {
+    "require_risk_approval_for_execution": true,
+    "require_backtest_approval_before_live": true,
+    "journal_all_decisions": true
+  }
+}

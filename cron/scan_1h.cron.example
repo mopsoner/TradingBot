@@ -1,0 +1,2 @@
+# Example only — no executable logic included
+*/15 * * * * scan 1H validation context
