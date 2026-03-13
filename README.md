@@ -22,7 +22,6 @@ Définir une base claire pour implémenter un bot de trading avec une logique SM
 - `cron/` : exemples de planification.
 - `templates/` : checklist setup et template de rapport de recherche.
 - `data/` : conventions d’organisation des données.
-- `.openclaw/` : manifeste machine-readable d’alignement template OpenClaw.
 
 ## Modes supportés
 - `research`
@@ -47,28 +46,3 @@ python scripts/validate_scaffold.py
 
 La même vérification est exécutée automatiquement via GitHub Actions (`.github/workflows/validate-scaffold.yml`).
 
-
-## Implémentation fournie
-Le dépôt inclut maintenant une implémentation Python du pipeline complet dans `src/openclaw/` :
-- market-data
-- smc-wyckoff-signals
-- session-filter
-- risk-manager
-- backtesting-manager
-- paper-trade-manager
-- trade-execution
-- trade-journal
-
-### Lancer le bot (exemple)
-```bash
-PYTHONPATH=src python -m openclaw.cli --mode paper --risk-approval --backtest-approval
-```
-
-### Lancer les tests
-```bash
-PYTHONPATH=src python -m pytest -q
-```
-
-
-## OpenClaw template compatibility
-Le fichier `.openclaw/project.template.json` formalise la compatibilité structurelle avec le template OpenClaw (référence `docs/reference`) en décrivant symbols, modes, composants, pipelines et règles safety.

@@ -25,15 +25,12 @@ REQUIRED_FILES = [
     'skills/backtesting-manager/schemas/backtest.schema.json',
     'templates/setup_checklist.md',
     'templates/research_report_template.md',
-    '.openclaw/project.template.json',
 ]
-
 
 JSON_FILES = [
     'agents/eth-liquidity-trader/config.json',
     'skills/smc-wyckoff-signals/schemas/signal.schema.json',
     'skills/backtesting-manager/schemas/backtest.schema.json',
-    '.openclaw/project.template.json',
 ]
 
 
@@ -93,35 +90,5 @@ expected_fibs = [0.5, 0.618, 0.705]
 if config.get('fib_levels') != expected_fibs:
     fail('config.json fib_levels must be [0.5, 0.618, 0.705]')
 ok('config.json fib levels are valid')
-
-
-
-manifest = json.loads((ROOT / '.openclaw/project.template.json').read_text(encoding='utf-8'))
-
-if manifest.get('project', {}).get('symbols') != ['ETHUSDT', 'BTCUSDT']:
-    fail('project.template.json symbols must be [ETHUSDT, BTCUSDT]')
-ok('project.template.json symbols are valid')
-
-if manifest.get('project', {}).get('default_mode') != 'paper':
-    fail("project.template.json default_mode must be 'paper'")
-ok('project.template.json default mode is paper')
-
-if manifest.get('strategy', {}).get('fib_levels') != [0.5, 0.618, 0.705]:
-    fail('project.template.json fib_levels must be [0.5, 0.618, 0.705]')
-ok('project.template.json fib levels are valid')
-
-required_components = [
-    'market-data',
-    'smc-wyckoff-signals',
-    'session-filter',
-    'risk-manager',
-    'backtesting-manager',
-    'paper-trade-manager',
-    'trade-execution',
-    'trade-journal',
-]
-if manifest.get('components') != required_components:
-    fail('project.template.json components must match required OpenClaw component list')
-ok('project.template.json components are valid')
 
 print('[DONE] Scaffold validation passed')
