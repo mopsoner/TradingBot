@@ -1,0 +1,17 @@
+# Runtime artifacts
+*.log
+*.tmp
+.env
+
+# Backtest and research outputs
+data/raw/
+data/processed/
+data/reports/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Node
+node_modules/

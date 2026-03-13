@@ -1,0 +1,2 @@
+# Example only — no executable logic included
+*/5 * * * *  scan 15m market-data + signal engine
