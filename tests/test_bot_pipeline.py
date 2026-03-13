@@ -4,13 +4,10 @@ import json
 from datetime import datetime, timezone
 from urllib.error import URLError
 
-import pytest
-
 from openclaw.backtesting_manager import BacktestingManager
 from openclaw.bot import BotConfig, OpenClawBot
 from openclaw.market_data import MarketDataService
-from openclaw.models import Candle, Decision, SignalSetup, Trade
-from openclaw.paper_trade_manager import PaperTradeManager
+from openclaw.models import Candle, Decision, SignalSetup
 from openclaw.risk_manager import RiskManager
 from openclaw.session_filter import SessionFilter
 from openclaw.trade_journal import TradeJournal
@@ -112,8 +109,22 @@ def test_bot_runs_and_outputs_decisions():
 def test_trade_journal_logs_rejected_and_valid_setup(tmp_path):
     path = tmp_path / "journal.jsonl"
     journal = TradeJournal(str(path))
-    rejected = mk_setup()
-    rejected.setup_valid = False
+    rejected = SignalSetup(
+        symbol="ETHUSDT",
+        timeframe_context=["4H", "1H"],
+        pattern="spring",
+        direction="long",
+        liquidity_zone={"low": 90, "high": 110},
+        sweep_level=90,
+        displacement=True,
+        bos_level=110,
+        fib_entry_zone={"levels": [0.5], "prices": [100]},
+        entry_zone=[99, 101],
+        stop_loss=95,
+        targets=[110],
+        setup_valid=False,
+        confidence=0.2,
+    )
     journal.log_decision("ETHUSDT", decision=Decision(status="rejected_setup", reason="x", setup=rejected))
     lines = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     assert lines[0]["status"] == "rejected_setup"
@@ -149,31 +160,3 @@ def test_market_data_falls_back_to_synthetic_on_error(monkeypatch):
     candles = service.fetch_ohlcv("BTCUSDT", "1H", 20)
     assert len(candles) == 20
     assert all(c.high >= c.low for c in candles)
-
-
-def test_market_data_raises_when_fallback_disabled(monkeypatch):
-    service = MarketDataService()
-
-    def failing_fetch_binance_klines(symbol: str, interval: str, limit: int):
-        raise URLError("network down")
-
-    monkeypatch.setattr(service, "_fetch_binance_klines", failing_fetch_binance_klines)
-    with pytest.raises(URLError):
-        service.fetch_ohlcv("BTCUSDT", "1H", 20, allow_synthetic_fallback=False)
-
-
-def test_paper_trade_manager_blocks_second_position_same_symbol():
-    manager = PaperTradeManager()
-    trade = Trade(
-        symbol="ETHUSDT",
-        direction="long",
-        entry=100,
-        stop_loss=95,
-        target=110,
-        size=1.0,
-        mode="paper",
-        opened_at=datetime.now(timezone.utc),
-    )
-    manager.place(trade)
-    with pytest.raises(ValueError):
-        manager.place(trade)

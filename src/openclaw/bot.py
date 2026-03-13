@@ -37,17 +37,9 @@ class OpenClawBot:
         self.execution = TradeExecution()
         self.journal = TradeJournal()
 
-    def run_once(
-        self,
-        risk_approval: bool = False,
-        backtest_approval: bool = False,
-        daily_realized_pnl: float = 0.0,
-        weekly_realized_pnl: float = 0.0,
-    ) -> dict[str, Decision]:
+    def run_once(self, risk_approval: bool = False, backtest_approval: bool = False) -> dict[str, Decision]:
         decisions: dict[str, Decision] = {}
         now = datetime.now(timezone.utc)
-        allow_fallback = self.config.mode == "research"
-
         for symbol in self.config.symbols:
             if not self.session_filter.is_allowed(now):
                 decision = Decision(status="no_trade", reason="session_filtered")
@@ -74,26 +66,7 @@ class OpenClawBot:
             backtest = self.backtesting.run(symbol, self.config.entry_tf, entry, setup)
             backtest_ok = backtest_approval and backtest.recommendation in {"enable_live", "paper_only"}
 
-            if self.config.mode == "research":
-                decision = Decision(
-                    status="valid_setup",
-                    reason="research_only",
-                    setup=setup,
-                    metadata={"backtest_recommendation": backtest.recommendation},
-                )
-                self.journal.log_decision(symbol, decision)
-                decisions[symbol] = decision
-                continue
-
-            open_positions_for_symbol = 1 if symbol in self.paper.open_positions else 0
-            risk_decision = self.risk.evaluate(
-                setup,
-                backtest_approved=backtest_ok,
-                explicit_approval=risk_approval,
-                open_positions_for_symbol=open_positions_for_symbol,
-                daily_realized_pnl=daily_realized_pnl,
-                weekly_realized_pnl=weekly_realized_pnl,
-            )
+            risk_decision = self.risk.evaluate(setup, backtest_approved=backtest_ok, explicit_approval=risk_approval)
             if not risk_decision.approved:
                 decision = Decision(
                     status="rejected_setup",
@@ -127,7 +100,11 @@ class OpenClawBot:
                 )
             else:
                 if not backtest_approval:
-                    decision = Decision(status="rejected_setup", reason="live_requires_backtest_approval", setup=setup)
+                    decision = Decision(
+                        status="rejected_setup",
+                        reason="live_requires_backtest_approval",
+                        setup=setup,
+                    )
                     self.journal.log_decision(symbol, decision)
                     decisions[symbol] = decision
                     continue

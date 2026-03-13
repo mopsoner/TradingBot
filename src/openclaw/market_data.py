@@ -11,19 +11,13 @@ from .models import Candle
 
 
 class MarketDataService:
-    """Market data service backed by Binance klines with optional synthetic fallback."""
+    """Market data service backed by Binance klines with synthetic fallback."""
 
     def __init__(self, base_url: str = "https://api.binance.com", timeout_s: float = 8.0) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_s = timeout_s
 
-    def fetch_ohlcv(
-        self,
-        symbol: str,
-        timeframe: str,
-        limit: int = 200,
-        allow_synthetic_fallback: bool = True,
-    ) -> list[Candle]:
+    def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 200) -> list[Candle]:
         interval = self._to_binance_interval(timeframe)
         safe_limit = max(10, min(limit, 1000))
 
@@ -32,11 +26,10 @@ class MarketDataService:
             candles = [self._kline_to_candle(row) for row in raw_klines]
             if candles:
                 return candles
-            raise ValueError("empty_klines")
         except (URLError, HTTPError, TimeoutError, ValueError, json.JSONDecodeError):
-            if allow_synthetic_fallback:
-                return self._synthetic_ohlcv(symbol=symbol, timeframe=timeframe, limit=safe_limit)
-            raise
+            pass
+
+        return self._synthetic_ohlcv(symbol=symbol, timeframe=timeframe, limit=safe_limit)
 
     def _fetch_binance_klines(self, symbol: str, interval: str, limit: int) -> list[list]:
         query = urlencode({"symbol": symbol.upper(), "interval": interval, "limit": limit})
@@ -49,6 +42,8 @@ class MarketDataService:
         return data
 
     def _kline_to_candle(self, row: list) -> Candle:
+        # Binance kline format:
+        # [open_time, open, high, low, close, volume, close_time, ...]
         return Candle(
             ts=datetime.fromtimestamp(row[0] / 1000, tz=timezone.utc),
             open=float(row[1]),
