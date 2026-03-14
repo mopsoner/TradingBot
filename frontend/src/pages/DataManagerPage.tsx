@@ -74,8 +74,11 @@ export function DataManagerPage({ onNavigate }: Props) {
 
   return (
     <section>
-      <div className="flex items-center justify-between mb-16">
-        <h2 style={{ margin: 0 }}>Données de marché</h2>
+      <div className="page-header-row">
+        <div>
+          <h2 style={{ margin: 0 }}>Données de marché</h2>
+          <p className="page-description">Chargement et gestion des bougies historiques Binance</p>
+        </div>
         {onNavigate && (
           <button className="btn btn-primary" onClick={() => onNavigate('Stratégie')}>
             Configurer la stratégie →
@@ -83,26 +86,26 @@ export function DataManagerPage({ onNavigate }: Props) {
         )}
       </div>
 
-      <div className="grid-3 mb-16">
-        <div className="card">
-          <div className="stat-value blue">{totalCandles.toLocaleString()}</div>
-          <div className="stat-label">Bougies en base</div>
+      <div className="grid-3" style={{ marginBottom: 20 }}>
+        <div className="stat-card stat-card-accent-blue">
+          <div className="stat-num" style={{ color: 'var(--accent)', fontSize: 28 }}>{totalCandles.toLocaleString()}</div>
+          <div className="stat-lbl">Bougies en base</div>
         </div>
-        <div className="card">
-          <div className="stat-value">{trackedCount}</div>
-          <div className="stat-label">Symboles chargés</div>
+        <div className="stat-card stat-card-accent-yellow">
+          <div className="stat-num" style={{ color: 'var(--accent-yellow)' }}>{trackedCount}</div>
+          <div className="stat-lbl">Symboles chargés</div>
         </div>
-        <div className="card">
-          <div className="stat-value" style={{ fontSize: 15 }}>
+        <div className="stat-card stat-card-accent-green">
+          <div className="stat-num" style={{ fontSize: 14, fontWeight: 700, color: 'var(--accent-green)' }}>
             {stats?.last_candle_at ? fmtDateTime(String(stats.last_candle_at)) : '—'}
           </div>
-          <div className="stat-label">Dernière ingestion</div>
+          <div className="stat-lbl">Dernière ingestion</div>
         </div>
       </div>
 
       <div className="grid-2">
         <div className="card">
-          <h3>1 — Sélectionner les cryptos</h3>
+          <div className="section-title">1 — Sélectionner les cryptos</div>
           <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
             {quotes.map(q => (
               <button key={q} onClick={() => { setQuote(q); setSelected(new Set()); }}
@@ -156,7 +159,7 @@ export function DataManagerPage({ onNavigate }: Props) {
             ))}
           </div>
 
-          <h3 style={{ marginTop: 20 }}>2 — Période de chargement</h3>
+          <div className="section-title" style={{ marginTop: 20 }}>2 — Période de chargement</div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 16 }}>
             {PERIODS.map(p => (
               <button
@@ -176,7 +179,7 @@ export function DataManagerPage({ onNavigate }: Props) {
             ))}
           </div>
 
-          <h3>3 — Charger les bougies</h3>
+          <div className="section-title">3 — Charger les bougies</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {TIMEFRAMES.map(tf => {
               const n = candleCount(tf.value, days);

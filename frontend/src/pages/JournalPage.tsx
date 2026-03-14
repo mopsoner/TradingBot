@@ -130,40 +130,40 @@ export function JournalPage() {
   const stats = data?.stats ?? { accepted: 0, rejected: 0 };
   const total = data?.total ?? 0;
 
+  const acceptRate = stats.accepted + stats.rejected > 0
+    ? Math.round((stats.accepted / (stats.accepted + stats.rejected)) * 100)
+    : null;
+
   return (
     <section>
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
+      <div className="page-header-row">
         <div>
           <h2 style={{ margin: 0 }}>Journal des Setups</h2>
-          <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
-            Historique complet — setups acceptés ET rejetés avec tous les détails structurels
-          </div>
+          <p className="page-description">Historique complet — setups acceptés ET rejetés avec détails structurels</p>
         </div>
         <button className="btn btn-secondary" onClick={reload} style={{ fontSize: 12 }}>
-          Rafraîchir
+          ↺ Rafraîchir
         </button>
       </div>
 
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-        <div className="card" style={{ flex: 1, textAlign: 'center', padding: '12px 16px', minWidth: 100 }}>
-          <div style={{ fontSize: 28, fontWeight: 900, color: 'var(--accent)' }}>{total}</div>
-          <div className="muted" style={{ fontSize: 12 }}>Total</div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 12, marginBottom: 20 }}>
+        <div className="stat-card stat-card-accent-blue">
+          <div className="stat-num" style={{ color: 'var(--accent)' }}>{total}</div>
+          <div className="stat-lbl">Total</div>
         </div>
-        <div className="card" style={{ flex: 1, textAlign: 'center', padding: '12px 16px', minWidth: 100 }}>
-          <div style={{ fontSize: 28, fontWeight: 900, color: 'var(--accent-green)' }}>{stats.accepted}</div>
-          <div className="muted" style={{ fontSize: 12 }}>Acceptés</div>
+        <div className="stat-card stat-card-accent-green">
+          <div className="stat-num" style={{ color: 'var(--accent-green)' }}>{stats.accepted}</div>
+          <div className="stat-lbl">Acceptés</div>
         </div>
-        <div className="card" style={{ flex: 1, textAlign: 'center', padding: '12px 16px', minWidth: 100 }}>
-          <div style={{ fontSize: 28, fontWeight: 900, color: 'var(--accent-red)' }}>{stats.rejected}</div>
-          <div className="muted" style={{ fontSize: 12 }}>Rejetés</div>
+        <div className="stat-card stat-card-accent-red">
+          <div className="stat-num" style={{ color: 'var(--accent-red)' }}>{stats.rejected}</div>
+          <div className="stat-lbl">Rejetés</div>
         </div>
-        <div className="card" style={{ flex: 1, textAlign: 'center', padding: '12px 16px', minWidth: 100 }}>
-          <div style={{ fontSize: 28, fontWeight: 900 }}>
-            {stats.accepted + stats.rejected > 0
-              ? `${Math.round((stats.accepted / (stats.accepted + stats.rejected)) * 100)}%`
-              : '—'}
+        <div className="stat-card" style={{ borderLeft: `3px solid ${acceptRate !== null && acceptRate >= 50 ? 'var(--accent-green)' : 'var(--accent-yellow)'}` }}>
+          <div className="stat-num" style={{ color: acceptRate !== null && acceptRate >= 50 ? 'var(--accent-green)' : 'var(--accent-yellow)' }}>
+            {acceptRate !== null ? `${acceptRate}%` : '—'}
           </div>
-          <div className="muted" style={{ fontSize: 12 }}>Taux accept.</div>
+          <div className="stat-lbl">Taux accept.</div>
         </div>
       </div>
 
@@ -211,10 +211,12 @@ export function JournalPage() {
       )}
 
       {!loading && rows.length === 0 && (
-        <div className="card" style={{ textAlign: 'center', padding: 48 }}>
-          <div style={{ fontSize: 48, marginBottom: 12 }}>📓</div>
-          <div style={{ fontWeight: 700, marginBottom: 8 }}>Aucun setup journalisé</div>
-          <div className="muted">Lancez le Pipeline Live pour générer des entrées de journal.</div>
+        <div className="card">
+          <div className="empty-state">
+            <div className="empty-state-icon">📓</div>
+            <div className="empty-state-title">Aucun setup journalisé</div>
+            <div className="empty-state-desc">Lancez le Pipeline Live pour générer des entrées de journal.</div>
+          </div>
         </div>
       )}
 

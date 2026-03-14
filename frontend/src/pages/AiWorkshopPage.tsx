@@ -540,28 +540,28 @@ export function AiWorkshopPage() {
 
   return (
     <section>
-      <div style={{ marginBottom: 24 }}>
-        <h2 style={{ margin: 0, marginBottom: 4 }}>Workshop IA</h2>
-        <div className="muted" style={{ fontSize: 13 }}>
-          Analyse IA de vos backtests · Génération de profils optimisés · Workshop multi-crypto
+      <div className="page-header-row">
+        <div>
+          <h2 style={{ margin: 0 }}>Workshop IA</h2>
+          <p className="page-description">Analyse GPT-4o · Optimisation de profils · Workshop multi-crypto</p>
         </div>
-      </div>
-
-      {/* Tab selector */}
-      <div style={{ display: 'flex', gap: 0, borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border)', marginBottom: 20, width: 'fit-content' }}>
-        {([
-          { key: 'single',   label: '🔬 Analyser un backtest' },
-          { key: 'workshop', label: '🚀 Workshop multi-crypto' },
-        ] as const).map(t => (
-          <button key={t.key} onClick={() => setTab(t.key)}
-            style={{
-              padding: '9px 20px', fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer',
-              background: tab === t.key ? 'linear-gradient(135deg, #7c3aed, #4f46e5)' : 'var(--surface)',
-              color: tab === t.key ? '#fff' : 'var(--text-muted)',
-            }}>
-            {t.label}
-          </button>
-        ))}
+        {/* Tab selector */}
+        <div style={{ display: 'flex', background: 'var(--surface2)', borderRadius: 10, padding: 3, gap: 2, border: '1px solid var(--border)' }}>
+          {([
+            { key: 'single',   label: '🔬 Analyser un backtest' },
+            { key: 'workshop', label: '🚀 Workshop multi-crypto' },
+          ] as const).map(t => (
+            <button key={t.key} onClick={() => setTab(t.key)}
+              style={{
+                padding: '7px 18px', fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer',
+                borderRadius: 8,
+                background: tab === t.key ? 'linear-gradient(135deg, #7c3aed, #4f46e5)' : 'transparent',
+                color: tab === t.key ? '#fff' : 'var(--text-muted)',
+              }}>
+              {t.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {tab === 'single' && <SingleAnalyzePanel rows={rows} />}

@@ -1036,8 +1036,11 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
 
   return (
     <section>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <h2 style={{ margin: 0 }}>Backtests</h2>
+      <div className="page-header-row">
+        <div>
+          <h2 style={{ margin: 0 }}>Backtests</h2>
+          <p className="page-description">Simulation historique de votre stratégie SMC/Wyckoff</p>
+        </div>
         <button
           className="btn btn-primary"
           onClick={() => setShowWorkshop(v => !v)}
@@ -1055,34 +1058,40 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
         </button>
       </div>
 
-      <div className="grid-4 mb-16">
-        <div className="card">
-          <div className={`stat-value ${avgWR >= 0.5 ? 'green' : 'red'}`}>{(avgWR * 100).toFixed(1)}%</div>
-          <div className="stat-label">
+      <div className="grid-4" style={{ marginBottom: 20 }}>
+        <div className={`stat-card ${avgWR >= 0.5 ? 'stat-card-accent-green' : 'stat-card-accent-red'}`}>
+          <div className="stat-num" style={{ color: avgWR >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+            {(avgWR * 100).toFixed(1)}%
+          </div>
+          <div className="stat-lbl">
             <Tooltip text="Pourcentage de trades gagnants sur l'ensemble de tous vos backtests. Au dessus de 50% = bonne sélection. Un bon système peut être profitable avec 40% si le R/R est bon.">
               Win rate moyen
             </Tooltip>
           </div>
         </div>
-        <div className="card">
-          <div className={`stat-value ${avgPF >= 1.2 ? 'green' : 'yellow'}`}>{avgPF.toFixed(2)}</div>
-          <div className="stat-label">
+        <div className={`stat-card ${avgPF >= 1.2 ? 'stat-card-accent-green' : 'stat-card-accent-yellow'}`}>
+          <div className="stat-num" style={{ color: avgPF >= 1.2 ? 'var(--accent-green)' : 'var(--accent-yellow)' }}>
+            {avgPF.toFixed(2)}
+          </div>
+          <div className="stat-lbl">
             <Tooltip text="Profit Factor = gains bruts / pertes brutes. Au dessus de 1.0 = rentable. Au dessus de 1.5 = excellent. En dessous de 1.0 = perd de l'argent.">
               Profit factor moyen
             </Tooltip>
           </div>
         </div>
-        <div className="card">
-          <div className={`stat-value ${avgDD <= 0.1 ? 'green' : avgDD <= 0.2 ? 'yellow' : 'red'}`}>{(avgDD * 100).toFixed(1)}%</div>
-          <div className="stat-label">
+        <div className={`stat-card ${avgDD <= 0.1 ? 'stat-card-accent-green' : avgDD <= 0.2 ? 'stat-card-accent-yellow' : 'stat-card-accent-red'}`}>
+          <div className="stat-num" style={{ color: avgDD <= 0.1 ? 'var(--accent-green)' : avgDD <= 0.2 ? 'var(--accent-yellow)' : 'var(--accent-red)' }}>
+            {(avgDD * 100).toFixed(1)}%
+          </div>
+          <div className="stat-lbl">
             <Tooltip text="Drawdown = perte maximale depuis un sommet avant de remonter. C'est la mesure du pire scénario que vous auriez vécu. Moins de 10% = excellent, 10-20% = acceptable, +20% = dangereux.">
               Drawdown moyen
             </Tooltip>
           </div>
         </div>
-        <div className="card">
-          <div className="stat-value blue">{rows.length}</div>
-          <div className="stat-label">Rapports stockés</div>
+        <div className="stat-card stat-card-accent-blue">
+          <div className="stat-num" style={{ color: 'var(--accent)' }}>{rows.length}</div>
+          <div className="stat-lbl">Rapports stockés</div>
         </div>
       </div>
 

@@ -234,8 +234,11 @@ export function StrategySettingsPage({ onNavigate }: Props) {
 
   return (
     <section>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
-        <h2 style={{ margin: 0 }}>Stratégie SMC/Wyckoff</h2>
+      <div className="page-header-row">
+        <div>
+          <h2 style={{ margin: 0 }}>Stratégie SMC/Wyckoff</h2>
+          <p className="page-description">Gestion des profils de stratégie et leurs 12 règles</p>
+        </div>
         {onNavigate && (
           <button className="btn btn-primary" onClick={() => onNavigate('Backtests')}>
             Lancer un backtest →

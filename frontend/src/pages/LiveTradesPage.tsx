@@ -23,50 +23,64 @@ export function LiveTradesPage() {
 
   return (
     <section>
-      <h2>Historique des trades</h2>
-      <p className="muted" style={{ marginBottom: 20 }}>
-        Tous les trades enregistrés par le scanner (paper et live).
-        Pour démarrer une surveillance, utilise la page <strong>Live Cockpit</strong>.
-      </p>
+      <div className="page-header-row">
+        <div>
+          <h2 style={{ margin: 0 }}>Historique des trades</h2>
+          <p className="page-description">
+            Tous les trades paper et live · Surveillances depuis <strong>Live Cockpit</strong>
+          </p>
+        </div>
+        <button className="btn btn-secondary" onClick={reload} style={{ fontSize: 12 }}>
+          ↺ Rafraîchir
+        </button>
+      </div>
 
       {/* Stats */}
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-        {[
-          { label: 'Ouverts',  value: open,          color: 'var(--accent)' },
-          { label: 'Gagnants', value: wins,           color: 'var(--accent-green)' },
-          { label: 'Perdants', value: losses,         color: 'var(--accent-red)' },
-          { label: 'Total',    value: trades.length,  color: 'var(--text-muted)' },
-        ].map(s => (
-          <div key={s.label} className="card" style={{ minWidth: 100, textAlign: 'center', padding: '10px 18px' }}>
-            <div style={{ fontSize: 22, fontWeight: 800, color: s.color }}>{s.value}</div>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{s.label}</div>
-          </div>
-        ))}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 12, marginBottom: 20 }}>
+        <div className="stat-card stat-card-accent-blue">
+          <div className="stat-num" style={{ color: 'var(--accent)' }}>{open}</div>
+          <div className="stat-lbl">Ouverts</div>
+        </div>
+        <div className="stat-card stat-card-accent-green">
+          <div className="stat-num" style={{ color: 'var(--accent-green)' }}>{wins}</div>
+          <div className="stat-lbl">Gagnants</div>
+        </div>
+        <div className="stat-card stat-card-accent-red">
+          <div className="stat-num" style={{ color: 'var(--accent-red)' }}>{losses}</div>
+          <div className="stat-lbl">Perdants</div>
+        </div>
+        <div className="stat-card" style={{ borderLeft: '3px solid var(--border-strong)' }}>
+          <div className="stat-num" style={{ color: 'var(--text-soft)' }}>{trades.length}</div>
+          <div className="stat-lbl">Total</div>
+        </div>
       </div>
 
       {/* Filters */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+      <div style={{ display: 'flex', background: 'var(--surface2)', borderRadius: 10, padding: 3, gap: 2, border: '1px solid var(--border)', width: 'fit-content', marginBottom: 16 }}>
         {STATUS_OPTIONS.map(s => (
           <button key={s}
-            className={`btn ${statusFilter === s ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setStatusFilter(s)}>
+            onClick={() => setStatusFilter(s)}
+            style={{
+              padding: '6px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+              cursor: 'pointer', transition: 'all 0.15s',
+              background: statusFilter === s ? 'var(--accent)' : 'transparent',
+              color: statusFilter === s ? '#fff' : 'var(--text-muted)',
+              border: 'none',
+            }}>
             {s === 'All' ? 'Tous' : s.replace('CLOSED_', '')}
           </button>
         ))}
-        <button className="btn btn-secondary" onClick={reload} style={{ marginLeft: 'auto' }}>
-          ↻ Rafraîchir
-        </button>
       </div>
 
       {loading && <p className="muted">Chargement…</p>}
       {error   && <p style={{ color: 'var(--accent-red)' }}>Erreur : {error}</p>}
 
       {trades.length === 0 && !loading && (
-        <div className="card" style={{ textAlign: 'center', padding: 32 }}>
-          <div style={{ fontSize: 32, marginBottom: 8 }}>📭</div>
-          <div className="muted">Aucun trade pour ce filtre.</div>
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>
-            Lance une surveillance depuis <strong>Live Cockpit</strong> pour générer des signaux paper.
+        <div className="card">
+          <div className="empty-state">
+            <div className="empty-state-icon">📭</div>
+            <div className="empty-state-title">Aucun trade pour ce filtre</div>
+            <div className="empty-state-desc">Lance une surveillance depuis <strong>Live Cockpit</strong> pour générer des signaux paper.</div>
           </div>
         </div>
       )}
