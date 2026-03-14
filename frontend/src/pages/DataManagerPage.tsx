@@ -18,6 +18,8 @@ const PERIODS = [
 
 const CANDLES_PER_DAY: Record<string, number> = { '5m': 288, '15m': 96, '1h': 24, '4h': 6 };
 
+const YF_MAX_DAYS: Record<string, number> = { '5m': 59, '15m': 59, '1h': 729, '4h': 729 };
+
 const SOURCE_INFO: Record<string, { label: string; color: string; desc: string }> = {
   binance: { label: 'Binance API',   color: '#f0b90b', desc: 'Données temps réel — nécessite accès réseau Binance' },
   yfinance: { label: 'Yahoo Finance', color: '#7c3aed', desc: 'Données historiques gratuites — disponible partout' },
@@ -55,6 +57,7 @@ export function DataManagerPage({ onNavigate }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [days, setDays] = useState(365);
   const [loading, setLoading] = useState<string | null>(null);
+  const [loadingAll, setLoadingAll] = useState<string | null>(null);
   const [results, setResults] = useState<ImportResult[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<{ symbol: string; tf?: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -82,19 +85,50 @@ export function DataManagerPage({ onNavigate }: Props) {
   const importTf = async (tf: string) => {
     if (selected.size === 0) return;
     setLoading(tf);
-    setResults([]);
+    if (!loadingAll) setResults([]);
     const syms = Array.from(selected);
     try {
       const res = await api.fetchCandles({ symbols: syms, timeframe: tf, days }) as Record<string, unknown>;
       const raw = (res.results as ImportResult[] | undefined) ?? [];
-      setResults(raw);
-      refreshStats();
-      refreshCandles();
+      if (!loadingAll) {
+        setResults(raw);
+        refreshStats();
+        refreshCandles();
+      }
     } catch (e) {
       console.error(e);
-      setResults([{ ok: false, error: String(e) }]);
+      if (!loadingAll) setResults([{ ok: false, error: String(e) }]);
+    } finally {
+      if (!loadingAll) setLoading(null);
+    }
+  };
+
+  const importAllTf = async () => {
+    if (selected.size === 0 || loading || loadingAll) return;
+    setResults([]);
+    const syms = Array.from(selected);
+    const allResults: ImportResult[] = [];
+    try {
+      for (let i = 0; i < TIMEFRAMES.length; i++) {
+        const tf = TIMEFRAMES[i];
+        setLoadingAll(`${tf.label} (${i + 1}/${TIMEFRAMES.length})`);
+        setLoading(tf.value);
+        try {
+          const res = await api.fetchCandles({ symbols: syms, timeframe: tf.value, days }) as Record<string, unknown>;
+          const raw = (res.results as ImportResult[] | undefined) ?? [];
+          allResults.push(...raw);
+          setResults([...allResults]);
+        } catch (e) {
+          console.error(e);
+          allResults.push({ ok: false, error: `${tf.label}: ${String(e)}` });
+          setResults([...allResults]);
+        }
+      }
+      refreshStats();
+      refreshCandles();
     } finally {
       setLoading(null);
+      setLoadingAll(null);
     }
   };
 
@@ -271,29 +305,59 @@ export function DataManagerPage({ onNavigate }: Props) {
                 ))}
               </div>
 
-              <div className="section-title">3 — Importer par timeframe</div>
+              <div className="section-title">3 — Importer les données</div>
+
+              <button
+                className="btn btn-primary"
+                style={{
+                  width: '100%', padding: '12px 20px', fontSize: 14, fontWeight: 700,
+                  marginBottom: 12, letterSpacing: 0.3,
+                  background: loadingAll
+                    ? 'linear-gradient(135deg, rgba(59,130,246,0.25), rgba(124,58,237,0.25))'
+                    : 'linear-gradient(135deg, var(--accent), #7c3aed)',
+                  border: loadingAll ? '1px solid rgba(59,130,246,0.3)' : 'none',
+                }}
+                disabled={!!loading || !!loadingAll || selected.size === 0}
+                onClick={importAllTf}
+              >
+                {loadingAll
+                  ? `Import ${loadingAll}…`
+                  : `Importer tous les timeframes (${TIMEFRAMES.map(t => t.value).join(' + ')})`}
+              </button>
+
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {TIMEFRAMES.map(tf => {
-                  const n = candleCount(tf.value, days);
+                  const maxDays = YF_MAX_DAYS[tf.value] ?? 730;
+                  const effectiveDays = candleSource === 'yfinance' ? Math.min(days, maxDays) : days;
+                  const n = candleCount(tf.value, effectiveDays);
+                  const capped = candleSource === 'yfinance' && days > maxDays;
                   return (
                     <div
                       key={tf.value}
                       style={{
                         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                         padding: '10px 14px', borderRadius: 8,
-                        background: 'var(--surface2)', border: '1px solid var(--border)',
+                        background: loading === tf.value
+                          ? 'rgba(59,130,246,0.08)'
+                          : 'var(--surface2)',
+                        border: `1px solid ${loading === tf.value ? 'rgba(59,130,246,0.25)' : 'var(--border)'}`,
+                        transition: 'all 0.2s',
                       }}
                     >
                       <div>
                         <div style={{ fontWeight: 600, fontSize: 13 }}>{tf.label}</div>
                         <div className="muted" style={{ fontSize: 11 }}>
-                          ~{n.toLocaleString()} bougies · {selectedPeriod.label}
+                          ~{n.toLocaleString()} bougies
+                          {capped
+                            ? <span style={{ color: '#f59e0b', marginLeft: 4 }}>(limité à {maxDays}j par Yahoo)</span>
+                            : <span> · {selectedPeriod.label}</span>
+                          }
                         </div>
                       </div>
                       <button
-                        className="btn btn-primary"
-                        style={{ minWidth: 140 }}
-                        disabled={loading === tf.value || selected.size === 0}
+                        className="btn btn-secondary"
+                        style={{ minWidth: 120, fontSize: 12 }}
+                        disabled={!!loading || !!loadingAll || selected.size === 0}
                         onClick={() => importTf(tf.value)}
                       >
                         {loading === tf.value ? 'Import…' : `Importer ${tf.label}`}
