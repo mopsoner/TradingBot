@@ -1150,6 +1150,76 @@ def run_backtest(outcomes_r: list[float]) -> dict:
     return backtesting.run(outcomes_r).__dict__
 
 
+class WalkForwardRequest(BaseModel):
+    symbol: str = Field("ETHUSDT", min_length=3, max_length=20)
+    years: int = Field(4, ge=1, le=5)
+    timeframe: str = Field("1h", pattern=r"^(15m|1h|4h|1d)$")
+    profile_id: int | None = None
+
+
+@router.post("/backtest/walkforward")
+def run_walkforward(req: WalkForwardRequest) -> dict:
+    from backend.app.services.walkforward import run_walkforward as _run_wf
+    import json as _json
+
+    fib_levels = [0.5, 0.618, 0.705]
+    rr_ratio = 2.0
+
+    if req.profile_id:
+        with Session(engine) as s:
+            profile = s.get(StrategyProfile, req.profile_id)
+            if not profile:
+                return {"ok": False, "reason": "profile_not_found"}
+            try:
+                params = _json.loads(profile.parameters) if isinstance(profile.parameters, str) else profile.parameters
+                fib_levels = params.get("fib_levels", fib_levels)
+                rr_ratio = float(params.get("take_profit_rr", rr_ratio))
+            except Exception:
+                pass
+
+    result = _run_wf(
+        symbol=req.symbol,
+        years=req.years,
+        timeframe=req.timeframe,
+        fib_levels=fib_levels,
+        rr_ratio=rr_ratio,
+    )
+
+    with Session(engine) as s:
+        s.add(Log(level="INFO", message=f"Walk-forward {req.symbol} {req.timeframe} {req.years}y: {result.total_signals} signals, WR {result.win_rate:.2%}, PF {result.profit_factor:.2f}"))
+        s.commit()
+
+    return {
+        "ok": True,
+        "signals": [
+            {
+                "timestamp": sig.timestamp,
+                "direction": sig.direction,
+                "entry_price": sig.entry_price,
+                "tp_price": sig.tp_price,
+                "sl_price": sig.sl_price,
+                "result": sig.result,
+                "r_multiple": sig.r_multiple,
+                "steps": sig.steps,
+            }
+            for sig in result.signals
+        ],
+        "metrics": {
+            "total_signals": result.total_signals,
+            "wins": result.wins,
+            "losses": result.losses,
+            "pending": result.pending,
+            "win_rate": result.win_rate,
+            "profit_factor": result.profit_factor,
+            "max_drawdown": result.max_drawdown,
+            "total_r": result.total_r,
+        },
+        "candles_downloaded": result.candles_downloaded,
+        "period_start": result.period_start,
+        "period_end": result.period_end,
+    }
+
+
 # ── Live Pipeline Tracker ─────────────────────────────────────────────────────
 #
 # Séquence obligatoire (7 étapes) — conforme au cahier des charges SMC/Wyckoff:

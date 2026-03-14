@@ -117,6 +117,8 @@ export const api = {
     post<Record<string, unknown>>('/api/autonomous/start', body),
   autonomousStop: () => post<Record<string, unknown>>('/api/autonomous/stop', {}),
   autonomousStatus: () => get<Record<string, unknown>>('/api/autonomous/status'),
+  runWalkforward: (body: { symbol: string; years: number; timeframe: string; profile_id?: number | null }) =>
+    post<Record<string, unknown>>('/api/backtest/walkforward', body),
 };
 
 export type MarginAsset = {

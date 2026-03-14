@@ -921,6 +921,351 @@ function AiWorkshopPanel({
   );
 }
 
+type WFSignal = {
+  timestamp: string;
+  direction: string;
+  entry_price: number;
+  tp_price: number;
+  sl_price: number;
+  result: string;
+  r_multiple: number;
+  steps: Record<string, unknown>;
+};
+
+type WFMetrics = {
+  total_signals: number;
+  wins: number;
+  losses: number;
+  pending: number;
+  win_rate: number;
+  profit_factor: number;
+  max_drawdown: number;
+  total_r: number;
+};
+
+type WFResult = {
+  ok: boolean;
+  signals: WFSignal[];
+  metrics: WFMetrics;
+  candles_downloaded: number;
+  period_start: string;
+  period_end: string;
+};
+
+const WF_SYMBOLS = ['ETHUSDT', 'BTCUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'ADAUSDT', 'AVAXUSDT', 'DOTUSDT', 'LINKUSDT', 'DOGEUSDT', 'LTCUSDT'];
+
+const STEP_LABELS: Record<string, string> = {
+  liquidity_zone: 'Zone de liquidite',
+  sweep: 'Sweep',
+  spring: 'Spring (Wyckoff)',
+  utad: 'UTAD (distribution)',
+  displacement: 'Displacement',
+  bos: 'BOS (Break of Structure)',
+  expansion: 'Expansion',
+  fib_match: 'Fib Retracement',
+};
+
+function WalkForwardPanel({ profiles, onClose }: { profiles: Array<Record<string, unknown>>; onClose: () => void }) {
+  const [wfSymbol, setWfSymbol] = useState('ETHUSDT');
+  const [wfYears, setWfYears] = useState(4);
+  const [wfTimeframe, setWfTimeframe] = useState('1h');
+  const [wfProfileId, setWfProfileId] = useState<number | null>(null);
+  const [wfRunning, setWfRunning] = useState(false);
+  const [wfResult, setWfResult] = useState<WFResult | null>(null);
+  const [wfError, setWfError] = useState('');
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
+  const [sortCol, setSortCol] = useState<'timestamp' | 'direction' | 'result' | 'r_multiple'>('timestamp');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+
+  const runWalkForward = async () => {
+    setWfRunning(true);
+    setWfError('');
+    setWfResult(null);
+    try {
+      const res = await api.runWalkforward({
+        symbol: wfSymbol,
+        years: wfYears,
+        timeframe: wfTimeframe,
+        profile_id: wfProfileId,
+      }) as WFResult;
+      if (res.ok) {
+        setWfResult(res);
+      } else {
+        setWfError(String((res as Record<string, unknown>).reason ?? 'Erreur inconnue'));
+      }
+    } catch (e) {
+      setWfError(e instanceof Error ? e.message : 'Erreur reseau');
+    } finally {
+      setWfRunning(false);
+    }
+  };
+
+  const sortedSignals = useMemo(() => {
+    if (!wfResult) return [];
+    const sigs = [...wfResult.signals];
+    sigs.sort((a, b) => {
+      let cmp = 0;
+      if (sortCol === 'timestamp') cmp = a.timestamp.localeCompare(b.timestamp);
+      else if (sortCol === 'direction') cmp = a.direction.localeCompare(b.direction);
+      else if (sortCol === 'result') cmp = a.result.localeCompare(b.result);
+      else if (sortCol === 'r_multiple') cmp = a.r_multiple - b.r_multiple;
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+    return sigs;
+  }, [wfResult, sortCol, sortDir]);
+
+  const toggleSort = (col: typeof sortCol) => {
+    if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortCol(col); setSortDir('asc'); }
+  };
+
+  const SortTh = ({ col, children }: { col: typeof sortCol; children: React.ReactNode }) => (
+    <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(col)}>
+      {children} {sortCol === col ? (sortDir === 'asc' ? '▲' : '▼') : ''}
+    </th>
+  );
+
+  return (
+    <div className="card" style={{
+      marginTop: 20,
+      border: '1px solid rgba(16,185,129,0.4)',
+      background: 'linear-gradient(135deg, rgba(16,185,129,0.06) 0%, var(--surface) 100%)',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+        <div>
+          <h3 style={{ margin: 0, color: '#34d399' }}>
+            Test sur donnees reelles (Walk-Forward)
+          </h3>
+          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+            Telecharge des donnees OHLCV reelles via yfinance, analyse chaque fenetre avec le moteur SMC/Wyckoff 7 etapes, et simule les trades en paper.
+          </div>
+        </div>
+        <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={onClose}>X Fermer</button>
+      </div>
+
+      {!wfResult && !wfRunning && (
+        <>
+          <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+            <div className="form-group" style={{ flex: 1, margin: 0, minWidth: 140 }}>
+              <label style={{ fontSize: 11 }}>Symbole</label>
+              <select value={wfSymbol} onChange={e => setWfSymbol(e.target.value)} style={{ fontSize: 13 }}>
+                {WF_SYMBOLS.map(s => <option key={s} value={s}>{fmtSym(s)}</option>)}
+              </select>
+            </div>
+            <div className="form-group" style={{ flex: 1, margin: 0, minWidth: 120 }}>
+              <label style={{ fontSize: 11 }}>Duree</label>
+              <select value={wfYears} onChange={e => setWfYears(Number(e.target.value))} style={{ fontSize: 13 }}>
+                <option value={1}>1 an</option>
+                <option value={2}>2 ans</option>
+                <option value={3}>3 ans</option>
+                <option value={4}>4 ans</option>
+              </select>
+            </div>
+            <div className="form-group" style={{ flex: 1, margin: 0, minWidth: 100 }}>
+              <label style={{ fontSize: 11 }}>Timeframe</label>
+              <select value={wfTimeframe} onChange={e => setWfTimeframe(e.target.value)} style={{ fontSize: 13 }}>
+                <option value="15m">15m</option>
+                <option value="1h">1H</option>
+                <option value="4h">4H</option>
+                <option value="1d">1D</option>
+              </select>
+            </div>
+            <div className="form-group" style={{ flex: 1, margin: 0, minWidth: 140 }}>
+              <label style={{ fontSize: 11 }}>Profil strategie</label>
+              <select value={wfProfileId ?? ''} onChange={e => setWfProfileId(e.target.value ? Number(e.target.value) : null)} style={{ fontSize: 13 }}>
+                <option value="">SMC-Wyckoff (defaut)</option>
+                {profiles.map(p => <option key={String(p.id)} value={String(p.id)}>{String(p.name)}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div style={{ padding: 10, borderRadius: 6, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', fontSize: 12, marginBottom: 16, color: 'var(--text-muted)' }}>
+            Le calcul peut prendre 30-60 secondes selon la quantite de donnees. Les donnees sont telechargees en temps reel depuis yfinance (pas d'acces Binance requis).
+            {wfTimeframe === '15m' && (
+              <span style={{ color: '#fbbf24', display: 'block', marginTop: 4 }}>
+                Yahoo Finance limite les donnees 15m a ~60 jours. La periode reelle sera indiquee dans les resultats.
+              </span>
+            )}
+            {(wfTimeframe === '1h' || wfTimeframe === '4h') && wfYears > 2 && (
+              <span style={{ color: '#fbbf24', display: 'block', marginTop: 4 }}>
+                Yahoo Finance limite les donnees {wfTimeframe} a ~730 jours (~2 ans). Pour 4 ans complets, utilisez le timeframe 1D.
+              </span>
+            )}
+          </div>
+
+          {wfError && (
+            <div style={{ marginBottom: 12, padding: 10, borderRadius: 6, background: 'rgba(248,81,73,0.1)', color: 'var(--accent-red)', fontSize: 13 }}>
+              {wfError}
+            </div>
+          )}
+
+          <button
+            className="btn btn-primary"
+            onClick={runWalkForward}
+            style={{
+              width: '100%', fontSize: 15, padding: '14px 0', fontWeight: 700,
+              background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+              borderColor: '#10b981',
+            }}
+          >
+            Lancer le test reel {wfYears} an{wfYears > 1 ? 's' : ''}
+          </button>
+        </>
+      )}
+
+      {wfRunning && (
+        <div style={{ textAlign: 'center', padding: 48 }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>📊</div>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Telechargement et analyse en cours...</div>
+          <div className="muted" style={{ fontSize: 13 }}>
+            Telechargement des donnees {fmtSym(wfSymbol)} {wfTimeframe} sur {wfYears} an{wfYears > 1 ? 's' : ''}, puis detection SMC/Wyckoff sur chaque fenetre...
+          </div>
+          <div style={{ marginTop: 16, height: 4, background: 'var(--surface2)', borderRadius: 2, overflow: 'hidden' }}>
+            <div style={{
+              height: '100%', borderRadius: 2,
+              background: 'linear-gradient(90deg, #10b981, #059669)',
+              animation: 'pulse 2s ease-in-out infinite', width: '70%',
+            }} />
+          </div>
+        </div>
+      )}
+
+      {wfResult && (
+        <div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 20 }}>
+            {([
+              ['Signaux trouves', wfResult.metrics.total_signals, '#34d399'],
+              ['Win rate', pct(wfResult.metrics.win_rate), wfResult.metrics.win_rate >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)'],
+              ['Profit factor', num(wfResult.metrics.profit_factor), wfResult.metrics.profit_factor >= 1.2 ? 'var(--accent-green)' : 'var(--accent-yellow)'],
+              ['Max drawdown', pct(wfResult.metrics.max_drawdown), wfResult.metrics.max_drawdown <= 0.1 ? 'var(--accent-green)' : 'var(--accent-red)'],
+            ] as [string, string | number, string][]).map(([label, value, color]) => (
+              <div key={label} style={{ padding: 14, borderRadius: 8, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', textAlign: 'center' }}>
+                <div style={{ fontSize: 22, fontWeight: 800, color }}>{value}</div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{label}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 20 }}>
+            {([
+              ['Trades gagnants', wfResult.metrics.wins, 'var(--accent-green)'],
+              ['Trades perdants', wfResult.metrics.losses, 'var(--accent-red)'],
+              ['En cours', wfResult.metrics.pending, 'var(--accent-yellow)'],
+              ['Total R', wfResult.metrics.total_r + 'R', wfResult.metrics.total_r >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'],
+            ] as [string, string | number, string][]).map(([label, value, color]) => (
+              <div key={label} style={{ padding: 10, borderRadius: 8, background: 'var(--surface2)', textAlign: 'center' }}>
+                <div style={{ fontSize: 18, fontWeight: 700, color }}>{value}</div>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{label}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ padding: 10, borderRadius: 6, background: 'var(--surface2)', fontSize: 12, marginBottom: 16, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+            <span className="muted">Bougies : <strong style={{ color: 'var(--text)' }}>{wfResult.candles_downloaded.toLocaleString()}</strong></span>
+            <span className="muted">Periode : <strong style={{ color: 'var(--text)' }}>{wfResult.period_start?.slice(0, 10)}</strong> → <strong style={{ color: 'var(--text)' }}>{wfResult.period_end?.slice(0, 10)}</strong></span>
+          </div>
+
+          {sortedSignals.length > 0 && (
+            <div style={{ maxHeight: 500, overflowY: 'auto', marginBottom: 16 }}>
+              <table>
+                <thead>
+                  <tr>
+                    <SortTh col="timestamp">Date</SortTh>
+                    <SortTh col="direction">Direction</SortTh>
+                    <th>Entree</th>
+                    <th>TP</th>
+                    <th>SL</th>
+                    <SortTh col="result">Resultat</SortTh>
+                    <SortTh col="r_multiple">R</SortTh>
+                    <th>Etapes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedSignals.map((sig, idx) => {
+                    const isExpanded = expandedIdx === idx;
+                    const resultColor = sig.result === 'TP' ? 'var(--accent-green)' : sig.result === 'SL' ? 'var(--accent-red)' : 'var(--accent-yellow)';
+                    const dirColor = sig.direction === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)';
+                    const stepKeys = ['liquidity_zone', 'sweep', 'displacement', 'bos', 'expansion', 'fib_match'];
+                    const wyckoff = sig.steps.spring === true || sig.steps.utad === true;
+                    const stepsValid = stepKeys.filter(k => sig.steps[k] === true).length + (wyckoff ? 1 : 0);
+                    return (
+                      <tr key={idx} style={{ cursor: 'pointer', background: isExpanded ? 'rgba(16,185,129,0.08)' : 'transparent' }} onClick={() => setExpandedIdx(isExpanded ? null : idx)}>
+                        <td style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{sig.timestamp.slice(0, 16).replace('T', ' ')}</td>
+                        <td><span style={{ fontWeight: 700, color: dirColor }}>{sig.direction}</span></td>
+                        <td style={{ fontFamily: 'monospace', fontSize: 12 }}>${sig.entry_price.toLocaleString()}</td>
+                        <td style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--accent-green)' }}>${sig.tp_price.toLocaleString()}</td>
+                        <td style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--accent-red)' }}>${sig.sl_price.toLocaleString()}</td>
+                        <td><span style={{ fontWeight: 700, color: resultColor }}>{sig.result === 'TP' ? 'TP' : sig.result === 'SL' ? 'SL' : 'En cours'}</span></td>
+                        <td style={{ fontWeight: 700, color: sig.r_multiple >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>{sig.r_multiple > 0 ? '+' : ''}{sig.r_multiple}R</td>
+                        <td>
+                          <span style={{ fontSize: 11, padding: '2px 6px', borderRadius: 4, background: stepsValid >= 7 ? 'rgba(63,185,80,0.15)' : 'rgba(255,165,0,0.15)', color: stepsValid >= 7 ? 'var(--accent-green)' : 'var(--accent-yellow)' }}>
+                            {stepsValid}/7 {isExpanded ? '▲' : '▼'}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {expandedIdx !== null && sortedSignals[expandedIdx] && (
+            <div style={{ padding: 14, borderRadius: 8, background: 'var(--surface2)', border: '1px solid rgba(16,185,129,0.2)', marginBottom: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10, color: '#34d399' }}>
+                Etapes de detection — Signal du {sortedSignals[expandedIdx].timestamp.slice(0, 16).replace('T', ' ')}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 8 }}>
+                {Object.entries(STEP_LABELS).map(([key, label]) => {
+                  const val = sortedSignals[expandedIdx].steps[key];
+                  const passed = val === true;
+                  return (
+                    <div key={key} style={{
+                      padding: '8px 10px', borderRadius: 6,
+                      background: passed ? 'rgba(63,185,80,0.1)' : 'rgba(248,81,73,0.06)',
+                      border: `1px solid ${passed ? 'rgba(63,185,80,0.3)' : 'rgba(248,81,73,0.2)'}`,
+                    }}>
+                      <span style={{ fontSize: 13, marginRight: 6 }}>{passed ? 'V' : 'X'}</span>
+                      <span style={{ fontSize: 12, color: passed ? 'var(--accent-green)' : 'var(--accent-red)' }}>{label}</span>
+                    </div>
+                  );
+                })}
+                {sortedSignals[expandedIdx].steps.atr !== undefined && (
+                  <div style={{ padding: '8px 10px', borderRadius: 6, background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>ATR: </span>
+                    <span style={{ fontSize: 12, fontWeight: 700 }}>{Number(sortedSignals[expandedIdx].steps.atr).toFixed(2)}</span>
+                  </div>
+                )}
+                {sortedSignals[expandedIdx].steps.fib_retracement !== undefined && (
+                  <div style={{ padding: '8px 10px', borderRadius: 6, background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Fib: </span>
+                    <span style={{ fontSize: 12, fontWeight: 700 }}>{String(sortedSignals[expandedIdx].steps.fib_retracement)}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {sortedSignals.length === 0 && (
+            <div style={{ textAlign: 'center', padding: 32, color: 'var(--text-muted)' }}>
+              <div style={{ fontSize: 28, marginBottom: 8 }}>📭</div>
+              <p>Aucun signal SMC/Wyckoff detecte sur cette periode. Essayez un autre timeframe ou une duree plus longue.</p>
+            </div>
+          )}
+
+          <button
+            className="btn btn-secondary"
+            style={{ width: '100%', marginTop: 8 }}
+            onClick={() => { setWfResult(null); setExpandedIdx(null); }}
+          >
+            Nouvelle analyse
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../types').AdminPage) => void }) {
   const { data, reload } = useApi(() => api.backtests());
   const { data: profiles, reload: reloadProfiles } = useApi(() => api.strategyProfiles());
@@ -941,6 +1286,7 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
   const [optimizeIds, setOptimizeIds] = useState<Set<number>>(new Set());
   const [showMultiOptimize, setShowMultiOptimize] = useState(false);
   const [showWorkshop, setShowWorkshop] = useState(false);
+  const [showWalkForward, setShowWalkForward] = useState(false);
 
   // ── Derived from DB-loaded candle data ────────────────────────────────────
   const availableSymbols = useMemo(() => loadedEntries.map(e => e.symbol), [loadedEntries]);
@@ -1041,21 +1387,38 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
           <h2 style={{ margin: 0 }}>Backtests</h2>
           <p className="page-description">Simulation historique de votre stratégie SMC/Wyckoff</p>
         </div>
-        <button
-          className="btn btn-primary"
-          onClick={() => setShowWorkshop(v => !v)}
-          style={{
-            background: showWorkshop
-              ? 'rgba(139,92,246,0.2)'
-              : 'linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%)',
-            borderColor: '#7c3aed',
-            fontSize: 13, padding: '8px 18px', fontWeight: 700,
-            display: 'flex', alignItems: 'center', gap: 8,
-          }}
-        >
-          <span>🧬</span>
-          {showWorkshop ? 'Fermer le Workshop' : 'Optimiser avec IA'}
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            className="btn btn-primary"
+            onClick={() => { setShowWalkForward(v => !v); if (!showWalkForward) setShowWorkshop(false); }}
+            style={{
+              background: showWalkForward
+                ? 'rgba(16,185,129,0.2)'
+                : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+              borderColor: '#10b981',
+              fontSize: 13, padding: '8px 18px', fontWeight: 700,
+              display: 'flex', alignItems: 'center', gap: 8,
+            }}
+          >
+            <span>📊</span>
+            {showWalkForward ? 'Fermer' : 'Test reel 4 ans'}
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={() => { setShowWorkshop(v => !v); if (!showWorkshop) setShowWalkForward(false); }}
+            style={{
+              background: showWorkshop
+                ? 'rgba(139,92,246,0.2)'
+                : 'linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%)',
+              borderColor: '#7c3aed',
+              fontSize: 13, padding: '8px 18px', fontWeight: 700,
+              display: 'flex', alignItems: 'center', gap: 8,
+            }}
+          >
+            <span>🧬</span>
+            {showWorkshop ? 'Fermer le Workshop' : 'Optimiser avec IA'}
+          </button>
+        </div>
       </div>
 
       <div className="grid-4" style={{ marginBottom: 20 }}>
@@ -1356,6 +1719,13 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
           )}
         </div>
       </div>
+
+      {showWalkForward && (
+        <WalkForwardPanel
+          profiles={(profiles?.rows as Array<Record<string, unknown>> | undefined) ?? []}
+          onClose={() => setShowWalkForward(false)}
+        />
+      )}
 
       {showWorkshop && (
         <AiWorkshopPanel
