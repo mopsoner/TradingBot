@@ -349,7 +349,7 @@ export function DataManagerPage({ onNavigate }: Props) {
                         <div className="muted" style={{ fontSize: 11 }}>
                           ~{n.toLocaleString()} bougies
                           {capped
-                            ? <span style={{ color: '#f59e0b', marginLeft: 4 }}>(limité à {maxDays}j par Yahoo)</span>
+                            ? <span style={{ color: '#f59e0b', marginLeft: 4 }}>(limité à {maxDays}j par Yahoo Finance)</span>
                             : <span> · {selectedPeriod.label}</span>
                           }
                         </div>
