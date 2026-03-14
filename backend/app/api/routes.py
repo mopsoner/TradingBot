@@ -7,6 +7,7 @@ import time
 from typing import Optional
 
 from fastapi import APIRouter, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select, func
 
@@ -227,7 +228,8 @@ def isolated_symbols() -> list[str]:
     return market_data.load_symbols()
 
 @router.get("/symbols/by-quote")
-def symbols_by_quote() -> dict[str, list[str]]:
+def symbols_by_quote(response: Response) -> dict[str, list[str]]:
+    response.headers["Cache-Control"] = "public, max-age=3600"
     return market_data.load_symbols_by_quote()
 
 
@@ -250,23 +252,10 @@ def symbols_loaded() -> list[dict]:
 
 
 @router.get("/symbols/prices")
-def symbols_prices() -> dict[str, float]:
-    """Fetch real-time prices from Binance public ticker API."""
-    import httpx
-    try:
-        resp = httpx.get("https://api.binance.com/api/v3/ticker/price", timeout=6)
-        resp.raise_for_status()
-        tickers = resp.json()
-        all_symbols: set[str] = set()
-        for syms in market_data.load_symbols_by_quote().values():
-            all_symbols.update(syms)
-        return {
-            t["symbol"]: float(t["price"])
-            for t in tickers
-            if t["symbol"] in all_symbols
-        }
-    except Exception:
-        return {}
+def symbols_prices(response: Response) -> dict[str, float]:
+    """Real-time prices via cached Binance ticker (5 min TTL, thread-safe)."""
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return market_data.load_prices()
 
 
 @router.get("/config")
