@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
 import { fmtSym } from '../utils/dateUtils';
@@ -57,13 +57,242 @@ function SectionCard({ title, icon, children }: { title: string; icon: string; c
   );
 }
 
+const QUOTE_BASES = ['USDT', 'USDC', 'BTC'] as const;
+
+function SymbolBaseSelector({
+  symbolsByQuote,
+  enabledSymbols,
+  onChange,
+  loadError = false,
+}: {
+  symbolsByQuote: Record<string, string[]>;
+  enabledSymbols: string[];
+  onChange: (symbols: string[]) => void;
+  loadError?: boolean;
+}) {
+  const enabled = useMemo(() => new Set(enabledSymbols), [enabledSymbols]);
+
+  const isBaseFullySelected = useCallback(
+    (base: string) => {
+      const pairs = symbolsByQuote[base] ?? [];
+      return pairs.length > 0 && pairs.every(p => enabled.has(p));
+    },
+    [symbolsByQuote, enabled],
+  );
+
+  const baseSelectedCount = useCallback(
+    (base: string) => {
+      const pairs = symbolsByQuote[base] ?? [];
+      return pairs.filter(p => enabled.has(p)).length;
+    },
+    [symbolsByQuote, enabled],
+  );
+
+  const toggleBase = useCallback(
+    (base: string) => {
+      const pairs = symbolsByQuote[base] ?? [];
+      if (isBaseFullySelected(base)) {
+        const pairSet = new Set(pairs);
+        onChange(enabledSymbols.filter(s => !pairSet.has(s)));
+      } else {
+        const merged = new Set(enabledSymbols);
+        pairs.forEach(p => merged.add(p));
+        onChange(Array.from(merged));
+      }
+    },
+    [symbolsByQuote, enabledSymbols, isBaseFullySelected, onChange],
+  );
+
+  const togglePair = useCallback(
+    (pair: string) => {
+      if (enabled.has(pair)) {
+        onChange(enabledSymbols.filter(s => s !== pair));
+      } else {
+        onChange([...enabledSymbols, pair]);
+      }
+    },
+    [enabled, enabledSymbols, onChange],
+  );
+
+  const selectAllBase = useCallback(
+    (base: string) => {
+      const pairs = symbolsByQuote[base] ?? [];
+      const merged = new Set(enabledSymbols);
+      pairs.forEach(p => merged.add(p));
+      onChange(Array.from(merged));
+    },
+    [symbolsByQuote, enabledSymbols, onChange],
+  );
+
+  const deselectAllBase = useCallback(
+    (base: string) => {
+      const pairs = symbolsByQuote[base] ?? [];
+      const pairSet = new Set(pairs);
+      onChange(enabledSymbols.filter(s => !pairSet.has(s)));
+    },
+    [symbolsByQuote, enabledSymbols, onChange],
+  );
+
+  const [expandedBases, setExpandedBases] = useState<Set<string>>(new Set());
+
+  const toggleExpand = useCallback((base: string) => {
+    setExpandedBases(prev => {
+      const next = new Set(prev);
+      if (next.has(base)) next.delete(base);
+      else next.add(base);
+      return next;
+    });
+  }, []);
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+        {QUOTE_BASES.map(base => {
+          const total = (symbolsByQuote[base] ?? []).length;
+          const selected = baseSelectedCount(base);
+          const allSelected = isBaseFullySelected(base);
+          const hasAny = selected > 0;
+          return (
+            <button
+              key={base}
+              type="button"
+              onClick={() => toggleBase(base)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '8px 16px',
+                borderRadius: 8,
+                border: `2px solid ${allSelected ? 'var(--accent)' : hasAny ? 'var(--accent)' : 'var(--border)'}`,
+                background: allSelected ? 'rgba(88,166,255,0.15)' : hasAny ? 'rgba(88,166,255,0.06)' : 'transparent',
+                cursor: 'pointer',
+                fontWeight: 600,
+                fontSize: 14,
+                color: 'var(--text)',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <span style={{
+                width: 18, height: 18, borderRadius: 4,
+                border: `2px solid ${allSelected ? 'var(--accent)' : 'var(--border)'}`,
+                background: allSelected ? 'var(--accent)' : hasAny ? 'rgba(88,166,255,0.3)' : 'transparent',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 11, color: '#fff', lineHeight: 1,
+              }}>
+                {allSelected ? '✓' : hasAny ? '–' : ''}
+              </span>
+              {base}
+              <span style={{
+                background: 'var(--surface2)',
+                padding: '2px 8px',
+                borderRadius: 10,
+                fontSize: 11,
+                fontWeight: 500,
+                color: 'var(--text-muted)',
+              }}>
+                {selected}/{total}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {QUOTE_BASES.map(base => {
+        const pairs = symbolsByQuote[base] ?? [];
+        if (pairs.length === 0) return null;
+        const selected = baseSelectedCount(base);
+        const isExpanded = expandedBases.has(base);
+
+        return (
+          <div key={base} style={{ marginBottom: 12, padding: 12, borderRadius: 8, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+            <div
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
+              onClick={() => toggleExpand(base)}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontWeight: 600, fontSize: 13 }}>{base}</span>
+                <span className="muted" style={{ fontSize: 11 }}>{selected} / {pairs.length} paires</span>
+              </div>
+              <span className="muted" style={{ fontSize: 12 }}>{isExpanded ? '▲' : '▼'}</span>
+            </div>
+            {isExpanded && (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                  <button
+                    type="button"
+                    onClick={e => { e.stopPropagation(); selectAllBase(base); }}
+                    style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer', color: 'var(--text-muted)' }}
+                  >
+                    Tout sélectionner
+                  </button>
+                  <button
+                    type="button"
+                    onClick={e => { e.stopPropagation(); deselectAllBase(base); }}
+                    style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer', color: 'var(--text-muted)' }}
+                  >
+                    Tout désélectionner
+                  </button>
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {pairs.map(pair => {
+                    const active = enabled.has(pair);
+                    return (
+                      <button
+                        key={pair}
+                        type="button"
+                        onClick={() => togglePair(pair)}
+                        style={{
+                          padding: '3px 10px',
+                          borderRadius: 14,
+                          border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+                          background: active ? 'rgba(88,166,255,0.12)' : 'transparent',
+                          color: active ? 'var(--accent)' : 'var(--text-muted)',
+                          cursor: 'pointer',
+                          fontSize: 11,
+                          fontFamily: 'monospace',
+                          fontWeight: active ? 600 : 400,
+                          transition: 'all 0.12s ease',
+                        }}
+                      >
+                        {pair}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {Object.keys(symbolsByQuote).length === 0 && (
+        <div style={{ fontSize: 12, padding: '8px 0', color: loadError ? 'var(--accent-red)' : 'var(--text-muted)' }}>
+          {loadError ? 'Impossible de charger les paires disponibles.' : 'Chargement des paires disponibles…'}
+        </div>
+      )}
+
+      <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+        {enabledSymbols.length} paire{enabledSymbols.length !== 1 ? 's' : ''} activée{enabledSymbols.length !== 1 ? 's' : ''} au total
+      </div>
+    </div>
+  );
+}
+
 export function SystemSettingsPage() {
   const { data, loading, error } = useApi(() => api.config());
   const [draft, setDraft] = useState<Cfg | null>(null);
   const [status, setStatus] = useState('');
   const [saving, setSaving] = useState(false);
+  const [symbolsByQuote, setSymbolsByQuote] = useState<Record<string, string[]>>({});
+  const [symbolsError, setSymbolsError] = useState(false);
 
   useEffect(() => { if (data) setDraft(data as Cfg); }, [data]);
+
+  useEffect(() => {
+    api.symbolsByQuote()
+      .then(d => { setSymbolsByQuote(d); setSymbolsError(false); })
+      .catch(() => setSymbolsError(true));
+  }, []);
 
   function setGroup(group: string, key: string, value: unknown) {
     if (!draft) return;
@@ -147,12 +376,12 @@ export function SystemSettingsPage() {
       </SectionCard>
 
       <SectionCard title="Univers de trading" icon="🪙">
-        <Field label="Symboles activés" desc="Liste séparée par virgules — doit correspondre aux symboles USDT de votre exchange">
-          <textarea
-            value={(trading.enabled_symbols as string[]).join(', ')}
-            rows={3}
-            onChange={e => setGroup('trading', 'enabled_symbols', e.target.value.split(',').map(v => v.trim().toUpperCase()).filter(Boolean))}
-            style={{ width: '100%', fontFamily: 'monospace', fontSize: 12 }}
+        <Field label="Sélecteur de paires" desc="Activez une base pour ajouter toutes ses paires, ou affinez individuellement">
+          <SymbolBaseSelector
+            symbolsByQuote={symbolsByQuote}
+            enabledSymbols={(trading.enabled_symbols as string[]) ?? []}
+            onChange={syms => setGroup('trading', 'enabled_symbols', syms)}
+            loadError={symbolsError}
           />
         </Field>
         <div className="grid-2">
