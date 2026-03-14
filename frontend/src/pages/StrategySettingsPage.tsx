@@ -67,7 +67,6 @@ export function StrategySettingsPage({ onNavigate }: Props) {
   const [riskPerTrade, setRiskPerTrade] = useState(1.0);
   const [tpRR, setTpRR]                 = useState(2.5);
   const [enableAutoBorrowRepay, setEnableAutoBorrowRepay] = useState(false);
-  const [profileMode, setProfileMode]   = useState<string>('research');
 
   // ── Profile list state ────────────────────────────────────────────────────
   const [editId, setEditId]               = useState<number | null>(null);
@@ -111,7 +110,6 @@ export function StrategySettingsPage({ onNavigate }: Props) {
     let params: Record<string, unknown> = {};
     try { params = JSON.parse(String(p.parameters ?? '{}')); } catch { /**/ }
     setName(String(p.name ?? ''));
-    setProfileMode(String(p.mode ?? 'research'));
     setEnableAutoBorrowRepay(Boolean(p.enable_auto_borrow_repay ?? false));
     setEnableSpring(Boolean(params.enable_spring ?? true));
     setEnableUtad(Boolean(params.enable_utad ?? true));
@@ -150,12 +148,12 @@ export function StrategySettingsPage({ onNavigate }: Props) {
     setRsiPeriod(14); setRsiOb(70); setRsiOs(30); setRsiDivOnly(true);
     setAllowWeekend(false); setUse5m(false); setRequireEqHL(true);
     setStopLoss('structure'); setRiskPerTrade(1.0); setTpRR(2.5);
-    setEnableAutoBorrowRepay(false); setProfileMode('research');
+    setEnableAutoBorrowRepay(false);
     setStatus('');
   };
 
   const saveProfile = async () => {
-    const body = { name, mode: profileMode, parameters: _buildParams(), enable_auto_borrow_repay: enableAutoBorrowRepay };
+    const body = { name, mode: 'research', parameters: _buildParams(), enable_auto_borrow_repay: enableAutoBorrowRepay };
     const res = editId !== null
       ? await api.updateStrategyProfile(editId, body)
       : await api.saveStrategyProfile(body);
@@ -379,6 +377,7 @@ export function StrategySettingsPage({ onNavigate }: Props) {
               <Toggle checked={allowWeekend} onChange={setAllowWeekend} label="Trading le week-end autorisé" tip="Par défaut désactivé. Le crypto trade 24/7 mais la liquidité institutionnelle est réduite en week-end. À activer uniquement si vous avez validé des setups week-end sur votre historique." />
               <Toggle checked={use5m} onChange={setUse5m} label="Refinement 5 minutes activé" tip="Après validation des 7 étapes, vérifie que la bougie 5m de la zone Fib confirme la direction (corps + volume + alignement). Réduit le nb de trades mais améliore la précision d'entrée." />
               <Toggle checked={requireEqHL} onChange={setRequireEqHL} label="EQH/EQL obligatoire pour la liquidité" tip="Equal Highs / Equal Lows — les doubles sommets/creux définissent la zone de liquidité à chasser. Désactiver uniquement si vous voulez détecter d'autres types de liquidité." />
+              <Toggle checked={enableAutoBorrowRepay} onChange={setEnableAutoBorrowRepay} label="Auto Borrow & Repay (margin isolé)" tip="Emprunte automatiquement l'actif nécessaire avant d'ouvrir une position en isolated margin, et rembourse à la fermeture du trade." />
             </div>
           </div>
 
@@ -406,27 +405,6 @@ export function StrategySettingsPage({ onNavigate }: Props) {
                   <option value="fixed">Fixe (% distance)</option>
                 </select>
               </div>
-            </div>
-          </div>
-
-          {/* Mode & Margin */}
-          <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid var(--border)' }}>
-            <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Mode & Margin</div>
-            <div className="form-group" style={{ margin: 0, marginBottom: 8 }}>
-              <label style={{ fontSize: 12 }}>Mode du profil</label>
-              <select value={profileMode} onChange={e => { setProfileMode(e.target.value); if (!['live', 'paper'].includes(e.target.value)) setEnableAutoBorrowRepay(false); }}>
-                <option value="research">Research</option>
-                <option value="paper">Paper</option>
-                <option value="live">Live</option>
-              </select>
-            </div>
-            <div style={{ opacity: ['live', 'paper'].includes(profileMode) ? 1 : 0.5, pointerEvents: ['live', 'paper'].includes(profileMode) ? 'auto' : 'none' }}>
-              <Toggle
-                checked={enableAutoBorrowRepay}
-                onChange={setEnableAutoBorrowRepay}
-                label="Auto Borrow & Repay"
-                tip="Emprunte automatiquement l'actif nécessaire avant d'ouvrir une position en isolated margin, et rembourse à la fermeture du trade."
-              />
             </div>
           </div>
 
@@ -486,7 +464,6 @@ export function StrategySettingsPage({ onNavigate }: Props) {
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <strong style={{ fontSize: 13 }}>{String(p.name)}</strong>
-                      <span className="tag" style={{ marginLeft: 6, fontSize: 10 }}>{String(p.mode)}</span>
                       {Boolean(p.approved_for_live) && <span className="badge badge-green" style={{ marginLeft: 6 }}>Live ✅</span>}
                       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 5 }}>
                         {hasHtf  && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, background: 'rgba(88,166,255,0.15)', color: 'var(--accent)' }}>HTF ✓</span>}
