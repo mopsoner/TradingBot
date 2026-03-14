@@ -2073,7 +2073,28 @@ Réponds UNIQUEMENT en JSON valide:
 
             # ③ Auto-create profile per crypto
             p_name   = ai_data.get("suggested_name", f"{sym.replace('USDT','')}-SMC-IA-v1")
-            p_params = ai_data.get("suggested_params", {})
+            # Merge AI suggestions onto a full default set so no field is ever missing
+            _param_defaults = {
+                "allow_weekend_trading": False,
+                "use_5m_refinement": False,
+                "require_equal_highs_lows": True,
+                "bos_close_confirmation": True,
+                "fib_entry_split": True,
+                "htf_alignment_required": True,
+                "volume_adaptive": True,
+                "rsi_divergence_only": True,
+                "displacement_threshold": 0.55,
+                "displacement_atr_min": 1.2,
+                "bos_sensitivity": 7,
+                "fib_levels": [0.5, 0.618, 0.786],
+                "volume_multiplier_active": 1.8,
+                "volume_multiplier_offpeak": 1.25,
+                "stop_logic": "structure",
+                "risk_per_trade": 0.01,
+                "take_profit_rr": 2.5,
+            }
+            _param_defaults.update(ai_data.get("suggested_params", {}))
+            p_params = _param_defaults
             with Session(engine) as s:
                 existing = s.exec(select(StrategyProfile).where(StrategyProfile.name == p_name)).first()
                 if existing:

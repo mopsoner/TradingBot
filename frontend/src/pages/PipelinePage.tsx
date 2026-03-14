@@ -172,6 +172,20 @@ export function PipelinePage() {
   const [lastRun, setLastRun] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const profileRows = (profiles?.rows as Array<Record<string, unknown>> | undefined) ?? [];
+
+  useEffect(() => {
+    if (profileId === null && profileRows.length > 0) {
+      setProfileId(Number(profileRows[0].id));
+    }
+  }, [profileRows.length]);
+
+  const selectedProfile = profileRows.find(p => Number(p.id) === profileId);
+  const profileParams: Record<string, unknown> = (() => {
+    try { return JSON.parse(String(selectedProfile?.parameters ?? '{}')); } catch { return {}; }
+  })();
+  const profileAllowsWeekend = Boolean(profileParams.allow_weekend_trading ?? false);
+
   const stopPolling = () => {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
   };
@@ -246,13 +260,37 @@ export function PipelinePage() {
             </select>
           </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
-            <label>Profil stratégie (optionnel)</label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              Profil stratégie
+              {profileId !== null && (
+                <span style={{
+                  fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 10,
+                  background: profileAllowsWeekend ? 'rgba(63,185,80,0.2)' : 'rgba(240,180,41,0.2)',
+                  color: profileAllowsWeekend ? 'var(--accent-green)' : 'var(--accent-yellow)',
+                  border: `1px solid ${profileAllowsWeekend ? 'var(--accent-green)' : 'var(--accent-yellow)'}`,
+                }}>
+                  WE {profileAllowsWeekend ? 'ON' : 'OFF'}
+                </span>
+              )}
+            </label>
             <select value={profileId ?? ''} onChange={e => setProfileId(e.target.value ? Number(e.target.value) : null)}>
-              <option value="">Profil par défaut</option>
-              {(profiles?.rows as Array<Record<string, unknown>> | undefined)?.map(p => (
-                <option key={String(p.id)} value={String(p.id)}>{String(p.name)}</option>
-              ))}
+              <option value="">— aucun profil —</option>
+              {profileRows.map(p => {
+                let pp: Record<string, unknown> = {};
+                try { pp = JSON.parse(String(p.parameters ?? '{}')); } catch { /**/ }
+                const we = Boolean(pp.allow_weekend_trading);
+                return (
+                  <option key={String(p.id)} value={String(p.id)}>
+                    {we ? '✅ ' : '⛔ '}{String(p.name)}
+                  </option>
+                );
+              })}
             </select>
+            {!profileAllowsWeekend && profileId !== null && (
+              <p style={{ margin: '4px 0 0', fontSize: 11, color: 'var(--accent-yellow)' }}>
+                Trading week-end désactivé sur ce profil — modifiez-le dans Stratégie si besoin
+              </p>
+            )}
           </div>
         </div>
 
