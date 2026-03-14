@@ -30,7 +30,7 @@ export default function App() {
   };
   return (
     <>
-      <Sidebar current={page} onSelect={setPage} />
+      <Sidebar onSelect={setPage} />
       <main>{render()}</main>
     </>
   );
