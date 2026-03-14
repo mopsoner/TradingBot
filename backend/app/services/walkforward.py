@@ -424,9 +424,6 @@ def run_walkforward(
     engine = SignalEngine(fib_levels)
     candles = download_candles(symbol, years, timeframe)
 
-    if candles:
-        _store_candles_to_db(candles, symbol, timeframe)
-
     if not candles:
         return WalkForwardResult(
             signals=[], total_signals=0, wins=0, losses=0, pending=0,
