@@ -17,21 +17,59 @@ class MarketDataService:
 
     _BY_QUOTE: dict[str, list[str]] = {
         "USDT": [
-            "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "AVAXUSDT",
-            "XRPUSDT", "ADAUSDT", "DOGEUSDT", "DOTUSDT", "MATICUSDT",
-            "LINKUSDT", "UNIUSDT", "LTCUSDT", "ATOMUSDT", "NEARUSDT",
-            "AAVEUSDT", "FILUSDT", "APTUSDT", "ARBUSDT", "OPUSDT",
-            "SUIUSDT", "INJUSDT", "TIAUSDT", "SEIUSDT", "WLDUSDT",
+            # Large caps
+            "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+            "ADAUSDT", "AVAXUSDT", "DOGEUSDT", "DOTUSDT", "TRXUSDT",
+            "LINKUSDT", "MATICUSDT", "LTCUSDT", "BCHUSDT", "ATOMUSDT",
+            "UNIUSDT", "ETCUSDT", "XLMUSDT", "NEARUSDT", "AAVEUSDT",
+            # DeFi
+            "CRVUSDT", "MKRUSDT", "SNXUSDT", "COMPUSDT", "BALUSDT",
+            "SUSHIUSDT", "YFIUSDT", "LRCUSDT", "KNCUSDT", "LDOUSDT",
+            "DYDXUSDT", "GMXUSDT", "PERPUSDT", "RUNEUSDT", "CAKEUSDT",
+            "RDNTUSDT", "PENDLEUSDT", "ONDOUSDT", "QNTUSDT", "GRTUSDT",
+            # Layer 1 / Layer 2
+            "APTUSDT", "SUIUSDT", "ARBUSDT", "OPUSDT", "INJUSDT",
+            "SEIUSDT", "TIAUSDT", "WLDUSDT", "FILUSDT", "ICPUSDT",
+            "ALGOUSDT", "EOSUSDT", "XTZUSDT", "FLOWUSDT", "EGLDUSDT",
+            "FETUSDT", "IMXUSDT", "STXUSDT", "MINAUSDT", "KAVAUSDT",
+            "KLAYUSDT", "ZILUSDT", "IOSTUSDT", "ONTUSDT", "VETUSDT",
+            # Metaverse / Gaming / NFT
+            "MANAUSDT", "SANDUSDT", "AXSUSDT", "GALAUSDT", "ENJUSDT",
+            "CHZUSDT", "GMTUSDT", "MAGICUSDT", "YGGUSDT", "ALICEUSDT",
+            "ROSEUSDT", "HIGHUSDT", "ORDIUSDT", "WIFUSDT", "PEOPLEUSDT",
+            # Layer 0 / infra
+            "XMRUSDT", "DASHUSDT", "ZECUSDT", "RVNUSDT", "DCRUSDT",
+            "HBARUSDT", "IOTAUSDT", "BANDUSDT", "STORJUSDT", "BATUSDT",
+            "OCEANUSDT", "ANKRUSDT", "CELRUSDT", "SKLUSDT", "POWRUSDT",
+            # Others commonly listed
+            "WOOUSDT", "STGUSDT", "JASMYUSDT", "JTOUSDT", "JUPUSDT",
+            "PYTHUSDT", "RENDERUSDT", "KASUSDT", "TRBUSDT", "ENSUSDT",
         ],
         "USDC": [
-            "BTCUSDC", "ETHUSDC", "SOLUSDC", "BNBUSDC", "XRPUSDC",
-            "ADAUSDC", "DOGEUSDC", "AVAXUSDC", "DOTUSDC", "LINKUSDC",
-            "LTCUSDC", "UNIUSDC", "NEARUSDC", "MATICUSDC", "ATOMUSDC",
-            "APTUSDC", "ARBUSDC", "OPUSDC", "SUIUSDC",
+            # Large caps
+            "BTCUSDC", "ETHUSDC", "BNBUSDC", "SOLUSDC", "XRPUSDC",
+            "ADAUSDC", "AVAXUSDC", "DOGEUSDC", "DOTUSDC", "TRXUSDC",
+            "LINKUSDC", "MATICUSDC", "LTCUSDC", "BCHUSDC", "ATOMUSDC",
+            "UNIUSDC", "NEARUSDC", "XLMUSDC", "ETCUSDC", "AAVEUSDC",
+            # DeFi
+            "CRVUSDC", "MKRUSDC", "LDOUSDC", "GRTUSDC", "PENDLEUSDC",
+            "RUNEUSDC", "CAKEUSDC", "INJUSDC", "SUSHIUSDC", "COMPUSDC",
+            # Layer 1 / Layer 2
+            "APTUSDC", "SUIUSDC", "ARBUSDC", "OPUSDC", "SEIUSDC",
+            "TIAUSDC", "WLDUSDC", "FILUSDC", "ALGOUSDC", "FETUSDC",
+            "IMXUSDC", "STXUSDC", "ICPUSDC", "KAVAUSDC", "FLOWUSDC",
+            # Gaming / NFT
+            "SANDUSDC", "MANAUSDC", "AXSUSDC", "GALAUSDC", "CHZUSDC",
+            "ORDIUSDC", "WIFUSDC", "GMTUSDC",
+            # Others
+            "HBARUSDC", "RENDERUSDC", "WOOUSDC", "ENSUSDC", "STGUSDC",
         ],
         "BTC": [
-            "ETHBTC", "SOLBTC", "BNBBTC", "XRPBTC", "ADABTC",
-            "DOGEBTC", "DOTBTC", "LINKBTC", "LTCBTC", "ATOMBTC",
+            "ETHBTC", "BNBBTC", "SOLBTC", "XRPBTC", "ADABTC",
+            "DOGEBTC", "DOTBTC", "LTCBTC", "ATOMBTC", "LINKBTC",
+            "AVAXBTC", "UNIBTC", "NEARBTC", "BCHBTC", "ETCBTC",
+            "XLMBTC", "AAVEBTC", "MATICBTC", "ALGBTC",  "DASHBTC",
+            "XMRBTC", "EOSBTC", "SANDBTC", "MANABTC", "ZECBTC",
         ],
     }
 
