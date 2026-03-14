@@ -4,7 +4,6 @@ import type { AdminPage } from './types';
 import { BotControlPage } from './pages/BotControlPage';
 import { StrategySettingsPage } from './pages/StrategySettingsPage';
 import { LogsPage } from './pages/LogsPage';
-import { BotControlPage } from './pages/BotControlPage';
 import { DataManagerPage } from './pages/DataManagerPage';
 
 export default function App() {
