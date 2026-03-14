@@ -141,7 +141,7 @@ export function DataManagerPage({ onNavigate }: Props) {
                   onChange={() => toggle(sym)}
                   style={{ width: 'auto', margin: 0 }}
                 />
-                {sym.replace('USDT', '')}
+                {sym.replace(/USDT$|USDC$|BTC$/, '')}
                 {SYMBOL_PRICES[sym] && (
                   <span className="muted" style={{ fontSize: 10, marginLeft: 'auto' }}>
                     ${SYMBOL_PRICES[sym] >= 1000
