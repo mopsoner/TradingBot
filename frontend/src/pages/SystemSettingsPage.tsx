@@ -1,63 +1,59 @@
+import { useEffect, useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
 
 export function SystemSettingsPage() {
   const { data, loading, error } = useApi(() => api.config());
-  const system  = data ? (data.system  as Record<string, unknown>) : null;
-  const trading = data ? (data.trading as Record<string, unknown>) : null;
+  const { data: endpoints } = useApi(() => api.marginEndpoints());
+  const [configDraft, setConfigDraft] = useState<Record<string, unknown> | null>(null);
+  const [status, setStatus] = useState('');
+
+  useEffect(() => { if (data) setConfigDraft(data); }, [data]);
+  const system = configDraft ? (configDraft.system as Record<string, unknown>) : null;
+  const trading = configDraft ? (configDraft.trading as Record<string, unknown>) : null;
+
+  const setSystem = (key: string, value: unknown) => {
+    if (!configDraft || !system) return;
+    setConfigDraft({ ...configDraft, system: { ...system, [key]: value } });
+  };
+
+  const save = async () => {
+    if (!configDraft) return;
+    await api.updateConfig(configDraft);
+    setStatus('System settings saved.');
+  };
 
   return (
     <section>
       <h2>System settings</h2>
       {loading && <p className="muted">Loading…</p>}
-      {error   && <p className="red">Error: {error}</p>}
+      {error && <p className="red">Error: {error}</p>}
       {system && trading && (
         <div className="grid-2">
           <div className="card">
-            <h3>Operating mode</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <div className="flex items-center justify-between">
-                <span className="muted">Current mode</span>
-                <span className={`badge ${system.mode === 'live' ? 'badge-green' : 'badge-yellow'}`} style={{ fontSize: 13 }}>
-                  {String(system.mode).toUpperCase()}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="muted">Timeframe</span>
-                <strong>{String(trading.timeframe)}</strong>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="muted">Max concurrent trades</span>
-                <strong>{String(trading.max_concurrent_trades)}</strong>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="muted">Capital allocation</span>
-                <strong>{(Number(trading.capital_allocation) * 100).toFixed(0)}%</strong>
-              </div>
+            <h3>Execution mode & credentials</h3>
+            <div className="form-group">
+              <label>Mode</label>
+              <select value={String(system.mode)} onChange={e => setSystem('mode', e.target.value)}>
+                <option value="research">research</option>
+                <option value="paper">paper</option>
+                <option value="live">live</option>
+              </select>
             </div>
+            <div className="form-group"><label>API key</label><input value={String(system.api_key ?? '')} onChange={e => setSystem('api_key', e.target.value)} /></div>
+            <div className="form-group"><label>API secret</label><input value={String(system.api_secret ?? '')} onChange={e => setSystem('api_secret', e.target.value)} /></div>
+            <button className="btn btn-primary" onClick={save}>Save system</button>
+            {status && <p className="green" style={{ marginTop: 12 }}>{status}</p>}
           </div>
           <div className="card">
-            <h3>API credentials</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <div className="flex items-center justify-between">
-                <span className="muted">API key</span>
-                <span className={`badge ${system.api_key ? 'badge-green' : 'badge-gray'}`}>
-                  {system.api_key ? 'Configured' : 'Not set'}
-                </span>
+            <h3>Binance isolated margin endpoints</h3>
+            <p className="muted" style={{ marginBottom: 8 }}>Current execution mode: {String(endpoints?.execution_mode ?? 'paper')}</p>
+            {Object.entries((endpoints?.endpoints as Record<string, string>) ?? {}).map(([k, v]) => (
+              <div key={k} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                <span className="muted">{k}</span>
+                <code>{v}</code>
               </div>
-              <div className="flex items-center justify-between">
-                <span className="muted">API secret</span>
-                <span className={`badge ${system.api_secret ? 'badge-green' : 'badge-gray'}`}>
-                  {system.api_secret ? 'Configured' : 'Not set'}
-                </span>
-              </div>
-              <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
-                <p className="muted" style={{ fontSize: 12 }}>
-                  To enable live trading, set API credentials and change mode to <strong>live</strong>. 
-                  All trades currently execute in paper mode only.
-                </p>
-              </div>
-            </div>
+            ))}
           </div>
         </div>
       )}

@@ -4,15 +4,18 @@ const get = async <T>(path: string): Promise<T> => {
   return r.json();
 };
 
-const post = async <T>(path: string, body: unknown): Promise<T> => {
+const send = async <T>(path: string, method: 'POST' | 'PUT', body: unknown): Promise<T> => {
   const r = await fetch(path, {
-    method: 'POST',
+    method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
   return r.json();
 };
+
+const post = async <T>(path: string, body: unknown): Promise<T> => send(path, 'POST', body);
+const put = async <T>(path: string, body: unknown): Promise<T> => send(path, 'PUT', body);
 
 export type Signal = {
   id: number; timestamp: string; symbol: string; timeframe: string;
@@ -56,5 +59,8 @@ export const api = {
   logs:       (params = '')                   => get<{ total: number; rows: Log[] }>(`/api/logs${params}`),
   symbols:    ()                              => get<string[]>('/api/symbols'),
   config:     ()                              => get<Record<string, unknown>>('/api/config'),
+  updateConfig:(body: Record<string, unknown>)=> put<Record<string, unknown>>('/api/config', body),
+  marginEndpoints: ()                         => get<Record<string, unknown>>('/api/execution/endpoints'),
   scan:       (body: Record<string, unknown>) => post<Record<string, unknown>>('/api/scan', body),
+  marketScan: (body: Record<string, unknown>) => post<Record<string, unknown>>('/api/scan/market', body),
 };

@@ -1,55 +1,42 @@
+import { useEffect, useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
 
 export function RiskSettingsPage() {
   const { data, loading, error } = useApi(() => api.config());
-  const risk = data ? (data.risk as Record<string, unknown>) : null;
+  const [configDraft, setConfigDraft] = useState<Record<string, unknown> | null>(null);
+  const [status, setStatus] = useState('');
 
-  const pct = (v: unknown) => `${(Number(v) * 100).toFixed(1)}%`;
+  useEffect(() => { if (data) setConfigDraft(data); }, [data]);
+  const risk = configDraft ? (configDraft.risk as Record<string, unknown>) : null;
+
+  const setRisk = (key: string, value: unknown) => {
+    if (!configDraft || !risk) return;
+    setConfigDraft({ ...configDraft, risk: { ...risk, [key]: value } });
+  };
+
+  const save = async () => {
+    if (!configDraft) return;
+    await api.updateConfig(configDraft);
+    setStatus('Risk settings saved.');
+  };
 
   return (
     <section>
       <h2>Risk settings</h2>
       {loading && <p className="muted">Loading…</p>}
-      {error   && <p className="red">Error: {error}</p>}
+      {error && <p className="red">Error: {error}</p>}
       {risk && (
-        <div className="grid-2">
-          <div className="card">
-            <h3>Current configuration</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              {[
-                { label: 'Risk per trade',       value: pct(risk.risk_per_trade),      key: 'risk_per_trade' },
-                { label: 'Max open positions',    value: String(risk.max_open_positions), key: 'max_open_positions' },
-                { label: 'Daily loss limit',      value: pct(risk.daily_loss_limit),    key: 'daily_loss_limit' },
-                { label: 'Weekly loss limit',     value: pct(risk.weekly_loss_limit),   key: 'weekly_loss_limit' },
-              ].map(({ label, value, key }) => (
-                <div key={key}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <span className="muted">{label}</span>
-                    <strong>{value}</strong>
-                  </div>
-                  {key.includes('loss') && (
-                    <div className="progress-bar">
-                      <div
-                        className="progress-fill"
-                        style={{ width: `${Math.min(Number(risk[key]) * 100 / 0.1 * 100, 100)}%` }}
-                      />
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
+        <div className="card">
+          <h3>Editable limits</h3>
+          <div className="grid-2">
+            <div className="form-group"><label>Risk per trade</label><input type="number" step="0.001" value={Number(risk.risk_per_trade)} onChange={e => setRisk('risk_per_trade', Number(e.target.value))} /></div>
+            <div className="form-group"><label>Max open positions</label><input type="number" value={Number(risk.max_open_positions)} onChange={e => setRisk('max_open_positions', Number(e.target.value))} /></div>
+            <div className="form-group"><label>Daily loss limit</label><input type="number" step="0.001" value={Number(risk.daily_loss_limit)} onChange={e => setRisk('daily_loss_limit', Number(e.target.value))} /></div>
+            <div className="form-group"><label>Weekly loss limit</label><input type="number" step="0.001" value={Number(risk.weekly_loss_limit)} onChange={e => setRisk('weekly_loss_limit', Number(e.target.value))} /></div>
           </div>
-          <div className="card">
-            <h3>Risk rules</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, color: 'var(--text-muted)', fontSize: 13 }}>
-              <p>• Maximum {pct(risk.risk_per_trade)} of capital risked per trade</p>
-              <p>• No more than {String(risk.max_open_positions)} positions open simultaneously</p>
-              <p>• Trading halts if daily drawdown exceeds {pct(risk.daily_loss_limit)}</p>
-              <p>• Trading halts if weekly drawdown exceeds {pct(risk.weekly_loss_limit)}</p>
-              <p>• All trades run in <strong style={{ color: 'var(--accent-yellow)' }}>paper mode</strong> until live is enabled</p>
-            </div>
-          </div>
+          <button className="btn btn-primary" onClick={save}>Save risk</button>
+          {status && <p className="green" style={{ marginTop: 12 }}>{status}</p>}
         </div>
       )}
     </section>

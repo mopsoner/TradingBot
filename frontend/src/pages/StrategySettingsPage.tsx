@@ -1,68 +1,50 @@
+import { useEffect, useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
 
 export function StrategySettingsPage() {
   const { data, loading, error } = useApi(() => api.config());
-  const strategy = data ? (data.strategy as Record<string, unknown>) : null;
+  const [configDraft, setConfigDraft] = useState<Record<string, unknown> | null>(null);
+  const [status, setStatus] = useState('');
+
+  useEffect(() => {
+    if (data) setConfigDraft(data);
+  }, [data]);
+
+  const strategy = configDraft ? (configDraft.strategy as Record<string, unknown>) : null;
+
+  const setVal = (k: string, v: unknown) => {
+    if (!configDraft || !strategy) return;
+    setConfigDraft({ ...configDraft, strategy: { ...strategy, [k]: v } });
+  };
+
+  const save = async () => {
+    if (!configDraft) return;
+    await api.updateConfig(configDraft);
+    setStatus('Strategy settings saved.');
+  };
 
   return (
     <section>
       <h2>Strategy settings</h2>
       {loading && <p className="muted">Loading…</p>}
-      {error   && <p className="red">Error: {error}</p>}
+      {error && <p className="red">Error: {error}</p>}
       {strategy && (
         <div className="grid-2">
           <div className="card">
             <h3>SMC / Wyckoff parameters</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <div className="flex items-center justify-between">
-                <span className="muted">Spring detection</span>
-                <span className={`badge ${strategy.enable_spring ? 'badge-green' : 'badge-gray'}`}>
-                  {strategy.enable_spring ? 'Enabled' : 'Disabled'}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="muted">UTAD detection</span>
-                <span className={`badge ${strategy.enable_utad ? 'badge-green' : 'badge-gray'}`}>
-                  {strategy.enable_utad ? 'Enabled' : 'Disabled'}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="muted">Displacement threshold</span>
-                <strong>{String(strategy.displacement_threshold)}</strong>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="muted">BOS sensitivity</span>
-                <strong>{String(strategy.bos_sensitivity)}</strong>
-              </div>
-              <div>
-                <div className="flex items-center justify-between mb-8">
-                  <span className="muted">Fib retracement levels</span>
-                </div>
-                <div className="flex gap-8">
-                  {(strategy.fib_levels as number[]).map(f => (
-                    <span key={f} className="badge badge-blue">{f}</span>
-                  ))}
-                </div>
-              </div>
-            </div>
+            <div className="form-group"><label>Enable spring</label><input type="checkbox" checked={Boolean(strategy.enable_spring)} onChange={e => setVal('enable_spring', e.target.checked)} style={{ width: 'auto' }} /></div>
+            <div className="form-group"><label>Enable UTAD</label><input type="checkbox" checked={Boolean(strategy.enable_utad)} onChange={e => setVal('enable_utad', e.target.checked)} style={{ width: 'auto' }} /></div>
+            <div className="form-group"><label>Displacement threshold</label><input type="number" step="0.01" value={Number(strategy.displacement_threshold)} onChange={e => setVal('displacement_threshold', Number(e.target.value))} /></div>
+            <div className="form-group"><label>BOS sensitivity</label><input type="number" value={Number(strategy.bos_sensitivity)} onChange={e => setVal('bos_sensitivity', Number(e.target.value))} /></div>
+            <button className="btn btn-primary" onClick={save}>Save strategy</button>
+            {status && <p className="green" style={{ marginTop: 12 }}>{status}</p>}
           </div>
           <div className="card">
-            <h3>Signal sequence required</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13 }}>
-              {[
-                { step: 1, label: 'Liquidity zone identified' },
-                { step: 2, label: 'Sweep of liquidity' },
-                { step: 3, label: 'Spring (bullish) or UTAD (bearish) formed' },
-                { step: 4, label: `Displacement > ${strategy.displacement_threshold}` },
-                { step: 5, label: 'Break of structure (BOS) confirmed' },
-                { step: 6, label: 'Fib retracement to entry zone' },
-              ].map(({ step, label }) => (
-                <div key={step} className="flex items-center gap-8">
-                  <span className="badge badge-blue" style={{ minWidth: 24, textAlign: 'center' }}>{step}</span>
-                  <span className="muted">{label}</span>
-                </div>
-              ))}
+            <h3>Allowed fib levels</h3>
+            <p className="muted">Fixed strategy entries: 0.5 / 0.618 / 0.705.</p>
+            <div className="flex gap-8" style={{ marginTop: 8 }}>
+              {[0.5, 0.618, 0.705].map(f => <span key={f} className="badge badge-blue">{f}</span>)}
             </div>
           </div>
         </div>
