@@ -28,5 +28,10 @@ export default function App() {
       case 'Logs': return <LogsPage />;
     }
   };
-  return <main><h1>Trading Admin</h1><Sidebar onSelect={setPage} />{render()}</main>;
+  return (
+    <>
+      <Sidebar onSelect={setPage} />
+      <main>{render()}</main>
+    </>
+  );
 }
