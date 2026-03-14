@@ -57,6 +57,14 @@ export type BacktestResult = {
   expectancy: number; drawdown: number; r_multiple: number;
 };
 
+export type SimulatedTrade = {
+  index: number;
+  direction: string;
+  outcome: string;
+  r_multiple: number;
+  timestamp: string;
+};
+
 export type Log = {
   id: number; timestamp: string; level: string; message: string;
 };

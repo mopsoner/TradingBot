@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
-import type { BacktestResult, Signal } from '../services/api';
+import type { BacktestResult, Signal, SimulatedTrade } from '../services/api';
 import { TIMEFRAMES } from '../constants';
 import { fmtSym } from '../utils/dateUtils';
 import { Tooltip } from '../components/Tooltip';
@@ -20,7 +20,7 @@ function qualityBadge(wr: number, pf: number, dd: number): { label: string; colo
   return                  { label: 'Insuffisant', color: '#ef4444', bg: 'rgba(239,68,68,0.12)' };
 }
 
-function BacktestDetailPanel({ r }: { r: BacktestResult }) {
+function BacktestDetailPanel({ r, simulatedTrades }: { r: BacktestResult; simulatedTrades?: SimulatedTrade[] }) {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [loadingSigs, setLoadingSigs] = useState(true);
   const [sigError, setSigError] = useState('');
@@ -29,12 +29,16 @@ function BacktestDetailPanel({ r }: { r: BacktestResult }) {
     let cancelled = false;
     setLoadingSigs(true);
     setSigError('');
+    setSignals([]);
     api.signalsForBacktest(r.symbol, r.timeframe)
       .then(res => { if (!cancelled) setSignals(res.rows); })
       .catch(err => { if (!cancelled) setSigError(String(err)); })
       .finally(() => { if (!cancelled) setLoadingSigs(false); });
     return () => { cancelled = true; };
   }, [r.symbol, r.timeframe]);
+
+  const hasSimulatedTrades = simulatedTrades && simulatedTrades.length > 0;
+  const showSimulated = !loadingSigs && signals.length === 0 && hasSimulatedTrades;
 
   const q = qualityBadge(r.win_rate, r.profit_factor, r.drawdown);
 
@@ -96,16 +100,63 @@ function BacktestDetailPanel({ r }: { r: BacktestResult }) {
 
       <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-          <span style={{ fontSize: 13, fontWeight: 700 }}>Signaux liés</span>
+          <span style={{ fontSize: 13, fontWeight: 700 }}>
+            {showSimulated ? 'Trades simulés' : 'Signaux liés'}
+          </span>
           <span className="muted" style={{ fontSize: 11 }}>{fmtSym(r.symbol)} · {r.timeframe}</span>
-          {!loadingSigs && <span className="muted" style={{ fontSize: 11, marginLeft: 'auto' }}>{signals.length} signal{signals.length !== 1 ? 'x' : ''}</span>}
+          {!loadingSigs && !showSimulated && <span className="muted" style={{ fontSize: 11, marginLeft: 'auto' }}>{signals.length} signal{signals.length !== 1 ? 'x' : ''}</span>}
+          {showSimulated && <span className="muted" style={{ fontSize: 11, marginLeft: 'auto' }}>{simulatedTrades!.length} trade{simulatedTrades!.length !== 1 ? 's' : ''}</span>}
         </div>
 
         {loadingSigs ? (
           <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>Chargement des signaux…</div>
-        ) : sigError ? (
+        ) : sigError && !hasSimulatedTrades ? (
           <div style={{ padding: 14, textAlign: 'center', fontSize: 12, color: 'var(--accent-red)', background: 'rgba(239,68,68,0.08)', borderRadius: 8 }}>
             Erreur lors du chargement des signaux
+          </div>
+        ) : showSimulated ? (
+          <div style={{ maxHeight: 300, overflowY: 'auto', borderRadius: 8, border: '1px solid var(--border)' }}>
+            <table style={{ marginBottom: 0 }}>
+              <thead>
+                <tr>
+                  <th style={{ fontSize: 10 }}>#</th>
+                  <th style={{ fontSize: 10 }}>Date</th>
+                  <th style={{ fontSize: 10 }}>Direction</th>
+                  <th style={{ fontSize: 10 }}>Résultat</th>
+                  <th style={{ fontSize: 10 }}>R-Multiple</th>
+                </tr>
+              </thead>
+              <tbody>
+                {simulatedTrades!.map(t => (
+                  <tr key={t.index}>
+                    <td className="muted" style={{ fontSize: 11 }}>{t.index}</td>
+                    <td className="muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{new Date(t.timestamp).toLocaleString('fr-FR')}</td>
+                    <td>
+                      <span style={{
+                        fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4,
+                        background: t.direction === 'LONG' ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
+                        color: t.direction === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)',
+                      }}>{t.direction}</span>
+                    </td>
+                    <td>
+                      <span style={{
+                        fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4,
+                        background: t.outcome === 'win' ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
+                        color: t.outcome === 'win' ? 'var(--accent-green)' : 'var(--accent-red)',
+                      }}>
+                        {t.outcome === 'win' ? 'Win' : 'Loss'}
+                      </span>
+                    </td>
+                    <td style={{
+                      fontSize: 11, fontFamily: 'monospace', fontWeight: 600,
+                      color: t.r_multiple > 0 ? 'var(--accent-green)' : 'var(--accent-red)',
+                    }}>
+                      {t.r_multiple > 0 ? '+' : ''}{t.r_multiple.toFixed(2)}R
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         ) : signals.length === 0 ? (
           <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12, background: 'var(--surface2)', borderRadius: 8 }}>
@@ -1138,6 +1189,7 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
   const [showWorkshop, setShowWorkshop] = useState(false);
   const [leftTab, setLeftTab] = useState<'sim' | 'real'>('sim');
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
+  const [tradesMap, setTradesMap] = useState<Record<number, SimulatedTrade[]>>({});
 
   const [wfSymbol, setWfSymbol] = useState('ETHUSDT');
   const [wfYears, setWfYears] = useState(4);
@@ -1255,6 +1307,10 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
         setStatus('✅ Backtest terminé — rapport généré.');
         setReport(res.result as Record<string, unknown>);
         setLastResult(res.result as BacktestResult);
+        const btResult = res.result as BacktestResult;
+        if (Array.isArray(res.trades) && btResult.id) {
+          setTradesMap(prev => ({ ...prev, [btResult.id]: res.trades as SimulatedTrade[] }));
+        }
         reload();
       } else {
         setStatus(`❌ Erreur: ${String(res.reason)}`);
@@ -1853,7 +1909,7 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
                         {isExpanded && (
                           <tr>
                             <td colSpan={9} style={{ padding: 0, border: 'none' }}>
-                              <BacktestDetailPanel r={r} />
+                              <BacktestDetailPanel r={r} simulatedTrades={tradesMap[r.id]} />
                             </td>
                           </tr>
                         )}

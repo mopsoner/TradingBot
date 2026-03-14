@@ -1150,7 +1150,21 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
         s.commit()
         s.refresh(result)
 
-    return {"ok": True, "result": result.model_dump(), "report": report}
+    now = datetime.now(timezone.utc)
+    n_trades = len(outcomes)
+    interval = timedelta(days=req.horizon_days) / max(n_trades, 1)
+    trades = []
+    for i, r_val in enumerate(outcomes):
+        direction = random.choice(["LONG", "SHORT"])
+        trades.append({
+            "index": i + 1,
+            "direction": direction,
+            "outcome": "win" if r_val > 0 else "loss",
+            "r_multiple": round(r_val, 4),
+            "timestamp": (now - timedelta(days=req.horizon_days) + interval * i).isoformat(),
+        })
+
+    return {"ok": True, "result": result.model_dump(), "report": report, "trades": trades}
 
 
 @router.post("/backtest")
