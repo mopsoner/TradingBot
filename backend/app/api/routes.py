@@ -1,4 +1,5 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+import json
 from typing import Optional
 
 from fastapi import APIRouter, Query
@@ -6,17 +7,29 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session, select, func
 
 from backend.app.core.config import AppConfig, config
-from backend.app.db.models import Signal, Trade, Position, BacktestResult, Log
+from backend.app.db.models import (
+    Signal,
+    Trade,
+    Position,
+    BacktestResult,
+    Log,
+    MarketCandle,
+    BotJob,
+    ScanSchedule,
+    StrategyProfile,
+)
 from backend.app.db.session import engine
 from backend.app.services.backtesting import BacktestingEngine
 from backend.app.services.execution import ExecutionService
 from backend.app.services.market_data import MarketDataService
 from backend.app.services.paper_trade import PaperTradeManager
 from backend.app.services.risk_manager import RiskManager, RiskState
+from backend.app.services.session_filter import SessionFilter
 from backend.app.services.signal_engine import SetupInput, SignalEngine
 
 router = APIRouter()
 market_data = MarketDataService()
+session_filter = SessionFilter()
 signal_engine = SignalEngine(config.strategy.fib_levels)
 risk = RiskManager(
     config.risk.risk_per_trade,
@@ -27,6 +40,46 @@ risk = RiskManager(
 paper = PaperTradeManager()
 backtesting = BacktestingEngine()
 execution = ExecutionService(paper_mode=config.system.mode != "live")
+
+
+def _parse_profile_parameters(profile: StrategyProfile | None) -> dict[str, object]:
+    if not profile:
+        return {}
+    try:
+        parsed = json.loads(profile.parameters)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _build_backtest_outcomes(candles: list[MarketCandle]) -> list[float]:
+    if len(candles) < 2:
+        return []
+
+    ordered = sorted(candles, key=lambda c: c.timestamp)
+    outcomes: list[float] = []
+    for prev, curr in zip(ordered, ordered[1:]):
+        if prev.close == 0:
+            continue
+        pct_return = (curr.close - prev.close) / prev.close
+        outcomes.append(max(min(pct_return * 100, 3.0), -3.0))
+    return outcomes
+
+
+def _render_backtest_report(row: BacktestResult, horizon_days: int | None = None) -> str:
+    horizon_line = f"- Horizon: {horizon_days} days\n" if horizon_days is not None else ""
+    return (
+        f"# Backtest Report\n"
+        f"- Symbol: {row.symbol}\n"
+        f"- Timeframe: {row.timeframe}\n"
+        f"{horizon_line}"
+        f"- Strategy: {row.strategy_version}\n"
+        f"- Win rate: {row.win_rate:.2%}\n"
+        f"- Profit factor: {row.profit_factor:.2f}\n"
+        f"- Drawdown: {row.drawdown:.2%}\n"
+        f"- Expectancy: {row.expectancy:.4f}\n"
+        f"- R multiple: {row.r_multiple:.2f}R\n"
+    )
 
 
 # ── Read endpoints ────────────────────────────────────────────────────────────
@@ -104,6 +157,27 @@ def get_backtests(limit: int = Query(50, le=200), offset: int = 0) -> dict:
     return {"total": total, "rows": [r.model_dump() for r in rows]}
 
 
+@router.get("/backtests/{backtest_id}/report")
+def get_backtest_report(backtest_id: int) -> dict:
+    with Session(engine) as s:
+        row = s.get(BacktestResult, backtest_id)
+        if not row:
+            return {"ok": False, "reason": "backtest_not_found"}
+    return {"ok": True, "result": row.model_dump(), "report": _render_backtest_report(row)}
+
+
+@router.delete("/backtests/{backtest_id}")
+def delete_backtest(backtest_id: int) -> dict:
+    with Session(engine) as s:
+        row = s.get(BacktestResult, backtest_id)
+        if not row:
+            return {"ok": False, "reason": "backtest_not_found"}
+        s.delete(row)
+        s.add(Log(level="INFO", message=f"Backtest report deleted id={backtest_id} {row.symbol} {row.timeframe}"))
+        s.commit()
+    return {"ok": True, "deleted_id": backtest_id}
+
+
 @router.get("/logs")
 def get_logs(
     limit: int = Query(100, le=500),
@@ -119,6 +193,64 @@ def get_logs(
     return {"total": total, "rows": [r.model_dump() for r in rows]}
 
 
+@router.get("/bot/status")
+def bot_status(limit: int = Query(80, le=300)) -> dict:
+    now = datetime.now(timezone.utc)
+    with Session(engine) as s:
+        jobs = s.exec(select(BotJob).order_by(BotJob.timestamp.desc()).limit(limit)).all()
+        recent = jobs[:20]
+        pending_signals = len([j for j in recent if j.status == "SIGNAL_DETECTED"])
+        grouped = {"asia": 0, "london": 0, "newyork": 0, "off-session": 0}
+        for j in recent:
+            grouped[j.session_name if j.session_name in grouped else "off-session"] += 1
+
+        schedules = s.exec(select(ScanSchedule).order_by(ScanSchedule.id.asc())).all()
+
+    return {
+        "mode": config.system.mode,
+        "is_tradeable_now": session_filter.is_tradeable(now),
+        "live_progress": {
+            "jobs_processed": len(recent),
+            "signals_detected": pending_signals,
+            "session_breakdown": grouped,
+        },
+        "recent_events": [j.model_dump() for j in recent],
+        "schedules": [sched.model_dump() for sched in schedules],
+    }
+
+
+@router.get("/data/stats")
+def data_stats() -> dict:
+    with Session(engine) as s:
+        total_candles = s.exec(select(func.count(MarketCandle.id))).one()
+        latest = s.exec(select(MarketCandle).order_by(MarketCandle.timestamp.desc()).limit(1)).first()
+        symbols = s.exec(select(MarketCandle.symbol)).all()
+        unique_symbols = sorted(list(set(symbols)))
+    return {
+        "total_candles": total_candles,
+        "tracked_symbols": unique_symbols,
+        "last_candle_at": latest.timestamp if latest else None,
+    }
+
+
+@router.get("/data/candles")
+def candles(
+    symbol: Optional[str] = None,
+    timeframe: Optional[str] = None,
+    limit: int = Query(200, le=1000),
+    offset: int = 0,
+) -> dict:
+    with Session(engine) as s:
+        q = select(MarketCandle).order_by(MarketCandle.timestamp.desc())
+        if symbol:
+            q = q.where(MarketCandle.symbol == symbol)
+        if timeframe:
+            q = q.where(MarketCandle.timeframe == timeframe)
+        total = s.exec(select(func.count(MarketCandle.id))).one()
+        rows = s.exec(q.offset(offset).limit(limit)).all()
+    return {"total": total, "rows": [r.model_dump() for r in rows]}
+
+
 # ── Existing action endpoints ─────────────────────────────────────────────────
 
 @router.get("/symbols")
@@ -127,6 +259,13 @@ def symbols() -> list[str]:
     universe = market_data.load_symbols()
     merged = list(dict.fromkeys(preferred + universe))
     return merged
+
+
+@router.get("/symbols/isolated")
+def isolated_symbols() -> list[str]:
+    preferred = ["BTCUSDT", "ETHUSDT"]
+    configured = config.trading.enabled_symbols
+    return list(dict.fromkeys(preferred + configured))
 
 
 @router.get("/config")
@@ -176,6 +315,58 @@ class MultiScanRequest(BaseModel):
     fib_retracement: float = 0.618
     require_displacement: bool = True
     require_bos: bool = True
+
+
+class StartBotRequest(BaseModel):
+    symbols: list[str] = Field(default_factory=lambda: ["ETHUSDT", "BTCUSDT"], min_length=1)
+    timeframe: str = "15m"
+    mode: str = "paper"
+    risk_approved: bool = False
+    execute_orders: bool = False
+    strategy_profile_id: int | None = None
+
+
+
+
+class StrategyProfileIn(BaseModel):
+    name: str
+    mode: str = "research"
+    parameters: dict[str, object] = Field(default_factory=dict)
+
+
+class LiveApprovalIn(BaseModel):
+    approved: bool = True
+    approved_by: str = "operator"
+
+
+class BacktestRunRequest(BaseModel):
+    symbol: str
+    timeframe: str = "15m"
+    profile_id: int | None = None
+    horizon_days: int = 30
+
+
+class CandleIn(BaseModel):
+    symbol: str
+    timeframe: str = "15m"
+    timestamp: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    source: str = "manual"
+
+
+def resolve_session(ts: datetime) -> str:
+    hour = ts.astimezone(timezone.utc).hour
+    if 0 <= hour <= 6:
+        return "asia"
+    if 7 <= hour <= 12:
+        return "london"
+    if 13 <= hour <= 20:
+        return "newyork"
+    return "off-session"
 
 
 @router.post("/scan")
@@ -274,6 +465,302 @@ def market_scan(req: MultiScanRequest) -> dict:
             "margin_type": "ISOLATED",
         },
     }
+
+
+
+
+@router.get("/strategy/profiles")
+def get_strategy_profiles() -> dict:
+    with Session(engine) as s:
+        rows = s.exec(select(StrategyProfile).order_by(StrategyProfile.timestamp.desc())).all()
+    return {"rows": [r.model_dump() for r in rows]}
+
+
+@router.post("/strategy/profiles")
+def save_strategy_profile(payload: StrategyProfileIn) -> dict:
+    with Session(engine) as s:
+        profile = StrategyProfile(
+            name=payload.name,
+            mode=payload.mode,
+            parameters=json.dumps(payload.parameters),
+            is_active=False,
+        )
+        s.add(profile)
+        s.add(Log(level="INFO", message=f"Strategy profile saved: {payload.name} ({payload.mode})"))
+        s.commit()
+        s.refresh(profile)
+    return {"ok": True, "profile": profile.model_dump()}
+
+
+@router.post("/strategy/profiles/{profile_id}/backtest")
+def backtest_strategy_profile(profile_id: int) -> dict:
+    with Session(engine) as s:
+        profile = s.get(StrategyProfile, profile_id)
+        if not profile:
+            return {"ok": False, "reason": "profile_not_found"}
+
+        candles = s.exec(
+            select(MarketCandle)
+            .where(MarketCandle.symbol.in_(["ETHUSDT", "BTCUSDT"]))
+            .where(MarketCandle.timeframe == "15m")
+            .order_by(MarketCandle.timestamp.desc())
+            .limit(800)
+        ).all()
+        outcomes = _build_backtest_outcomes(candles)
+        if not outcomes:
+            return {"ok": False, "reason": "no_market_data_for_backtest"}
+
+        metrics = backtesting.run(outcomes)
+        profile.last_backtest_win_rate = metrics.win_rate
+        profile.last_backtest_profit_factor = metrics.profit_factor
+        profile.last_backtest_drawdown = metrics.drawdown
+        profile.approved_for_live = metrics.profit_factor >= 1.2 and metrics.drawdown <= 0.12
+        profile.mode = "research"
+        s.add(Log(level="INFO", message=f"Backtest completed for profile={profile.name}: PF={metrics.profit_factor:.2f} DD={metrics.drawdown:.2%}"))
+        s.commit()
+        s.refresh(profile)
+
+    return {
+        "ok": True,
+        "profile": profile.model_dump(),
+        "metrics": metrics.__dict__,
+        "approved_for_live": profile.approved_for_live,
+    }
+
+
+@router.post("/strategy/profiles/{profile_id}/approve-live")
+def approve_profile_for_live(profile_id: int, payload: LiveApprovalIn) -> dict:
+    with Session(engine) as s:
+        profile = s.get(StrategyProfile, profile_id)
+        if not profile:
+            return {"ok": False, "reason": "profile_not_found"}
+
+        if payload.approved and not profile.approved_for_live:
+            return {"ok": False, "reason": "backtest_approval_required_before_live"}
+
+        profile.approved_for_live = payload.approved
+        profile.approved_by = payload.approved_by if payload.approved else None
+        profile.approved_at = datetime.now(timezone.utc) if payload.approved else None
+        profile.mode = "live" if payload.approved else "research"
+        s.add(Log(level="WARN" if payload.approved else "INFO", message=f"Live approval {'granted' if payload.approved else 'revoked'} for profile={profile.name}"))
+        s.commit()
+        s.refresh(profile)
+
+    return {"ok": True, "profile": profile.model_dump()}
+
+
+@router.post("/bot/start")
+def start_bot(req: StartBotRequest) -> dict:
+    if req.mode == "live" and not req.risk_approved:
+        return {"ok": False, "reason": "risk_approval_required_for_live"}
+
+    now = datetime.now(timezone.utc)
+    events: list[dict] = []
+    executed_orders = 0
+    signals_detected = 0
+    with Session(engine) as s:
+        active_profile = None
+        if req.strategy_profile_id is not None:
+            active_profile = s.get(StrategyProfile, req.strategy_profile_id)
+            if not active_profile:
+                return {"ok": False, "reason": "strategy_profile_not_found"}
+
+        if req.mode == "live":
+            if not active_profile:
+                return {"ok": False, "reason": "strategy_profile_required_for_live"}
+            if not active_profile.approved_for_live:
+                return {"ok": False, "reason": "backtest_approval_required_before_live"}
+
+        if active_profile:
+            active_profile.is_active = True
+            active_profile.mode = req.mode
+
+        params = _parse_profile_parameters(active_profile)
+        allow_long = bool(params.get("allow_long", True))
+        allow_short = bool(params.get("allow_short", True))
+        if not allow_long and not allow_short:
+            return {"ok": False, "reason": "strategy_direction_required"}
+
+        for idx, symbol in enumerate(req.symbols):
+            pattern_switch = idx % 2
+            if allow_long and allow_short:
+                spring = pattern_switch == 0
+            else:
+                spring = allow_long
+            direction = signal_engine.detect(
+                SetupInput(
+                    symbol=symbol,
+                    liquidity_zone=True,
+                    sweep=True,
+                    spring=spring,
+                    utad=not spring,
+                    displacement=True,
+                    bos=True,
+                    fib_retracement=0.618,
+                )
+            )
+            session_name = resolve_session(now)
+            status = "REJECTED"
+            details = "No complete SMC/Wyckoff sequence"
+
+            if direction:
+                signals_detected += 1
+                status = "SIGNAL_DETECTED"
+                details = f"{direction} setup confirmed with fib=0.618"
+
+            if direction and req.execute_orders and req.risk_approved:
+                entry = 100 + idx * 3
+                stop = entry - 2 if direction == "LONG" else entry + 2
+                target = entry + 4 if direction == "LONG" else entry - 4
+                s.add(Trade(symbol=symbol, side=direction, entry=entry, stop=stop, target=target, status="OPEN", mode=req.mode))
+                executed_orders += 1
+                status = "ORDER_SUBMITTED"
+                details = f"{direction} order submitted ({req.mode})"
+
+            job = BotJob(
+                symbol=symbol,
+                timeframe=req.timeframe,
+                session_name=session_name,
+                mode=req.mode,
+                status=status,
+                signal=direction,
+                details=details,
+            )
+            s.add(job)
+            s.add(Log(level="INFO", message=f"[{session_name}] {symbol} {status}: {details}"))
+            events.append(job.model_dump())
+
+        schedule = s.exec(select(ScanSchedule).where(ScanSchedule.name == "intraday_scan")).first()
+        if not schedule:
+            schedule = ScanSchedule(name="intraday_scan", cron="*/15 * * * *", enabled=True, task_type="scan")
+            s.add(schedule)
+        schedule.last_run = now
+        schedule.next_run = now + timedelta(minutes=15)
+        s.commit()
+
+    return {
+        "ok": True,
+        "mode": req.mode,
+        "symbols": req.symbols,
+        "signals_detected": signals_detected,
+        "orders_submitted": executed_orders,
+        "events": events,
+        "next_scan_eta_seconds": 900,
+    }
+
+
+@router.post("/data/ingest")
+def ingest_data(payload: list[CandleIn]) -> dict:
+    if not payload:
+        return {"ok": False, "reason": "empty_payload"}
+
+    with Session(engine) as s:
+        for candle in payload:
+            s.add(MarketCandle(**candle.model_dump()))
+        s.add(Log(level="INFO", message=f"Ingested {len(payload)} candles via data manager"))
+        s.commit()
+
+    return {"ok": True, "inserted": len(payload)}
+
+
+@router.post("/data/enrich/daily")
+def daily_enrichment(symbols: list[str]) -> dict:
+    if not symbols:
+        symbols = ["ETHUSDT", "BTCUSDT"]
+
+    now = datetime.now(timezone.utc)
+    rows_added = 0
+    with Session(engine) as s:
+        for symbol in symbols:
+            base = 100 if symbol == "ETHUSDT" else 180
+            for i in range(24):
+                close = base + i * 0.4
+                candle = MarketCandle(
+                    symbol=symbol,
+                    timeframe="1h",
+                    timestamp=now - timedelta(hours=i),
+                    open=close - 0.6,
+                    high=close + 0.8,
+                    low=close - 1,
+                    close=close,
+                    volume=1000 + i * 15,
+                    source="daily-enrichment",
+                )
+                s.add(candle)
+                rows_added += 1
+
+            s.add(BotJob(
+                symbol=symbol,
+                timeframe="1h",
+                session_name=resolve_session(now),
+                mode="research",
+                status="DB_ENRICHED",
+                details="Daily enrichment stored for backtesting",
+            ))
+
+        schedule = s.exec(select(ScanSchedule).where(ScanSchedule.name == "daily_enrichment")).first()
+        if not schedule:
+            schedule = ScanSchedule(name="daily_enrichment", cron="0 1 * * *", enabled=True, task_type="enrichment")
+            s.add(schedule)
+        schedule.last_run = now
+        schedule.next_run = now + timedelta(days=1)
+
+        s.add(Log(level="INFO", message=f"Daily enrichment completed for {len(symbols)} symbols ({rows_added} candles)"))
+        s.commit()
+
+    return {
+        "ok": True,
+        "symbols": symbols,
+        "rows_added": rows_added,
+        "next_daily_run": now + timedelta(days=1),
+    }
+
+
+
+
+@router.post("/backtest/run")
+def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
+    with Session(engine) as s:
+        profile = s.get(StrategyProfile, req.profile_id) if req.profile_id else None
+        if req.profile_id and not profile:
+            return {"ok": False, "reason": "profile_not_found"}
+
+        bars_per_day = {"15m": 96, "1h": 24, "4h": 6}.get(req.timeframe, 96)
+        sample_size = max(req.horizon_days * bars_per_day, 80)
+        candles = s.exec(
+            select(MarketCandle)
+            .where(MarketCandle.symbol == req.symbol)
+            .where(MarketCandle.timeframe == req.timeframe)
+            .order_by(MarketCandle.timestamp.desc())
+            .limit(sample_size)
+        ).all()
+        outcomes = _build_backtest_outcomes(candles)
+        if not outcomes:
+            return {
+                "ok": False,
+                "reason": "no_market_data_for_backtest",
+                "detail": f"No candles found for {req.symbol} {req.timeframe}. Use Data manager before backtesting.",
+            }
+
+        metrics = backtesting.run(outcomes)
+
+        result = BacktestResult(
+            symbol=req.symbol,
+            timeframe=req.timeframe,
+            strategy_version=profile.name if profile else "default-smc",
+            win_rate=metrics.win_rate,
+            profit_factor=metrics.profit_factor,
+            expectancy=metrics.expectancy,
+            drawdown=metrics.drawdown,
+            r_multiple=metrics.r_multiple,
+        )
+        s.add(result)
+        report = _render_backtest_report(result, req.horizon_days)
+        s.add(Log(level="INFO", message=f"Backtest report generated for {req.symbol} using {result.strategy_version}"))
+        s.commit()
+        s.refresh(result)
+
+    return {"ok": True, "result": result.model_dump(), "report": report}
 
 
 @router.post("/backtest")

@@ -14,6 +14,12 @@ const send = async <T>(path: string, method: 'POST' | 'PUT', body: unknown): Pro
   return r.json();
 };
 
+const del = async <T>(path: string): Promise<T> => {
+  const r = await fetch(path, { method: 'DELETE' });
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  return r.json();
+};
+
 const post = async <T>(path: string, body: unknown): Promise<T> => send(path, 'POST', body);
 const put = async <T>(path: string, body: unknown): Promise<T> => send(path, 'PUT', body);
 
@@ -56,11 +62,27 @@ export const api = {
   trades:     (params = '')                   => get<{ total: number; rows: Trade[] }>(`/api/trades${params}`),
   positions:  ()                              => get<Position[]>('/api/positions'),
   backtests:  (params = '')                   => get<{ total: number; rows: BacktestResult[] }>(`/api/backtests${params}`),
+  backtestReport: (backtestId: number)        => get<Record<string, unknown>>(`/api/backtests/${backtestId}/report`),
+  deleteBacktest: (backtestId: number)        => del<Record<string, unknown>>(`/api/backtests/${backtestId}`),
+  runBacktest: (body: Record<string, unknown>)=> post<Record<string, unknown>>('/api/backtest/run', body),
   logs:       (params = '')                   => get<{ total: number; rows: Log[] }>(`/api/logs${params}`),
   symbols:    ()                              => get<string[]>('/api/symbols'),
+  isolatedSymbols: ()                         => get<string[]>('/api/symbols/isolated'),
   config:     ()                              => get<Record<string, unknown>>('/api/config'),
   updateConfig:(body: Record<string, unknown>)=> put<Record<string, unknown>>('/api/config', body),
   marginEndpoints: ()                         => get<Record<string, unknown>>('/api/execution/endpoints'),
   scan:       (body: Record<string, unknown>) => post<Record<string, unknown>>('/api/scan', body),
   marketScan: (body: Record<string, unknown>) => post<Record<string, unknown>>('/api/scan/market', body),
+
+  strategyProfiles: ()                        => get<{ rows: Record<string, unknown>[] }>('/api/strategy/profiles'),
+  saveStrategyProfile: (body: Record<string, unknown>) => post<Record<string, unknown>>('/api/strategy/profiles', body),
+  backtestStrategyProfile: (profileId: number) => post<Record<string, unknown>>(`/api/strategy/profiles/${profileId}/backtest`, {}),
+  approveStrategyProfile: (profileId: number, body: Record<string, unknown>) => post<Record<string, unknown>>(`/api/strategy/profiles/${profileId}/approve-live`, body),
+
+  botStatus:  ()                              => get<Record<string, unknown>>('/api/bot/status'),
+  startBot:   (body: Record<string, unknown>) => post<Record<string, unknown>>('/api/bot/start', body),
+  dataStats:  ()                              => get<Record<string, unknown>>('/api/data/stats'),
+  candles:    (params = '')                   => get<{ total: number; rows: Record<string, unknown>[] }>(`/api/data/candles${params}`),
+  ingestData: (body: Record<string, unknown>[]) => post<Record<string, unknown>>('/api/data/ingest', body),
+  enrichDaily:(symbols: string[])             => post<Record<string, unknown>>('/api/data/enrich/daily', symbols),
 };

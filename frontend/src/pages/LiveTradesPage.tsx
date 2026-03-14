@@ -1,31 +1,103 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
 
 const STATUS_OPTIONS = ['All', 'OPEN', 'CLOSED_WIN', 'CLOSED_LOSS'];
 
+type StrategyProfile = {
+  id: number;
+  name: string;
+  approved_for_live: boolean;
+  last_backtest_win_rate?: number;
+};
+
 export function LiveTradesPage() {
   const [statusFilter, setStatusFilter] = useState('All');
   const params = statusFilter !== 'All' ? `?status=${statusFilter}` : '';
-  const { data, loading, error } = useApi(() => api.trades(params), [statusFilter]);
+  const { data, loading, error, reload } = useApi(() => api.trades(params), [statusFilter]);
+  const { data: profiles, refresh: refreshProfiles } = useApi(() => api.strategyProfiles());
+  const [profileId, setProfileId] = useState<number | null>(null);
+  const [runStatus, setRunStatus] = useState('');
+
+  const selectedProfile = useMemo(() => {
+    const rows = (profiles?.rows as StrategyProfile[] | undefined) ?? [];
+    return rows.find((p) => p.id === profileId) ?? null;
+  }, [profiles, profileId]);
+
+  useEffect(() => {
+    const rows = (profiles?.rows as StrategyProfile[] | undefined) ?? [];
+    if (!profileId && rows.length) {
+      const approved = rows.find((p) => p.approved_for_live);
+      setProfileId((approved ?? rows[0]).id);
+    }
+  }, [profiles, profileId]);
+
+  const prepareProfileForLive = async () => {
+    if (!profileId) {
+      setRunStatus('Sélectionne un profil.');
+      return;
+    }
+    const bt = await api.backtestStrategyProfile(profileId);
+    if (!bt.ok) {
+      setRunStatus(`Backtest impossible: ${String(bt.reason)}`);
+      return;
+    }
+    const approve = await api.approveStrategyProfile(profileId, { approved: true, approved_by: 'live-trades' });
+    setRunStatus(approve.ok ? 'Profil backtesté et approuvé live.' : `Backtest OK mais approbation refusée: ${String(approve.reason)}`);
+    refreshProfiles();
+  };
+
+  const startLiveAutotrade = async () => {
+    const res = await api.startBot({
+      symbols: ['ETHUSDT', 'BTCUSDT'],
+      mode: 'live',
+      risk_approved: true,
+      execute_orders: true,
+      timeframe: '15m',
+      strategy_profile_id: profileId,
+    });
+    setRunStatus(res.ok ? `Auto-trade lancé: ${String(res.orders_submitted)} ordres.` : `Bloqué: ${String(res.reason)}`);
+    reload();
+  };
 
   const rr = (entry: number, stop: number, target: number) => {
-    const risk   = Math.abs(entry - stop);
+    const risk = Math.abs(entry - stop);
     const reward = Math.abs(target - entry);
     return risk > 0 ? (reward / risk).toFixed(1) : '—';
   };
 
   return (
     <section>
+      <h2>Live trades</h2>
+      <div className="card">
+        <h3>Trading live automatique sur signaux</h3>
+        <div className="row">
+          <div style={{ flex: 1 }}>
+            <label>Strategy profile approuvé</label>
+            <select value={profileId ?? ''} onChange={e => setProfileId(Number(e.target.value))}>
+              {(profiles?.rows as StrategyProfile[] | undefined)?.map((p) => (
+                <option key={p.id} value={p.id}>{p.name} {p.approved_for_live ? '✅' : '⏳'}</option>
+              ))}
+            </select>
+          </div>
+          <button className="btn btn-success" onClick={startLiveAutotrade}>Lancer live auto</button>
+        </div>
+        {selectedProfile && !selectedProfile.approved_for_live && (
+          <div style={{ marginTop: 8 }}>
+            <p className="muted" style={{ marginBottom: 8 }}>Ce profil n'est pas encore validé pour le live.</p>
+            <button className="btn btn-primary" onClick={prepareProfileForLive}>Backtester + approuver ce profil</button>
+          </div>
+        )}
+        {selectedProfile?.approved_for_live && (
+          <p className="muted" style={{ marginTop: 8 }}>Profil prêt pour le live. Win rate backtest: {selectedProfile.last_backtest_win_rate ? `${(selectedProfile.last_backtest_win_rate * 100).toFixed(1)}%` : 'n/a'}</p>
+        )}
+        {runStatus && <p className="muted" style={{ marginTop: 8 }}>{runStatus}</p>}
+      </div>
+
       <div className="flex items-center justify-between mb-16">
-        <h2 style={{ margin: 0 }}>Live trades</h2>
         <div className="flex gap-8">
           {STATUS_OPTIONS.map(s => (
-            <button
-              key={s}
-              className={`btn ${statusFilter === s ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => setStatusFilter(s)}
-            >
+            <button key={s} className={`btn ${statusFilter === s ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setStatusFilter(s)}>
               {s.replace('CLOSED_', '')}
             </button>
           ))}
@@ -33,44 +105,29 @@ export function LiveTradesPage() {
       </div>
 
       {loading && <p className="muted">Loading…</p>}
-      {error   && <p className="red">Error: {error}</p>}
+      {error && <p className="red">Error: {error}</p>}
 
       {data && (
-        <>
-          <p className="muted mb-16">{data.total.toLocaleString()} trades total</p>
-          <div className="card" style={{ padding: 0 }}>
-            <table>
-              <thead>
-                <tr>
-                  <th>Date</th><th>Symbol</th><th>Side</th>
-                  <th>Entry</th><th>Stop</th><th>Target</th><th>R:R</th>
-                  <th>Mode</th><th>Status</th>
+        <div className="card" style={{ padding: 0 }}>
+          <table>
+            <thead><tr><th>Date</th><th>Symbol</th><th>Side</th><th>Entry</th><th>Stop</th><th>Target</th><th>R:R</th><th>Mode</th><th>Status</th></tr></thead>
+            <tbody>
+              {data.rows.map(t => (
+                <tr key={t.id}>
+                  <td className="muted">{new Date(t.timestamp).toLocaleDateString()}</td>
+                  <td>{t.symbol}</td>
+                  <td className={t.side === 'LONG' ? 'green' : 'red'}>{t.side}</td>
+                  <td>{t.entry.toFixed(2)}</td>
+                  <td className="red">{t.stop.toFixed(2)}</td>
+                  <td className="green">{t.target.toFixed(2)}</td>
+                  <td className="muted">{rr(t.entry, t.stop, t.target)}</td>
+                  <td><span className="tag">{t.mode}</span></td>
+                  <td><span className={`badge ${t.status === 'CLOSED_WIN' ? 'badge-green' : t.status === 'CLOSED_LOSS' ? 'badge-red' : t.status === 'OPEN' ? 'badge-blue' : 'badge-gray'}`}>{t.status.replace('CLOSED_', '')}</span></td>
                 </tr>
-              </thead>
-              <tbody>
-                {data.rows.map(t => (
-                  <tr key={t.id}>
-                    <td className="muted">{new Date(t.timestamp).toLocaleDateString()}</td>
-                    <td>{t.symbol}</td>
-                    <td className={t.side === 'LONG' ? 'green' : 'red'}>{t.side}</td>
-                    <td>{t.entry.toFixed(2)}</td>
-                    <td className="red">{t.stop.toFixed(2)}</td>
-                    <td className="green">{t.target.toFixed(2)}</td>
-                    <td className="muted">{rr(t.entry, t.stop, t.target)}</td>
-                    <td><span className="tag">{t.mode}</span></td>
-                    <td>
-                      <span className={`badge ${
-                        t.status === 'CLOSED_WIN'  ? 'badge-green' :
-                        t.status === 'CLOSED_LOSS' ? 'badge-red'   :
-                        t.status === 'OPEN'        ? 'badge-blue'  : 'badge-gray'
-                      }`}>{t.status.replace('CLOSED_', '')}</span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </section>
   );

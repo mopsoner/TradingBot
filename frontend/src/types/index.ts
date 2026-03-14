@@ -1,11 +1,9 @@
 export type AdminPage =
   | 'Dashboard'
-  | 'Live trades'
-  | 'Signals'
-  | 'Positions'
-  | 'Backtests'
-  | 'Market scanner'
-  | 'Risk settings'
   | 'Strategy settings'
-  | 'System settings'
+  | 'Data manager'
+  | 'Backtests'
+  | 'Live trades'
+  | 'Admin'
+  | 'Signals'
   | 'Logs';
