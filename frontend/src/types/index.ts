@@ -1,5 +1,7 @@
 export type AdminPage =
   | 'Dashboard'
+  | 'Bot control'
+  | 'Data manager'
   | 'Live trades'
   | 'Signals'
   | 'Positions'

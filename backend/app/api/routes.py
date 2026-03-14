@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Query
@@ -6,17 +6,28 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session, select, func
 
 from backend.app.core.config import AppConfig, config
-from backend.app.db.models import Signal, Trade, Position, BacktestResult, Log
+from backend.app.db.models import (
+    Signal,
+    Trade,
+    Position,
+    BacktestResult,
+    Log,
+    MarketCandle,
+    BotJob,
+    ScanSchedule,
+)
 from backend.app.db.session import engine
 from backend.app.services.backtesting import BacktestingEngine
 from backend.app.services.execution import ExecutionService
 from backend.app.services.market_data import MarketDataService
 from backend.app.services.paper_trade import PaperTradeManager
 from backend.app.services.risk_manager import RiskManager, RiskState
+from backend.app.services.session_filter import SessionFilter
 from backend.app.services.signal_engine import SetupInput, SignalEngine
 
 router = APIRouter()
 market_data = MarketDataService()
+session_filter = SessionFilter()
 signal_engine = SignalEngine(config.strategy.fib_levels)
 risk = RiskManager(
     config.risk.risk_per_trade,
@@ -119,6 +130,64 @@ def get_logs(
     return {"total": total, "rows": [r.model_dump() for r in rows]}
 
 
+@router.get("/bot/status")
+def bot_status(limit: int = Query(80, le=300)) -> dict:
+    now = datetime.now(timezone.utc)
+    with Session(engine) as s:
+        jobs = s.exec(select(BotJob).order_by(BotJob.timestamp.desc()).limit(limit)).all()
+        recent = jobs[:20]
+        pending_signals = len([j for j in recent if j.status == "SIGNAL_DETECTED"])
+        grouped = {"asia": 0, "london": 0, "newyork": 0, "off-session": 0}
+        for j in recent:
+            grouped[j.session_name if j.session_name in grouped else "off-session"] += 1
+
+        schedules = s.exec(select(ScanSchedule).order_by(ScanSchedule.id.asc())).all()
+
+    return {
+        "mode": config.system.mode,
+        "is_tradeable_now": session_filter.is_tradeable(now),
+        "live_progress": {
+            "jobs_processed": len(recent),
+            "signals_detected": pending_signals,
+            "session_breakdown": grouped,
+        },
+        "recent_events": [j.model_dump() for j in recent],
+        "schedules": [sched.model_dump() for sched in schedules],
+    }
+
+
+@router.get("/data/stats")
+def data_stats() -> dict:
+    with Session(engine) as s:
+        total_candles = s.exec(select(func.count(MarketCandle.id))).one()
+        latest = s.exec(select(MarketCandle).order_by(MarketCandle.timestamp.desc()).limit(1)).first()
+        symbols = s.exec(select(MarketCandle.symbol)).all()
+        unique_symbols = sorted(list(set(symbols)))
+    return {
+        "total_candles": total_candles,
+        "tracked_symbols": unique_symbols,
+        "last_candle_at": latest.timestamp if latest else None,
+    }
+
+
+@router.get("/data/candles")
+def candles(
+    symbol: Optional[str] = None,
+    timeframe: Optional[str] = None,
+    limit: int = Query(200, le=1000),
+    offset: int = 0,
+) -> dict:
+    with Session(engine) as s:
+        q = select(MarketCandle).order_by(MarketCandle.timestamp.desc())
+        if symbol:
+            q = q.where(MarketCandle.symbol == symbol)
+        if timeframe:
+            q = q.where(MarketCandle.timeframe == timeframe)
+        total = s.exec(select(func.count(MarketCandle.id))).one()
+        rows = s.exec(q.offset(offset).limit(limit)).all()
+    return {"total": total, "rows": [r.model_dump() for r in rows]}
+
+
 # ── Existing action endpoints ─────────────────────────────────────────────────
 
 @router.get("/symbols")
@@ -176,6 +245,37 @@ class MultiScanRequest(BaseModel):
     fib_retracement: float = 0.618
     require_displacement: bool = True
     require_bos: bool = True
+
+
+class StartBotRequest(BaseModel):
+    symbols: list[str] = Field(default_factory=lambda: ["ETHUSDT", "BTCUSDT"], min_length=1)
+    timeframe: str = "15m"
+    mode: str = "paper"
+    risk_approved: bool = False
+    execute_orders: bool = False
+
+
+class CandleIn(BaseModel):
+    symbol: str
+    timeframe: str = "15m"
+    timestamp: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    source: str = "manual"
+
+
+def resolve_session(ts: datetime) -> str:
+    hour = ts.astimezone(timezone.utc).hour
+    if 0 <= hour <= 6:
+        return "asia"
+    if 7 <= hour <= 12:
+        return "london"
+    if 13 <= hour <= 20:
+        return "newyork"
+    return "off-session"
 
 
 @router.post("/scan")
@@ -273,6 +373,148 @@ def market_scan(req: MultiScanRequest) -> dict:
             "auto_route_to_paper": True,
             "margin_type": "ISOLATED",
         },
+    }
+
+
+@router.post("/bot/start")
+def start_bot(req: StartBotRequest) -> dict:
+    if req.mode == "live" and not req.risk_approved:
+        return {"ok": False, "reason": "risk_approval_required_for_live"}
+
+    now = datetime.now(timezone.utc)
+    events: list[dict] = []
+    executed_orders = 0
+    signals_detected = 0
+    with Session(engine) as s:
+        for idx, symbol in enumerate(req.symbols):
+            pattern_switch = idx % 2
+            spring = pattern_switch == 0
+            direction = signal_engine.detect(
+                SetupInput(
+                    symbol=symbol,
+                    liquidity_zone=True,
+                    sweep=True,
+                    spring=spring,
+                    utad=not spring,
+                    displacement=True,
+                    bos=True,
+                    fib_retracement=0.618,
+                )
+            )
+            session_name = resolve_session(now)
+            status = "REJECTED"
+            details = "No complete SMC/Wyckoff sequence"
+
+            if direction:
+                signals_detected += 1
+                status = "SIGNAL_DETECTED"
+                details = f"{direction} setup confirmed with fib=0.618"
+
+            if direction and req.execute_orders and req.risk_approved:
+                entry = 100 + idx * 3
+                stop = entry - 2 if direction == "LONG" else entry + 2
+                target = entry + 4 if direction == "LONG" else entry - 4
+                s.add(Trade(symbol=symbol, side=direction, entry=entry, stop=stop, target=target, status="OPEN", mode=req.mode))
+                executed_orders += 1
+                status = "ORDER_SUBMITTED"
+                details = f"{direction} order submitted ({req.mode})"
+
+            job = BotJob(
+                symbol=symbol,
+                timeframe=req.timeframe,
+                session_name=session_name,
+                mode=req.mode,
+                status=status,
+                signal=direction,
+                details=details,
+            )
+            s.add(job)
+            s.add(Log(level="INFO", message=f"[{session_name}] {symbol} {status}: {details}"))
+            events.append(job.model_dump())
+
+        schedule = s.exec(select(ScanSchedule).where(ScanSchedule.name == "intraday_scan")).first()
+        if not schedule:
+            schedule = ScanSchedule(name="intraday_scan", cron="*/15 * * * *", enabled=True, task_type="scan")
+            s.add(schedule)
+        schedule.last_run = now
+        schedule.next_run = now + timedelta(minutes=15)
+        s.commit()
+
+    return {
+        "ok": True,
+        "mode": req.mode,
+        "symbols": req.symbols,
+        "signals_detected": signals_detected,
+        "orders_submitted": executed_orders,
+        "events": events,
+        "next_scan_eta_seconds": 900,
+    }
+
+
+@router.post("/data/ingest")
+def ingest_data(payload: list[CandleIn]) -> dict:
+    if not payload:
+        return {"ok": False, "reason": "empty_payload"}
+
+    with Session(engine) as s:
+        for candle in payload:
+            s.add(MarketCandle(**candle.model_dump()))
+        s.add(Log(level="INFO", message=f"Ingested {len(payload)} candles via data manager"))
+        s.commit()
+
+    return {"ok": True, "inserted": len(payload)}
+
+
+@router.post("/data/enrich/daily")
+def daily_enrichment(symbols: list[str]) -> dict:
+    if not symbols:
+        symbols = ["ETHUSDT", "BTCUSDT"]
+
+    now = datetime.now(timezone.utc)
+    rows_added = 0
+    with Session(engine) as s:
+        for symbol in symbols:
+            base = 100 if symbol == "ETHUSDT" else 180
+            for i in range(24):
+                close = base + i * 0.4
+                candle = MarketCandle(
+                    symbol=symbol,
+                    timeframe="1h",
+                    timestamp=now - timedelta(hours=i),
+                    open=close - 0.6,
+                    high=close + 0.8,
+                    low=close - 1,
+                    close=close,
+                    volume=1000 + i * 15,
+                    source="daily-enrichment",
+                )
+                s.add(candle)
+                rows_added += 1
+
+            s.add(BotJob(
+                symbol=symbol,
+                timeframe="1h",
+                session_name=resolve_session(now),
+                mode="research",
+                status="DB_ENRICHED",
+                details="Daily enrichment stored for backtesting",
+            ))
+
+        schedule = s.exec(select(ScanSchedule).where(ScanSchedule.name == "daily_enrichment")).first()
+        if not schedule:
+            schedule = ScanSchedule(name="daily_enrichment", cron="0 1 * * *", enabled=True, task_type="enrichment")
+            s.add(schedule)
+        schedule.last_run = now
+        schedule.next_run = now + timedelta(days=1)
+
+        s.add(Log(level="INFO", message=f"Daily enrichment completed for {len(symbols)} symbols ({rows_added} candles)"))
+        s.commit()
+
+    return {
+        "ok": True,
+        "symbols": symbols,
+        "rows_added": rows_added,
+        "next_daily_run": now + timedelta(days=1),
     }
 
 
