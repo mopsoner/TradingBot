@@ -113,6 +113,10 @@ export const api = {
   runPipeline: (body: { symbols: string[]; timeframe: string; profile_id?: number | null }) =>
     post<Record<string, unknown>>('/api/pipeline/run', body),
   journal: (params = '') => get<JournalResponse>(`/api/journal${params}`),
+  autonomousStart: (body: { symbols: string[]; timeframe: string; profile_id?: number | null; interval_minutes: number }) =>
+    post<Record<string, unknown>>('/api/autonomous/start', body),
+  autonomousStop: () => post<Record<string, unknown>>('/api/autonomous/stop', {}),
+  autonomousStatus: () => get<Record<string, unknown>>('/api/autonomous/status'),
 };
 
 export type MarginAsset = {

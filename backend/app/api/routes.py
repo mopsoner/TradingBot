@@ -1177,6 +1177,178 @@ PIPELINE_STEPS = [
 _pipeline: dict[str, dict] = {}
 _pipeline_lock = threading.Lock()
 
+# ── Autonomous scanner state ───────────────────────────────────────────────────
+_auto_lock  = threading.Lock()
+_auto_stop  = threading.Event()
+_auto_thread: threading.Thread | None = None
+_auto_state: dict = {
+    "running":          False,
+    "symbols":          [],
+    "timeframe":        "1h",
+    "profile_id":       None,
+    "interval_minutes": 15,
+    "next_run_at":      None,
+    "last_run_at":      None,
+    "run_count":        0,
+    "last_signals":     0,
+    "last_run_results": [],
+}
+
+
+def _autonomous_worker() -> None:
+    """
+    Background daemon: runs the bot-scan every `interval_minutes` minutes.
+    Signals are persisted to DB as normal BotJobs; no orders are submitted.
+    """
+    import copy
+    while not _auto_stop.is_set():
+        with _auto_lock:
+            symbols   = list(_auto_state["symbols"])
+            tf        = _auto_state["timeframe"]
+            pid       = _auto_state["profile_id"]
+            interval  = _auto_state["interval_minutes"]
+            next_at   = _auto_state["next_run_at"]
+
+        now = datetime.now(timezone.utc)
+
+        # Wait until next_run_at
+        if next_at:
+            next_dt = datetime.fromisoformat(next_at)
+            wait_sec = (next_dt - now).total_seconds()
+            if wait_sec > 0:
+                _auto_stop.wait(timeout=wait_sec)
+                if _auto_stop.is_set():
+                    break
+
+        if _auto_stop.is_set():
+            break
+
+        # ── Run scan ──────────────────────────────────────────────────────────
+        profile_params: dict = {}
+        if pid is not None:
+            try:
+                with Session(engine) as s:
+                    prof = s.get(StrategyProfile, pid)
+                    if prof and prof.parameters:
+                        profile_params = json.loads(prof.parameters)
+            except Exception:
+                pass
+
+        results: list[dict] = []
+        signals_detected = 0
+        run_now = datetime.now(timezone.utc)
+
+        for symbol in symbols:
+            try:
+                pattern_switch = hash(symbol) % 2
+                spring    = pattern_switch == 0
+                direction = signal_engine.detect(
+                    SetupInput(
+                        symbol=symbol,
+                        liquidity_zone=True,
+                        sweep=True,
+                        spring=spring,
+                        utad=not spring,
+                        displacement=True,
+                        bos=True,
+                        expansion_to_next_liquidity=True,
+                        fib_retracement=0.618,
+                    )
+                )
+                sess_name = resolve_session(run_now)
+                status    = "SIGNAL_DETECTED" if direction else "NO_SETUP"
+                details   = f"{direction} setup — fib=0.618" if direction else "Aucun setup SMC/Wyckoff valide"
+                if direction:
+                    signals_detected += 1
+
+                with Session(engine) as s:
+                    job = BotJob(
+                        symbol=symbol, timeframe=tf,
+                        session_name=sess_name, mode="paper",
+                        status=status, signal=direction, details=details,
+                    )
+                    s.add(job)
+                    s.commit()
+
+                results.append({
+                    "symbol": symbol, "status": status,
+                    "signal": direction or "—", "session": sess_name,
+                    "details": details, "ts": run_now.isoformat(),
+                })
+            except Exception as exc:
+                results.append({"symbol": symbol, "status": "ERROR", "signal": "—",
+                                 "session": "?", "details": str(exc), "ts": run_now.isoformat()})
+
+        # ── Update state ──────────────────────────────────────────────────────
+        next_run = (run_now + timedelta(minutes=interval)).isoformat()
+        with _auto_lock:
+            if not _auto_state["running"]:
+                break
+            _auto_state["last_run_at"]      = run_now.isoformat()
+            _auto_state["next_run_at"]      = next_run
+            _auto_state["run_count"]        += 1
+            _auto_state["last_signals"]     = signals_detected
+            _auto_state["last_run_results"] = results
+
+    with _auto_lock:
+        _auto_state["running"]      = False
+        _auto_state["next_run_at"]  = None
+
+
+class AutonomousStartRequest(BaseModel):
+    symbols:          list[str] = Field(min_length=1)
+    timeframe:        str       = "1h"
+    profile_id:       int | None = None
+    interval_minutes: int       = Field(default=15, ge=1, le=1440)
+
+
+@router.post("/autonomous/start")
+def autonomous_start(req: AutonomousStartRequest) -> dict:
+    global _auto_thread, _auto_stop
+    with _auto_lock:
+        if _auto_state["running"]:
+            return {"ok": False, "reason": "already_running"}
+        _auto_state["running"]          = True
+        _auto_state["symbols"]          = list(req.symbols)
+        _auto_state["timeframe"]        = req.timeframe
+        _auto_state["profile_id"]       = req.profile_id
+        _auto_state["interval_minutes"] = req.interval_minutes
+        _auto_state["run_count"]        = 0
+        _auto_state["last_signals"]     = 0
+        _auto_state["last_run_results"] = []
+        _auto_state["last_run_at"]      = None
+        _auto_state["next_run_at"]      = datetime.now(timezone.utc).isoformat()
+
+    _auto_stop.clear()
+    _auto_thread = threading.Thread(target=_autonomous_worker, daemon=True)
+    _auto_thread.start()
+    return {"ok": True, "interval_minutes": req.interval_minutes, "symbols": req.symbols}
+
+
+@router.post("/autonomous/stop")
+def autonomous_stop() -> dict:
+    with _auto_lock:
+        if not _auto_state["running"]:
+            return {"ok": False, "reason": "not_running"}
+        _auto_state["running"] = False
+    _auto_stop.set()
+    return {"ok": True}
+
+
+@router.get("/autonomous/status")
+def autonomous_status() -> dict:
+    with _auto_lock:
+        state = dict(_auto_state)
+    now = datetime.now(timezone.utc)
+    seconds_to_next: int | None = None
+    if state["next_run_at"] and state["running"]:
+        try:
+            diff = (datetime.fromisoformat(state["next_run_at"]) - now).total_seconds()
+            seconds_to_next = max(0, int(diff))
+        except Exception:
+            pass
+    return {**state, "seconds_to_next": seconds_to_next}
+
 
 class PipelineRunRequest(BaseModel):
     symbols: list[str] = Field(min_length=1)
