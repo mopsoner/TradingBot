@@ -1,54 +1,66 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
 
 export function StrategySettingsPage() {
-  const { data, loading, error } = useApi(() => api.config());
-  const [configDraft, setConfigDraft] = useState<Record<string, unknown> | null>(null);
+  const { data: profilesData, refresh } = useApi(() => api.strategyProfiles());
+  const [name, setName] = useState('SMC Wyckoff ETH/BTC');
+  const [enableSpring, setEnableSpring] = useState(true);
+  const [enableUtad, setEnableUtad] = useState(true);
+  const [displacementThreshold, setDisplacementThreshold] = useState(0.35);
+  const [bosSensitivity, setBosSensitivity] = useState(3);
+  const [fibLevels, setFibLevels] = useState('0.5,0.618,0.705');
   const [status, setStatus] = useState('');
 
-  useEffect(() => {
-    if (data) setConfigDraft(data);
-  }, [data]);
+  const saveProfile = async () => {
+    const parsedFib = fibLevels
+      .split(',')
+      .map((v) => Number(v.trim()))
+      .filter((v) => !Number.isNaN(v));
 
-  const strategy = configDraft ? (configDraft.strategy as Record<string, unknown>) : null;
+    const res = await api.saveStrategyProfile({
+      name,
+      mode: 'research',
+      parameters: {
+        setup: ['liquidity-zone', 'liquidity-sweep', 'spring-utad', 'displacement', 'bos'],
+        enable_spring: enableSpring,
+        enable_utad: enableUtad,
+        displacement_threshold: displacementThreshold,
+        bos_sensitivity: bosSensitivity,
+        fib_levels: parsedFib,
+      },
+    });
 
-  const setVal = (k: string, v: unknown) => {
-    if (!configDraft || !strategy) return;
-    setConfigDraft({ ...configDraft, strategy: { ...strategy, [k]: v } });
-  };
-
-  const save = async () => {
-    if (!configDraft) return;
-    await api.updateConfig(configDraft);
-    setStatus('Strategy settings saved.');
+    setStatus(res.ok ? 'Profil stratégie sauvegardé.' : `Erreur: ${String(res.reason)}`);
+    refresh();
   };
 
   return (
     <section>
       <h2>Strategy settings</h2>
-      {loading && <p className="muted">Loading…</p>}
-      {error && <p className="red">Error: {error}</p>}
-      {strategy && (
-        <div className="grid-2">
-          <div className="card">
-            <h3>SMC / Wyckoff parameters</h3>
-            <div className="form-group"><label>Enable spring</label><input type="checkbox" checked={Boolean(strategy.enable_spring)} onChange={e => setVal('enable_spring', e.target.checked)} style={{ width: 'auto' }} /></div>
-            <div className="form-group"><label>Enable UTAD</label><input type="checkbox" checked={Boolean(strategy.enable_utad)} onChange={e => setVal('enable_utad', e.target.checked)} style={{ width: 'auto' }} /></div>
-            <div className="form-group"><label>Displacement threshold</label><input type="number" step="0.01" value={Number(strategy.displacement_threshold)} onChange={e => setVal('displacement_threshold', Number(e.target.value))} /></div>
-            <div className="form-group"><label>BOS sensitivity</label><input type="number" value={Number(strategy.bos_sensitivity)} onChange={e => setVal('bos_sensitivity', Number(e.target.value))} /></div>
-            <button className="btn btn-primary" onClick={save}>Save strategy</button>
-            {status && <p className="green" style={{ marginTop: 12 }}>{status}</p>}
-          </div>
-          <div className="card">
-            <h3>Allowed fib levels</h3>
-            <p className="muted">Fixed strategy entries: 0.5 / 0.618 / 0.705.</p>
-            <div className="flex gap-8" style={{ marginTop: 8 }}>
-              {[0.5, 0.618, 0.705].map(f => <span key={f} className="badge badge-blue">{f}</span>)}
-            </div>
-          </div>
+      <div className="grid-2">
+        <div className="card">
+          <h3>Paramétrage stratégie</h3>
+          <div className="form-group"><label>Nom du profil</label><input value={name} onChange={e => setName(e.target.value)} /></div>
+          <div className="form-group"><label>Enable spring</label><input type="checkbox" checked={enableSpring} onChange={e => setEnableSpring(e.target.checked)} style={{ width: 'auto' }} /></div>
+          <div className="form-group"><label>Enable UTAD</label><input type="checkbox" checked={enableUtad} onChange={e => setEnableUtad(e.target.checked)} style={{ width: 'auto' }} /></div>
+          <div className="form-group"><label>Displacement threshold</label><input type="number" step="0.01" value={displacementThreshold} onChange={e => setDisplacementThreshold(Number(e.target.value))} /></div>
+          <div className="form-group"><label>BOS sensitivity</label><input type="number" value={bosSensitivity} onChange={e => setBosSensitivity(Number(e.target.value))} /></div>
+          <div className="form-group"><label>Fib levels (csv)</label><input value={fibLevels} onChange={e => setFibLevels(e.target.value)} /></div>
+          <button className="btn btn-primary" onClick={saveProfile}>Sauvegarder la stratégie</button>
+          {status && <p className="green" style={{ marginTop: 10 }}>{status}</p>}
         </div>
-      )}
+
+        <div className="card">
+          <h3>Profils sauvegardés</h3>
+          {(profilesData?.rows as Array<Record<string, unknown>> | undefined)?.map((p) => (
+            <div key={String(p.id)} style={{ borderBottom: '1px solid var(--border)', padding: '8px 0' }}>
+              <strong>{String(p.name)}</strong> • <span className="tag">{String(p.mode)}</span>
+              <div className="muted">live-approved: {String(p.approved_for_live ? 'yes' : 'no')}</div>
+            </div>
+          ))}
+        </div>
+      </div>
     </section>
   );
 }
