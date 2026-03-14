@@ -156,10 +156,14 @@ function SymbolRow({ entry }: { entry: PipelineEntry }) {
 }
 
 export function PipelinePage() {
-  const { data: symbolsData } = useApi(() => api.isolatedSymbols());
+  const { data: byQuote }  = useApi(() => api.symbolsByQuote());
   const { data: profiles } = useApi(() => api.strategyProfiles());
 
-  const [selected, setSelected] = useState<string[]>(['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT']);
+  const [quote, setQuote]   = useState('USDT');
+  const quotes              = Object.keys(byQuote ?? { USDT: [] });
+  const universe            = (byQuote ?? {})[quote] ?? [];
+
+  const [selected, setSelected] = useState<string[]>([]);
   const [timeframe, setTimeframe] = useState('1h');
   const [profileId, setProfileId] = useState<number | null>(null);
   const [state, setState] = useState<Record<string, PipelineEntry>>({});
@@ -167,8 +171,6 @@ export function PipelinePage() {
   const [running, setRunning] = useState(false);
   const [lastRun, setLastRun] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const availableSymbols = symbolsData ?? ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT'];
 
   const stopPolling = () => {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
@@ -255,18 +257,31 @@ export function PipelinePage() {
         </div>
 
         <div className="card">
-          <h3>Cryptos à analyser ({selected.length} sélectionnées)</h3>
+          <h3 style={{ marginBottom: 10 }}>Cryptos à analyser ({selected.length} sélectionnées)</h3>
+
+          {/* Quote tabs */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+            {quotes.map(q => (
+              <button key={q} onClick={() => setQuote(q)}
+                style={{
+                  padding: '3px 12px', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                  border: `1px solid ${quote === q ? 'var(--accent)' : 'var(--border)'}`,
+                  background: quote === q ? 'rgba(88,166,255,0.15)' : 'var(--surface2)',
+                  color: quote === q ? 'var(--accent)' : 'var(--text-muted)',
+                }}>{q}</button>
+            ))}
+          </div>
+
+          {/* Symbol grid */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 120, overflowY: 'auto' }}>
-            {availableSymbols.map(sym => {
+            {universe.map(sym => {
               const isOn = selected.includes(sym);
               const entry = state[sym];
               const dot = entry?.final_status === 'accepted' ? '🟢'
                 : entry?.final_status === 'rejected' ? '🔴'
                 : entry ? '🟡' : null;
               return (
-                <button
-                  key={sym}
-                  onClick={() => toggleSymbol(sym)}
+                <button key={sym} onClick={() => toggleSymbol(sym)}
                   style={{
                     padding: '4px 10px', borderRadius: 6, fontSize: 12, fontWeight: 600,
                     background: isOn ? 'rgba(88,166,255,0.15)' : 'var(--surface2)',
@@ -276,16 +291,27 @@ export function PipelinePage() {
                   }}
                 >
                   {dot && <span style={{ marginRight: 4 }}>{dot}</span>}
-                  {sym}
+                  {fmtSym(sym)}
                 </button>
               );
             })}
           </div>
+
           <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
             <button className="btn btn-secondary" style={{ fontSize: 11, padding: '3px 8px' }}
-              onClick={() => setSelected(availableSymbols)}>Tout sélect.</button>
+              onClick={() => setSelected(prev => [...new Set([...prev, ...universe])])}>
+              Tout sélect. ({quote})
+            </button>
             <button className="btn btn-secondary" style={{ fontSize: 11, padding: '3px 8px' }}
-              onClick={() => setSelected([])}>Tout désélect.</button>
+              onClick={() => setSelected(prev => prev.filter(s => !universe.includes(s)))}>
+              Tout désélect. ({quote})
+            </button>
+            {selected.length > 0 && (
+              <button className="btn btn-secondary" style={{ fontSize: 11, padding: '3px 8px' }}
+                onClick={() => setSelected([])}>
+                Effacer tout
+              </button>
+            )}
           </div>
         </div>
       </div>
