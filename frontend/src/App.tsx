@@ -11,12 +11,16 @@ import { RiskSettingsPage } from './pages/RiskSettingsPage';
 import { StrategySettingsPage } from './pages/StrategySettingsPage';
 import { SystemSettingsPage } from './pages/SystemSettingsPage';
 import { LogsPage } from './pages/LogsPage';
+import { BotControlPage } from './pages/BotControlPage';
+import { DataManagerPage } from './pages/DataManagerPage';
 
 export default function App() {
   const [page, setPage] = useState<AdminPage>('Dashboard');
   const render = () => {
     switch (page) {
       case 'Dashboard': return <DashboardPage />;
+      case 'Bot control': return <BotControlPage />;
+      case 'Data manager': return <DataManagerPage />;
       case 'Live trades': return <LiveTradesPage />;
       case 'Signals': return <SignalsPage />;
       case 'Positions': return <PositionsPage />;
@@ -30,7 +34,7 @@ export default function App() {
   };
   return (
     <>
-      <Sidebar onSelect={setPage} />
+      <Sidebar onSelect={setPage} selected={page} />
       <main>{render()}</main>
     </>
   );
