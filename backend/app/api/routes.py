@@ -799,6 +799,7 @@ def start_bot(req: StartBotRequest) -> dict:
                     utad=not spring,
                     displacement=True,
                     bos=True,
+                    expansion_to_next_liquidity=True,
                     fib_retracement=0.618,
                 )
             )
