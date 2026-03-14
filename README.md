@@ -36,3 +36,12 @@ uvicorn backend.app.main:app --reload
 ```bash
 pytest -q
 ```
+
+## Quick verification checklist
+
+Use these commands before pushing a branch:
+
+```bash
+python scripts/validate_scaffold.py
+pytest -q
+```
