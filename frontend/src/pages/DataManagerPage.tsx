@@ -23,11 +23,14 @@ function candleCount(tf: string, days: number) {
 }
 
 export function DataManagerPage({ onNavigate }: Props) {
-  const { data: allSymbols } = useApi(() => api.isolatedSymbols());
+  const { data: byQuote } = useApi(() => api.symbolsByQuote());
   const { data: stats, reload: refreshStats } = useApi(() => api.dataStats());
   const { data: candles, reload: refreshCandles } = useApi(() => api.candles('?limit=50'));
 
-  const symbols = allSymbols ?? [];
+  const [quote, setQuote] = useState<string>('USDT');
+  const quotes = Object.keys(byQuote ?? { USDT: [] });
+  const symbols = (byQuote ?? {})[quote] ?? [];
+
   const [selected, setSelected] = useState<Set<string>>(new Set(['ETHUSDT', 'BTCUSDT']));
   const [days, setDays] = useState(365);
   const [loading, setLoading] = useState<string | null>(null);
@@ -99,6 +102,19 @@ export function DataManagerPage({ onNavigate }: Props) {
       <div className="grid-2">
         <div className="card">
           <h3>1 — Sélectionner les cryptos</h3>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+            {quotes.map(q => (
+              <button key={q} onClick={() => { setQuote(q); setSelected(new Set()); }}
+                style={{
+                  padding: '4px 12px', borderRadius: 6, fontSize: 12, fontWeight: 700,
+                  border: `1px solid ${quote === q ? 'var(--accent)' : 'var(--border)'}`,
+                  background: quote === q ? 'rgba(88,166,255,0.15)' : 'var(--surface2)',
+                  color: quote === q ? 'var(--accent)' : 'var(--text-muted)',
+                  cursor: 'pointer',
+                }}
+              >{q}</button>
+            ))}
+          </div>
           <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
             <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => setSelected(new Set(symbols))}>Tout</button>
             <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => setSelected(new Set())}>Aucun</button>

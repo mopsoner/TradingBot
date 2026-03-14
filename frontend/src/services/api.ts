@@ -75,6 +75,7 @@ export const api = {
   logs:       (params = '')                   => get<{ total: number; rows: Log[] }>(`/api/logs${params}`),
   symbols:    ()                              => get<string[]>('/api/symbols'),
   isolatedSymbols: ()                         => get<string[]>('/api/symbols/isolated'),
+  symbolsByQuote:  ()                          => get<Record<string, string[]>>('/api/symbols/by-quote'),
   config:     ()                              => get<Record<string, unknown>>('/api/config'),
   updateConfig:(body: Record<string, unknown>)=> put<Record<string, unknown>>('/api/config', body),
   marginEndpoints: ()                         => get<Record<string, unknown>>('/api/execution/endpoints'),

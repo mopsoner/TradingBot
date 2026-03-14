@@ -226,6 +226,10 @@ def symbols() -> list[str]:
 def isolated_symbols() -> list[str]:
     return market_data.load_symbols()
 
+@router.get("/symbols/by-quote")
+def symbols_by_quote() -> dict[str, list[str]]:
+    return market_data.load_symbols_by_quote()
+
 
 @router.get("/config")
 def get_config() -> dict:

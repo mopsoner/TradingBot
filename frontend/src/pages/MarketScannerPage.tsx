@@ -54,14 +54,21 @@ function MarketClocks() {
 }
 
 export function MarketScannerPage() {
-  const { data: symbols } = useApi(() => api.symbols());
+  const { data: byQuote } = useApi(() => api.symbolsByQuote());
+  const [quote, setQuote] = useState<string>('USDT');
   const [selectedSymbols, setSelectedSymbols] = useState<string[]>(['ETHUSDT', 'BTCUSDT']);
   const [fib, setFib] = useState(0.618);
   const [singleResult, setSingleResult] = useState<Record<string, unknown> | null>(null);
   const [batchResult, setBatchResult] = useState<Record<string, unknown> | null>(null);
   const [scanning, setScanning] = useState(false);
 
-  const symbolUniverse = symbols ?? ['ETHUSDT', 'BTCUSDT'];
+  const quotes = Object.keys(byQuote ?? { USDT: [] });
+  const symbolUniverse = (byQuote ?? {})[quote] ?? ['ETHUSDT', 'BTCUSDT'];
+
+  const switchQuote = (q: string) => {
+    setQuote(q);
+    setSelectedSymbols([]);
+  };
 
   const runSingle = async () => {
     setScanning(true);
@@ -82,19 +89,63 @@ export function MarketScannerPage() {
       <div className="grid-2">
         <div className="card">
           <h3>Scanner configuration</h3>
-          <div className="form-group">
-            <label>Symbols (multi-select)</label>
-            <select multiple value={selectedSymbols} onChange={e => setSelectedSymbols(Array.from(e.target.selectedOptions).map(o => o.value))} style={{ minHeight: 140 }}>
-              {symbolUniverse.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
+
+          <div style={{ marginBottom: 12 }}>
+            <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>Quote asset</div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {quotes.map(q => (
+                <button
+                  key={q}
+                  onClick={() => switchQuote(q)}
+                  style={{
+                    padding: '5px 14px', borderRadius: 6, fontSize: 12, fontWeight: 700,
+                    border: `1px solid ${quote === q ? 'var(--accent)' : 'var(--border)'}`,
+                    background: quote === q ? 'rgba(88,166,255,0.15)' : 'var(--surface2)',
+                    color: quote === q ? 'var(--accent)' : 'var(--text-muted)',
+                    cursor: 'pointer',
+                  }}
+                >{q}</button>
+              ))}
+            </div>
           </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+              <span className="muted" style={{ fontSize: 11 }}>
+                Symboles disponibles ({symbolUniverse.length}) — {selectedSymbols.length} sélectionné(s)
+              </span>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: 11 }} onClick={() => setSelectedSymbols([...symbolUniverse])}>Tout</button>
+                <button className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: 11 }} onClick={() => setSelectedSymbols([])}>Aucun</button>
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 5, maxHeight: 180, overflowY: 'auto' }}>
+              {symbolUniverse.map(s => {
+                const base = s.replace(/USDT$|USDC$|BTC$/, '');
+                const sel = selectedSymbols.includes(s);
+                return (
+                  <label key={s} style={{
+                    display: 'flex', alignItems: 'center', gap: 5, padding: '4px 8px',
+                    borderRadius: 5, cursor: 'pointer', fontSize: 11, userSelect: 'none',
+                    background: sel ? 'rgba(88,166,255,0.12)' : 'transparent',
+                    border: `1px solid ${sel ? 'var(--accent)' : 'var(--border)'}`,
+                  }}>
+                    <input type="checkbox" checked={sel} style={{ width: 'auto', margin: 0 }}
+                      onChange={() => setSelectedSymbols(prev => sel ? prev.filter(x => x !== s) : [...prev, s])} />
+                    {base}
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
           <div className="form-group">
             <label>Fib retracement</label>
             <select value={fib} onChange={e => setFib(parseFloat(e.target.value))}>{FIB_LEVELS.map(f => <option key={f} value={f}>{f}</option>)}</select>
           </div>
           <div className="row">
-            <button className="btn btn-secondary" disabled={scanning || selectedSymbols.length === 0} onClick={runSingle}>Scan selected</button>
-            <button className="btn btn-primary" disabled={scanning || selectedSymbols.length === 0} onClick={runBatch}>Scan full basket</button>
+            <button className="btn btn-secondary" disabled={scanning || selectedSymbols.length === 0} onClick={runSingle}>Scan sélection</button>
+            <button className="btn btn-primary" disabled={scanning || selectedSymbols.length === 0} onClick={runBatch}>Scan panier complet</button>
           </div>
         </div>
 
