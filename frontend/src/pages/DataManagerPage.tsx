@@ -7,6 +7,21 @@ import { fmtDateTime } from '../utils/dateUtils';
 
 type Props = { onNavigate?: (page: AdminPage) => void };
 
+const PERIODS = [
+  { label: '1 mois',  days: 30   },
+  { label: '3 mois',  days: 90   },
+  { label: '6 mois',  days: 180  },
+  { label: '1 an',    days: 365  },
+  { label: '2 ans',   days: 730  },
+  { label: '4 ans',   days: 1460 },
+] as const;
+
+const CANDLES_PER_DAY: Record<string, number> = { '5m': 288, '15m': 96, '1h': 24, '4h': 6 };
+
+function candleCount(tf: string, days: number) {
+  return (CANDLES_PER_DAY[tf] ?? 24) * days;
+}
+
 export function DataManagerPage({ onNavigate }: Props) {
   const { data: allSymbols } = useApi(() => api.isolatedSymbols());
   const { data: stats, reload: refreshStats } = useApi(() => api.dataStats());
@@ -14,6 +29,7 @@ export function DataManagerPage({ onNavigate }: Props) {
 
   const symbols = allSymbols ?? [];
   const [selected, setSelected] = useState<Set<string>>(new Set(['ETHUSDT', 'BTCUSDT']));
+  const [days, setDays] = useState(365);
   const [loading, setLoading] = useState<string | null>(null);
   const [results, setResults] = useState<Record<string, { tf: string; rows: number }[]>>({});
 
@@ -25,15 +41,12 @@ export function DataManagerPage({ onNavigate }: Props) {
     });
   };
 
-  const selectAll = () => setSelected(new Set(symbols));
-  const clearAll  = () => setSelected(new Set());
-
   const enrich = async (tf: string) => {
     if (selected.size === 0) return;
     setLoading(tf);
     const syms = Array.from(selected);
     try {
-      const res = await api.enrich({ symbols: syms, timeframe: tf });
+      const res = await api.enrich({ symbols: syms, timeframe: tf, days });
       const added = Number(res.rows_added ?? 0);
       setResults(prev => ({
         ...prev,
@@ -53,6 +66,7 @@ export function DataManagerPage({ onNavigate }: Props) {
 
   const totalCandles = Number(stats?.total_candles ?? 0);
   const trackedCount = (stats?.tracked_symbols as string[] | undefined)?.length ?? 0;
+  const selectedPeriod = PERIODS.find(p => p.days === days) ?? PERIODS[3];
 
   return (
     <section>
@@ -86,13 +100,13 @@ export function DataManagerPage({ onNavigate }: Props) {
         <div className="card">
           <h3>1 — Sélectionner les cryptos</h3>
           <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-            <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={selectAll}>Tout</button>
-            <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={clearAll}>Aucun</button>
+            <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => setSelected(new Set(symbols))}>Tout</button>
+            <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => setSelected(new Set())}>Aucun</button>
             <span className="muted" style={{ lineHeight: '28px', fontSize: 12 }}>{selected.size} sélectionné(s)</span>
           </div>
           <div style={{
             display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)',
-            gap: 6, maxHeight: 260, overflowY: 'auto',
+            gap: 6, maxHeight: 220, overflowY: 'auto',
           }}>
             {symbols.map(sym => (
               <label
@@ -123,31 +137,56 @@ export function DataManagerPage({ onNavigate }: Props) {
             ))}
           </div>
 
-          <h3 style={{ marginTop: 20 }}>2 — Charger les bougies</h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {TIMEFRAMES.map(tf => (
-              <div
-                key={tf.value}
+          <h3 style={{ marginTop: 20 }}>2 — Période de chargement</h3>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 16 }}>
+            {PERIODS.map(p => (
+              <button
+                key={p.days}
+                onClick={() => setDays(p.days)}
                 style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  padding: '10px 14px', borderRadius: 8,
-                  background: 'var(--surface2)', border: '1px solid var(--border)',
+                  padding: '6px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+                  border: `1px solid ${days === p.days ? 'var(--accent)' : 'var(--border)'}`,
+                  background: days === p.days ? 'rgba(88,166,255,0.15)' : 'var(--surface2)',
+                  color: days === p.days ? 'var(--accent)' : 'var(--text-muted)',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s',
                 }}
               >
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: 13 }}>{tf.label}</div>
-                  <div className="muted" style={{ fontSize: 11 }}>~{tf.candles.toLocaleString()} bougies · {tf.desc}</div>
-                </div>
-                <button
-                  className="btn btn-primary"
-                  style={{ minWidth: 120 }}
-                  disabled={loading === tf.value || selected.size === 0}
-                  onClick={() => enrich(tf.value)}
-                >
-                  {loading === tf.value ? 'Chargement…' : `Charger ${tf.label}`}
-                </button>
-              </div>
+                {p.label}
+              </button>
             ))}
+          </div>
+
+          <h3>3 — Charger les bougies</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {TIMEFRAMES.map(tf => {
+              const n = candleCount(tf.value, days);
+              return (
+                <div
+                  key={tf.value}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '10px 14px', borderRadius: 8,
+                    background: 'var(--surface2)', border: '1px solid var(--border)',
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 13 }}>{tf.label}</div>
+                    <div className="muted" style={{ fontSize: 11 }}>
+                      ~{n.toLocaleString()} bougies · {selectedPeriod.label}
+                    </div>
+                  </div>
+                  <button
+                    className="btn btn-primary"
+                    style={{ minWidth: 130 }}
+                    disabled={loading === tf.value || selected.size === 0}
+                    onClick={() => enrich(tf.value)}
+                  >
+                    {loading === tf.value ? 'Chargement…' : `Charger ${tf.label}`}
+                  </button>
+                </div>
+              );
+            })}
           </div>
 
           {Object.keys(results).length > 0 && (
@@ -155,7 +194,7 @@ export function DataManagerPage({ onNavigate }: Props) {
               <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6, color: 'var(--accent-green)' }}>✅ Données chargées</div>
               {Object.entries(results).map(([sym, tfs]) => (
                 <div key={sym} style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.8 }}>
-                  <strong>{sym}</strong>: {tfs.map(t => `${t.tf} (${t.rows} bougies)`).join(', ')}
+                  <strong>{sym}</strong>: {tfs.map(t => `${t.tf} (${t.rows.toLocaleString()} bougies)`).join(', ')}
                 </div>
               ))}
             </div>
@@ -164,7 +203,7 @@ export function DataManagerPage({ onNavigate }: Props) {
 
         <div className="card">
           <h3>Bougies récentes</h3>
-          <div style={{ maxHeight: 460, overflowY: 'auto' }}>
+          <div style={{ maxHeight: 520, overflowY: 'auto' }}>
             <table>
               <thead>
                 <tr>

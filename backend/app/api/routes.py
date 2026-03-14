@@ -891,6 +891,7 @@ TF_SECONDS: dict[str, int] = {"5m": 5 * 60, "15m": 15 * 60, "1h": 3600, "4h": 4 
 class EnrichRequest(BaseModel):
     symbols: list[str] = Field(min_length=1)
     timeframe: str = "1h"
+    days: int | None = Field(default=None, ge=1, le=1460)
 
 
 @router.post("/data/enrich")
@@ -898,7 +899,11 @@ def enrich_data(req: EnrichRequest) -> dict:
     import random
     tf = req.timeframe if req.timeframe in TF_SECONDS else "1h"
     interval_seconds = TF_SECONDS[tf]
-    n_candles = {"5m": config.data.candles_5m, "15m": config.data.candles_15m, "1h": config.data.candles_1h, "4h": config.data.candles_4h}.get(tf, config.data.candles_1h)
+    candles_per_day = {"5m": 288, "15m": 96, "1h": 24, "4h": 6}
+    if req.days:
+        n_candles = req.days * candles_per_day.get(tf, 24)
+    else:
+        n_candles = {"5m": config.data.candles_5m, "15m": config.data.candles_15m, "1h": config.data.candles_1h, "4h": config.data.candles_4h}.get(tf, config.data.candles_1h)
     now = datetime.now(timezone.utc)
     rows_added = 0
 

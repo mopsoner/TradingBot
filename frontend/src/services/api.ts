@@ -97,7 +97,7 @@ export const api = {
   candles:    (params = '')                   => get<{ total: number; rows: Record<string, unknown>[] }>(`/api/data/candles${params}`),
   ingestData: (body: Record<string, unknown>[]) => post<Record<string, unknown>>('/api/data/ingest', body),
   enrichDaily:(symbols: string[])             => post<Record<string, unknown>>('/api/data/enrich/daily', symbols),
-  enrich:     (body: { symbols: string[]; timeframe: string }) => post<Record<string, unknown>>('/api/data/enrich', body),
+  enrich:     (body: { symbols: string[]; timeframe: string; days?: number }) => post<Record<string, unknown>>('/api/data/enrich', body),
   services:   () => get<{ services: ServiceStatus[]; refreshed_at: string; mode: string }>('/api/services'),
   optimizeBacktest: (id: number) => post<Record<string, unknown>>(`/api/backtest/${id}/optimize`, {}),
   multiOptimize: (backtest_ids: number[]) => post<Record<string, unknown>>('/api/backtest/multi-optimize', { backtest_ids }),
