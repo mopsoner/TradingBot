@@ -3,6 +3,7 @@ import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
 import type { BacktestResult } from '../services/api';
 import { useSortable } from '../hooks/useSortable';
+import { fmtSym } from '../utils/dateUtils';
 
 function pct(n: number) { return (n * 100).toFixed(1) + '%'; }
 function num(n: number, d = 2) { return n.toFixed(d); }
@@ -147,7 +148,7 @@ function SingleAnalyzePanel({ rows }: { rows: BacktestResult[] }) {
                   onClick={() => analyze(r)}
                 >
                   <td className="muted">{r.id}</td>
-                  <td><strong style={{ fontSize: 12 }}>{r.symbol.replace('USDT', '')}</strong></td>
+                  <td><strong style={{ fontSize: 12 }}>{fmtSym(r.symbol)}</strong></td>
                   <td><span className="tag">{r.timeframe}</span></td>
                   <td className={r.win_rate >= 0.5 ? 'green' : 'red'}>{pct(r.win_rate)}</td>
                   <td className={r.profit_factor >= 1.2 ? 'green' : 'yellow'}>{num(r.profit_factor)}</td>
@@ -205,7 +206,7 @@ function SingleAnalyzePanel({ rows }: { rows: BacktestResult[] }) {
               </div>
               <div>
                 <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>
-                  #{selected.id} · {selected.symbol.replace('USDT', '')} {selected.timeframe}
+                  #{selected.id} · {fmtSym(selected.symbol)} {selected.timeframe}
                   {profileSrcName && <span className="tag" style={{ marginLeft: 8 }}>{profileSrcName}</span>}
                 </div>
                 <div style={{ fontSize: 13, fontStyle: 'italic', color: 'var(--text-muted)' }}>"{analysis.verdict}"</div>
@@ -372,7 +373,7 @@ function WorkshopPanel({ profiles }: { profiles: Array<Record<string, unknown>> 
                     color: on ? 'var(--accent)' : 'var(--text-muted)',
                     transition: 'all 0.15s',
                   }}>
-                  {s.replace('USDT', '')}
+                  {fmtSym(s)}
                 </button>
               );
             })}
@@ -436,7 +437,7 @@ function WorkshopPanel({ profiles }: { profiles: Array<Record<string, unknown>> 
                 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
                     <div>
-                      <strong style={{ fontSize: 15 }}>{r.symbol.replace('USDT', '')}</strong>
+                      <strong style={{ fontSize: 15 }}>{fmtSym(r.symbol)}</strong>
                       {r.profile_name && <div className="muted" style={{ fontSize: 10, marginTop: 1 }}>{r.profile_name}</div>}
                     </div>
                     <div style={{

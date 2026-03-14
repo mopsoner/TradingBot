@@ -3,7 +3,7 @@ import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
 import type { PipelineEntry, PipelineStep } from '../services/api';
 import { TIMEFRAMES } from '../constants';
-import { nowTime } from '../utils/dateUtils';
+import { nowTime, fmtSym } from '../utils/dateUtils';
 
 const STEP_LABELS_SHORT = ['LIQ', 'SWEEP', 'WYK', 'DISP', 'BOS', 'EXP', 'FIB'];
 const STEP_FULL = [
@@ -78,7 +78,7 @@ function StepDot({ step, index }: { step: PipelineStep; index: number }) {
 }
 
 function SymbolRow({ entry }: { entry: PipelineEntry }) {
-  const sym = entry.symbol.replace('USDT', '');
+  const sym = fmtSym(entry.symbol);
   const isRunning = entry.final_status === null;
   const isAccepted = entry.final_status === 'accepted';
   const isRejected = entry.final_status === 'rejected';
@@ -276,7 +276,7 @@ export function PipelinePage() {
                   }}
                 >
                   {dot && <span style={{ marginRight: 4 }}>{dot}</span>}
-                  {sym.replace('USDT', '')}
+                  {sym}
                 </button>
               );
             })}
@@ -325,7 +325,7 @@ export function PipelinePage() {
                 padding: '8px 14px', borderRadius: 8,
                 background: 'rgba(63,185,80,0.12)', border: '1px solid rgba(63,185,80,0.4)',
               }}>
-                <strong>{e.symbol.replace('USDT', '')}</strong>
+                <strong>{fmtSym(e.symbol)}</strong>
                 <span style={{ marginLeft: 8, color: 'var(--accent-green)', fontWeight: 700 }}>{e.final_direction}</span>
               </div>
             ))}

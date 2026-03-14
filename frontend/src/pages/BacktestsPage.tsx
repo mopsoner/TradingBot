@@ -3,6 +3,7 @@ import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
 import type { BacktestResult } from '../services/api';
 import { TIMEFRAMES } from '../constants';
+import { fmtSym } from '../utils/dateUtils';
 import { Tooltip } from '../components/Tooltip';
 import { useSortable } from '../hooks/useSortable';
 
@@ -363,7 +364,7 @@ function MultiOptimizePanel({
             padding: '6px 12px', borderRadius: 6, fontSize: 12,
             background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.3)',
           }}>
-            <strong>#{r.id}</strong> {r.symbol.replace('USDT', '')} {r.timeframe}
+            <strong>#{r.id}</strong> {fmtSym(r.symbol)} {r.timeframe}
             <span style={{ marginLeft: 6, color: r.win_rate >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
               WR {pct(r.win_rate)}
             </span>
@@ -688,7 +689,7 @@ function AiWorkshopPanel({
                     transition: 'all 0.15s',
                   }}
                 >
-                  {s.replace('USDT', '')}
+                  {fmtSym(s)}
                 </button>
               ))}
             </div>
@@ -747,7 +748,7 @@ function AiWorkshopPanel({
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 13 }}>
             <span>
               {job.current
-                ? <>Analyse en cours : <strong style={{ color: '#c4b5fd' }}>{job.current.replace('USDT', '')}</strong></>
+                ? <>Analyse en cours : <strong style={{ color: '#c4b5fd' }}>{fmtSym(job.current)}</strong></>
                 : 'Initialisation…'
               }
             </span>
@@ -790,7 +791,7 @@ function AiWorkshopPanel({
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 700, fontSize: 14 }}>
-                      {r.symbol.replace('USDT', '')}
+                      {fmtSym(r.symbol)}
                       {r.profile && <span className="tag" style={{ marginLeft: 8, fontSize: 10, background: 'rgba(139,92,246,0.2)', color: '#c4b5fd' }}>{r.profile.name}</span>}
                     </div>
                     {r.status === 'running' && <div className="muted" style={{ fontSize: 12 }}>Backtest + analyse IA en cours…</div>}
@@ -1122,7 +1123,7 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
                     const tfs = Object.keys(e.timeframes).sort().join(', ');
                     return (
                       <option key={e.symbol} value={e.symbol}>
-                        {e.symbol.replace(/USDT$|USDC$|BTC$/, '')} — {totalCandles.toLocaleString()} bougies ({tfs})
+                        {fmtSym(e.symbol)} — {totalCandles.toLocaleString()} bougies ({tfs})
                       </option>
                     );
                   })}
@@ -1317,7 +1318,7 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
                           />
                         </td>
                         <td className="muted">{r.id}</td>
-                        <td><strong style={{ fontSize: 12 }}>{r.symbol.replace('USDT', '')}</strong></td>
+                        <td><strong style={{ fontSize: 12 }}>{fmtSym(r.symbol)}</strong></td>
                         <td><span className="tag">{r.timeframe}</span></td>
                         <td className={r.win_rate >= 0.5 ? 'green' : 'red'}>{pct(r.win_rate)}</td>
                         <td className={r.profit_factor >= 1.2 ? 'green' : 'yellow'}>{num(r.profit_factor)}</td>

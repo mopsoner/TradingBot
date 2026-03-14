@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
 import type { Signal } from '../services/api';
-import { fmtDateTime } from '../utils/dateUtils';
+import { fmtDateTime, fmtSym } from '../utils/dateUtils';
 
 type FilterMode = 'all' | 'accepted' | 'rejected';
 
@@ -53,7 +53,7 @@ function JournalRow({ row }: { row: Signal }) {
         </div>
 
         <div style={{ minWidth: 80 }}>
-          <div style={{ fontWeight: 700, fontSize: 14 }}>{row.symbol.replace('USDT', '')}</div>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>{fmtSym(row.symbol)}</div>
           <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{row.timeframe}</div>
         </div>
 

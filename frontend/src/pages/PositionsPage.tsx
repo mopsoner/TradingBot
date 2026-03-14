@@ -1,6 +1,7 @@
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
 import type { MarginAsset } from '../services/api';
+import { fmtSym } from '../utils/dateUtils';
 
 function rateLevel(rate: number): { label: string; color: string; bg: string; blink: boolean } {
   if (rate < 1.06) return { label: 'LIQUIDATION', color: '#ff1744', bg: 'rgba(255,23,68,0.18)', blink: true };
@@ -72,7 +73,7 @@ function PositionCard({ asset }: { asset: MarginAsset }) {
     <div className="card" style={{ padding: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
         <div>
-          <strong style={{ fontSize: 16 }}>{asset.symbol.replace('USDT', '')}</strong>
+          <strong style={{ fontSize: 16 }}>{fmtSym(asset.symbol)}</strong>
           <span className="tag" style={{ marginLeft: 8, fontSize: 10 }}>{asset.side}</span>
           {statusBadge(asset.marginLevelStatus)}
         </div>

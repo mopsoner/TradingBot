@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
+import { fmtSym } from '../utils/dateUtils';
 
 type Cfg = Record<string, unknown>;
 
@@ -320,7 +321,7 @@ export function SystemSettingsPage() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8 }}>
             {Object.entries(symPrices).map(([sym, price]) => (
               <div key={sym} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px', background: 'var(--surface2)', borderRadius: 6 }}>
-                <span style={{ fontSize: 12, fontWeight: 600, minWidth: 80 }}>{sym.replace('USDT', '')}</span>
+                <span style={{ fontSize: 12, fontWeight: 600, minWidth: 80 }}>{fmtSym(sym)}</span>
                 <input
                   type="number"
                   value={price}
