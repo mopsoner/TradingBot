@@ -920,12 +920,15 @@ function AiWorkshopPanel({
   );
 }
 
-export function BacktestsPage() {
+export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../types').AdminPage) => void }) {
   const { data, reload } = useApi(() => api.backtests());
   const { data: profiles, reload: reloadProfiles } = useApi(() => api.strategyProfiles());
-  const { data: symbols } = useApi(() => api.isolatedSymbols());
+  const { data: loadedData } = useApi(() => api.loadedSymbols());
 
-  const [symbol, setSymbol]       = useState('ETHUSDT');
+  const loadedEntries = loadedData ?? [];
+  const hasData = loadedEntries.length > 0;
+
+  const [symbol, setSymbol]       = useState('');
   const [timeframe, setTimeframe] = useState('1h');
   const [profileId, setProfileId] = useState<number | null>(null);
   const [report, setReport]       = useState<Record<string, unknown> | null>(null);
@@ -938,6 +941,28 @@ export function BacktestsPage() {
   const [showMultiOptimize, setShowMultiOptimize] = useState(false);
   const [showWorkshop, setShowWorkshop] = useState(false);
 
+  // ── Derived from DB-loaded candle data ────────────────────────────────────
+  const availableSymbols = useMemo(() => loadedEntries.map(e => e.symbol), [loadedEntries]);
+
+  const availableTimeframes = useMemo(() => {
+    const entry = loadedEntries.find(e => e.symbol === symbol);
+    return entry ? Object.keys(entry.timeframes).sort() : ['1h'];
+  }, [loadedEntries, symbol]);
+
+  // Auto-select first symbol when data arrives
+  useEffect(() => {
+    if (!symbol && loadedEntries.length > 0) {
+      setSymbol(loadedEntries[0].symbol);
+    }
+  }, [loadedEntries, symbol]);
+
+  // Auto-adjust timeframe if current one isn't available for selected symbol
+  useEffect(() => {
+    if (availableTimeframes.length > 0 && !availableTimeframes.includes(timeframe)) {
+      setTimeframe(availableTimeframes[0]);
+    }
+  }, [availableTimeframes, timeframe]);
+
   // ── History filters (client-side) ─────────────────────────────────────────
   const [filterSymbol, setFilterSymbol] = useState('');
   const [filterTF,     setFilterTF]     = useState('');
@@ -945,7 +970,6 @@ export function BacktestsPage() {
   const [filterMinWR,  setFilterMinWR]  = useState('');
 
   const rows = useMemo(() => data?.rows ?? [], [data]);
-  const availableSymbols = useMemo(() => symbols ?? ['ETHUSDT', 'BTCUSDT'], [symbols]);
 
   const filteredRows = useMemo(() => rows.filter(r => {
     if (filterSymbol && r.symbol !== filterSymbol) return false;
@@ -1064,24 +1088,68 @@ export function BacktestsPage() {
       <div className="grid-2">
         <div className="card">
           <h3>Lancer un backtest</h3>
-          <div className="form-group">
-            <label>Crypto</label>
-            <select value={symbol} onChange={e => setSymbol(e.target.value)}>
-              {availableSymbols.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </div>
-          <div className="form-group">
-            <label>
-              <Tooltip text="Le timeframe est l'unité de temps de chaque bougie. 15m = chaque bougie = 15 minutes de données. Plus le TF est court, plus il y a de trades mais plus de bruit. 4h = peu de trades mais plus fiables.">
-                Timeframe
-              </Tooltip>
-            </label>
-            <select value={timeframe} onChange={e => setTimeframe(e.target.value)}>
-              {TIMEFRAMES.map(tf => (
-                <option key={tf.value} value={tf.value}>{tf.label} — {tf.desc}</option>
-              ))}
-            </select>
-          </div>
+
+          {!hasData && loadedData !== undefined && (
+            <div style={{
+              background: 'rgba(255,165,0,0.10)', border: '1px solid rgba(255,165,0,0.4)',
+              borderRadius: 8, padding: '14px 16px', marginBottom: 16,
+            }}>
+              <div style={{ fontWeight: 700, color: 'var(--accent-yellow)', marginBottom: 6 }}>
+                Aucune donnée chargée en base
+              </div>
+              <div className="muted" style={{ fontSize: 13, marginBottom: 12 }}>
+                Charge d'abord des bougies pour au moins une crypto avant de lancer un backtest.
+              </div>
+              {onNavigate && (
+                <button
+                  className="btn btn-primary"
+                  style={{ fontSize: 12 }}
+                  onClick={() => onNavigate('Données de marché')}
+                >
+                  Aller charger des données →
+                </button>
+              )}
+            </div>
+          )}
+
+          {hasData && (
+            <>
+              <div className="form-group">
+                <label>Crypto ({availableSymbols.length} disponibles en base)</label>
+                <select value={symbol} onChange={e => setSymbol(e.target.value)}>
+                  {loadedEntries.map(e => {
+                    const totalCandles = e.total;
+                    const tfs = Object.keys(e.timeframes).sort().join(', ');
+                    return (
+                      <option key={e.symbol} value={e.symbol}>
+                        {e.symbol.replace(/USDT$|USDC$|BTC$/, '')} — {totalCandles.toLocaleString()} bougies ({tfs})
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+              <div className="form-group">
+                <label>
+                  <Tooltip text="Seuls les timeframes pour lesquels des données sont chargées sont affichés.">
+                    Timeframe
+                  </Tooltip>
+                </label>
+                <select value={timeframe} onChange={e => setTimeframe(e.target.value)}>
+                  {availableTimeframes.map(tf => {
+                    const entry = loadedEntries.find(e => e.symbol === symbol);
+                    const count = entry?.timeframes[tf] ?? 0;
+                    return (
+                      <option key={tf} value={tf}>{tf} — {count.toLocaleString()} bougies</option>
+                    );
+                  })}
+                </select>
+              </div>
+            </>
+          )}
+
+          {!hasData && loadedData === undefined && (
+            <div className="muted" style={{ fontSize: 13, marginBottom: 12 }}>Chargement…</div>
+          )}
           <div className="form-group">
             <label>
               <Tooltip text="Le profil stratégie contient tous les paramètres de votre système (Spring, UTAD, BOS, Fib, RSI, Volume). Créez des profils dans la page Stratégie.">

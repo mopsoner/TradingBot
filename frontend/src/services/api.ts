@@ -77,6 +77,7 @@ export const api = {
   isolatedSymbols: ()                         => get<string[]>('/api/symbols/isolated'),
   symbolsByQuote:  ()                          => get<Record<string, string[]>>('/api/symbols/by-quote'),
   symbolPrices:    ()                          => get<Record<string, number>>('/api/symbols/prices'),
+  loadedSymbols:   ()                          => get<{ symbol: string; timeframes: Record<string, number>; total: number }[]>('/api/symbols/loaded'),
   config:     ()                              => get<Record<string, unknown>>('/api/config'),
   updateConfig:(body: Record<string, unknown>)=> put<Record<string, unknown>>('/api/config', body),
   marginEndpoints: ()                         => get<Record<string, unknown>>('/api/execution/endpoints'),

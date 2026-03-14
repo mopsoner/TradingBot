@@ -231,6 +231,24 @@ def symbols_by_quote() -> dict[str, list[str]]:
     return market_data.load_symbols_by_quote()
 
 
+@router.get("/symbols/loaded")
+def symbols_loaded() -> list[dict]:
+    """Return distinct symbols that have candle data in the database, with counts per timeframe."""
+    with Session(engine) as s:
+        rows = s.exec(
+            select(MarketCandle.symbol, MarketCandle.timeframe, func.count(MarketCandle.id).label("count"))
+            .group_by(MarketCandle.symbol, MarketCandle.timeframe)
+            .order_by(MarketCandle.symbol, MarketCandle.timeframe)
+        ).all()
+    result: dict[str, dict] = {}
+    for symbol, timeframe, count in rows:
+        if symbol not in result:
+            result[symbol] = {"symbol": symbol, "timeframes": {}, "total": 0}
+        result[symbol]["timeframes"][timeframe] = count
+        result[symbol]["total"] += count
+    return list(result.values())
+
+
 @router.get("/symbols/prices")
 def symbols_prices() -> dict[str, float]:
     """Fetch real-time prices from Binance public ticker API."""
