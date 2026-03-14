@@ -231,6 +231,26 @@ def symbols_by_quote() -> dict[str, list[str]]:
     return market_data.load_symbols_by_quote()
 
 
+@router.get("/symbols/prices")
+def symbols_prices() -> dict[str, float]:
+    """Fetch real-time prices from Binance public ticker API."""
+    import httpx
+    try:
+        resp = httpx.get("https://api.binance.com/api/v3/ticker/price", timeout=6)
+        resp.raise_for_status()
+        tickers = resp.json()
+        all_symbols: set[str] = set()
+        for syms in market_data.load_symbols_by_quote().values():
+            all_symbols.update(syms)
+        return {
+            t["symbol"]: float(t["price"])
+            for t in tickers
+            if t["symbol"] in all_symbols
+        }
+    except Exception:
+        return {}
+
+
 @router.get("/config")
 def get_config() -> dict:
     return config.model_dump()
@@ -941,7 +961,7 @@ def enrich_data(req: EnrichRequest) -> dict:
 @router.post("/data/enrich/daily")
 def daily_enrichment(symbols: list[str]) -> dict:
     if not symbols:
-        symbols = ["ETHUSDT", "BTCUSDT"]
+        symbols = market_data.load_symbols()[:5]
 
     now = datetime.now(timezone.utc)
     rows_added = 0

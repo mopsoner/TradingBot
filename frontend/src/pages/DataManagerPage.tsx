@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
 import type { AdminPage } from '../types';
-import { TIMEFRAMES, SYMBOL_PRICES } from '../constants';
+import { TIMEFRAMES } from '../constants';
 import { fmtDateTime } from '../utils/dateUtils';
 
 type Props = { onNavigate?: (page: AdminPage) => void };
@@ -24,6 +24,7 @@ function candleCount(tf: string, days: number) {
 
 export function DataManagerPage({ onNavigate }: Props) {
   const { data: byQuote } = useApi(() => api.symbolsByQuote());
+  const { data: prices } = useApi(() => api.symbolPrices());
   const { data: stats, reload: refreshStats } = useApi(() => api.dataStats());
   const { data: candles, reload: refreshCandles } = useApi(() => api.candles('?limit=50'));
 
@@ -142,11 +143,13 @@ export function DataManagerPage({ onNavigate }: Props) {
                   style={{ width: 'auto', margin: 0 }}
                 />
                 {sym.replace(/USDT$|USDC$|BTC$/, '')}
-                {SYMBOL_PRICES[sym] && (
+                {prices?.[sym] && (
                   <span className="muted" style={{ fontSize: 10, marginLeft: 'auto' }}>
-                    ${SYMBOL_PRICES[sym] >= 1000
-                      ? (SYMBOL_PRICES[sym] / 1000).toFixed(0) + 'k'
-                      : SYMBOL_PRICES[sym]}
+                    ${prices[sym] >= 1000
+                      ? (prices[sym] / 1000).toFixed(0) + 'k'
+                      : prices[sym] < 1
+                        ? prices[sym].toFixed(4)
+                        : prices[sym].toFixed(2)}
                   </span>
                 )}
               </label>

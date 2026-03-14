@@ -41,7 +41,6 @@ type WorkshopStatus = {
   error?: string;
 };
 
-const SYMBOL_OPTIONS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'ADAUSDT', 'DOTUSDT', 'AVAXUSDT', 'LINKUSDT', 'MATICUSDT'];
 const TF_OPTIONS = ['15m', '1h', '4h'];
 
 // ── Single backtest analyze panel ─────────────────────────────────────────────
@@ -260,7 +259,11 @@ function SingleAnalyzePanel({ rows }: { rows: BacktestResult[] }) {
 
 // ── Multi-crypto workshop panel ───────────────────────────────────────────────
 function WorkshopPanel({ profiles }: { profiles: Array<Record<string, unknown>> }) {
-  const [symbols, setSymbols]   = useState<string[]>(['BTCUSDT', 'ETHUSDT', 'SOLUSDT']);
+  const { data: byQuote } = useApi(() => api.symbolsByQuote());
+  const [quote, setQuote]       = useState('USDT');
+  const quotes                  = Object.keys(byQuote ?? { USDT: [] });
+  const universe                = (byQuote ?? {})[quote] ?? [];
+  const [symbols, setSymbols]   = useState<string[]>([]);
   const [timeframe, setTf]      = useState('1h');
   const [days, setDays]         = useState(30);
   const [profileId, setProfileId] = useState<string>('');
@@ -343,11 +346,22 @@ function WorkshopPanel({ profiles }: { profiles: Array<Record<string, unknown>> 
         </div>
 
         <div style={{ marginBottom: 14 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text-muted)' }}>
-            Cryptos analysées ({symbols.length} sélectionnées)
+          <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+            {quotes.map(q => (
+              <button key={q} onClick={() => { setQuote(q); setSymbols([]); }}
+                style={{
+                  padding: '4px 12px', borderRadius: 6, fontSize: 12, fontWeight: 700,
+                  border: `1px solid ${quote === q ? 'var(--accent)' : 'var(--border)'}`,
+                  background: quote === q ? 'rgba(88,166,255,0.15)' : 'var(--surface2)',
+                  color: quote === q ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer',
+                }}>{q}</button>
+            ))}
           </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {SYMBOL_OPTIONS.map(s => {
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text-muted)' }}>
+            Cryptos analysées ({symbols.length} sélectionnées sur {universe.length})
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 160, overflowY: 'auto' }}>
+            {universe.map(s => {
               const on = symbols.includes(s);
               return (
                 <button key={s} onClick={() => toggleSymbol(s)}

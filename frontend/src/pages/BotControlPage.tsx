@@ -11,9 +11,12 @@ type StrategyProfile = {
 };
 
 export function BotControlPage() {
-  const { data: symbols } = useApi(() => api.symbols());
+  const { data: byQuote } = useApi(() => api.symbolsByQuote());
+  const [quote, setQuote] = useState('USDT');
+  const quoteTabs = Object.keys(byQuote ?? { USDT: [] });
+  const universe = (byQuote ?? {})[quote] ?? [];
   const { data: profiles, reload: refreshProfiles } = useApi(() => api.strategyProfiles());
-  const [selectedSymbols, setSelectedSymbols] = useState<string[]>(['ETHUSDT', 'BTCUSDT']);
+  const [selectedSymbols, setSelectedSymbols] = useState<string[]>([]);
   const [mode, setMode] = useState<'paper' | 'live' | 'research'>('paper');
   const [riskApproved, setRiskApproved] = useState(false);
   const [executeOrders, setExecuteOrders] = useState(false);
@@ -57,11 +60,39 @@ export function BotControlPage() {
       <div className="grid-2">
         <div className="card">
           <h3>Run temps réel (signal early)</h3>
-          <div className="form-group">
-            <label>Symbols</label>
-            <select multiple value={selectedSymbols} onChange={e => setSelectedSymbols(Array.from(e.target.selectedOptions).map(o => o.value))} style={{ minHeight: 110 }}>
-              {(symbols ?? ['ETHUSDT', 'BTCUSDT']).map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Quote asset</div>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+              {quoteTabs.map(q => (
+                <button key={q} onClick={() => { setQuote(q); setSelectedSymbols([]); }}
+                  style={{
+                    padding: '4px 12px', borderRadius: 6, fontSize: 12, fontWeight: 700,
+                    border: `1px solid ${quote === q ? 'var(--accent)' : 'var(--border)'}`,
+                    background: quote === q ? 'rgba(88,166,255,0.15)' : 'var(--surface2)',
+                    color: quote === q ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer',
+                  }}>{q}</button>
+              ))}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>
+              {selectedSymbols.length} sélectionné(s) sur {universe.length}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4, maxHeight: 160, overflowY: 'auto' }}>
+              {universe.map(s => {
+                const sel = selectedSymbols.includes(s);
+                return (
+                  <label key={s} style={{
+                    display: 'flex', alignItems: 'center', gap: 4, padding: '3px 6px',
+                    borderRadius: 5, cursor: 'pointer', fontSize: 11, userSelect: 'none',
+                    background: sel ? 'rgba(88,166,255,0.12)' : 'transparent',
+                    border: `1px solid ${sel ? 'var(--accent)' : 'var(--border)'}`,
+                  }}>
+                    <input type="checkbox" checked={sel} style={{ width: 'auto', margin: 0 }}
+                      onChange={() => setSelectedSymbols(prev => sel ? prev.filter(x => x !== s) : [...prev, s])} />
+                    {s.replace(/USDT$|USDC$|BTC$/, '')}
+                  </label>
+                );
+              })}
+            </div>
           </div>
           <div className="form-group">
             <label>Strategy profile</label>

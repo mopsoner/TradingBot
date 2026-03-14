@@ -12,6 +12,7 @@ export function LiveTradesPage() {
   const params = statusFilter !== 'All' ? `?status=${statusFilter}` : '';
   const { data, loading, error, reload } = useApi(() => api.trades(params), [statusFilter]);
   const { data: profiles } = useApi(() => api.strategyProfiles());
+  const { data: byQuote } = useApi(() => api.symbolsByQuote());
   const [profileId, setProfileId] = useState<number | null>(null);
   const [runStatus, setRunStatus] = useState('');
 
@@ -24,8 +25,9 @@ export function LiveTradesPage() {
   }, [profiles, profileId]);
 
   const startLiveAutotrade = async () => {
+    const defaultSymbols = (byQuote?.['USDT'] ?? []).slice(0, 5);
     const res = await api.startBot({
-      symbols: ['ETHUSDT', 'BTCUSDT'],
+      symbols: defaultSymbols.length ? defaultSymbols : ['ETHUSDT', 'BTCUSDT'],
       mode: 'live',
       risk_approved: true,
       execute_orders: true,
