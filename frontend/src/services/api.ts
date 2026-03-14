@@ -15,12 +15,27 @@ const send = async <T>(path: string, method: 'POST' | 'PUT', body: unknown): Pro
 };
 
 const post = async <T>(path: string, body: unknown): Promise<T> => send(path, 'POST', body);
-const put = async <T>(path: string, body: unknown): Promise<T> => send(path, 'PUT', body);
+const put  = async <T>(path: string, body: unknown): Promise<T> => send(path, 'PUT', body);
+const del  = async <T>(path: string): Promise<T> => {
+  const r = await fetch(path, { method: 'DELETE' });
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  return r.json();
+};
 
 export type Signal = {
   id: number; timestamp: string; symbol: string; timeframe: string;
   setup_type: string; liquidity_zone: string; sweep_level: number;
   bos_level: number; fib_zone: string; accepted: boolean;
+  direction?: string | null;
+  reject_reason?: string | null;
+  fake_breakout?: boolean;
+  equal_highs_lows?: boolean;
+  expansion?: boolean;
+  wyckoff_event?: string | null;
+  tf_4h_structure?: string | null;
+  tf_1h_validation?: string | null;
+  session_name?: string | null;
+  displacement_force?: number | null;
 };
 
 export type Trade = {
@@ -63,11 +78,16 @@ export const api = {
   config:     ()                              => get<Record<string, unknown>>('/api/config'),
   updateConfig:(body: Record<string, unknown>)=> put<Record<string, unknown>>('/api/config', body),
   marginEndpoints: ()                         => get<Record<string, unknown>>('/api/execution/endpoints'),
+  marginAccount:   ()                         => get<MarginAccount>('/api/margin/account'),
+  marginInterestRates: ()                     => get<Record<string, unknown>>('/api/margin/interest-rates'),
+  marginForceLiquidations: ()                 => get<Record<string, unknown>>('/api/margin/force-liquidations'),
   scan:       (body: Record<string, unknown>) => post<Record<string, unknown>>('/api/scan', body),
   marketScan: (body: Record<string, unknown>) => post<Record<string, unknown>>('/api/scan/market', body),
 
   strategyProfiles: ()                        => get<{ rows: Record<string, unknown>[] }>('/api/strategy/profiles'),
   saveStrategyProfile: (body: Record<string, unknown>) => post<Record<string, unknown>>('/api/strategy/profiles', body),
+  updateStrategyProfile: (profileId: number, body: Record<string, unknown>) => put<Record<string, unknown>>(`/api/strategy/profiles/${profileId}`, body),
+  deleteStrategyProfile: (profileId: number) => del<Record<string, unknown>>(`/api/strategy/profiles/${profileId}`),
   backtestStrategyProfile: (profileId: number) => post<Record<string, unknown>>(`/api/strategy/profiles/${profileId}/backtest`, {}),
   approveStrategyProfile: (profileId: number, body: Record<string, unknown>) => post<Record<string, unknown>>(`/api/strategy/profiles/${profileId}/approve-live`, body),
 
@@ -77,4 +97,92 @@ export const api = {
   candles:    (params = '')                   => get<{ total: number; rows: Record<string, unknown>[] }>(`/api/data/candles${params}`),
   ingestData: (body: Record<string, unknown>[]) => post<Record<string, unknown>>('/api/data/ingest', body),
   enrichDaily:(symbols: string[])             => post<Record<string, unknown>>('/api/data/enrich/daily', symbols),
+  enrich:     (body: { symbols: string[]; timeframe: string }) => post<Record<string, unknown>>('/api/data/enrich', body),
+  services:   () => get<{ services: ServiceStatus[]; refreshed_at: string; mode: string }>('/api/services'),
+  optimizeBacktest: (id: number) => post<Record<string, unknown>>(`/api/backtest/${id}/optimize`, {}),
+  multiOptimize: (backtest_ids: number[]) => post<Record<string, unknown>>('/api/backtest/multi-optimize', { backtest_ids }),
+  startAiWorkshop: (body: { symbols: string[]; timeframe: string; horizon_days: number; profile_id?: number | null }) =>
+    post<Record<string, unknown>>('/api/strategy/ai-workshop/start', body),
+  getAiWorkshopStatus: (job_id: string) => get<Record<string, unknown>>(`/api/strategy/ai-workshop/${job_id}`),
+  createOptimizedProfile: (profileId: number, body: { source_profile_id: number; suggested_params: Record<string, unknown>; new_name?: string }) =>
+    post<Record<string, unknown>>(`/api/strategy/profiles/${profileId}/create-optimized`, body),
+  getPipeline: () => get<PipelineState>('/api/pipeline'),
+  runPipeline: (body: { symbols: string[]; timeframe: string; profile_id?: number | null }) =>
+    post<Record<string, unknown>>('/api/pipeline/run', body),
+  journal: (params = '') => get<JournalResponse>(`/api/journal${params}`),
+};
+
+export type MarginAsset = {
+  symbol: string;
+  side: string;
+  entryPrice: number;
+  currentPrice: number;
+  quantity: number;
+  notional: number;
+  unrealizedPnl: number;
+  marginLevel: number;
+  marginLevelStatus: 'NORMAL' | 'MARGIN_CALL' | 'FORCE_LIQUIDATION';
+  liquidateRate: number;
+  liquidatePrice: number;
+  marginRatio: number;
+  borrowed: number;
+  interest: number;
+  totalAsset: number;
+  totalDebt: number;
+};
+
+export type MarginAccount = {
+  mode: string;
+  marginType: string;
+  totalAsset: number;
+  totalDebt: number;
+  totalMarginLevel: number;
+  worstLiquidateRate: number;
+  assets: MarginAsset[];
+};
+
+export type PipelineStep = {
+  name: string;
+  status: 'pending' | 'checking' | 'passed' | 'failed';
+  completed_at: string | null;
+  detail: string;
+};
+
+export type PipelineEntry = {
+  symbol: string;
+  timeframe: string;
+  started_at: string;
+  final_status: 'accepted' | 'rejected' | 'error' | null;
+  final_direction: 'LONG' | 'SHORT' | null;
+  final_reason: string | null;
+  session?: string | null;
+  tf_4h_structure?: string | null;
+  tf_1h_validation?: string | null;
+  steps: PipelineStep[];
+};
+
+export type JournalResponse = {
+  total: number;
+  rows: Signal[];
+  in_memory_recent: Record<string, unknown>[];
+  stats: { accepted: number; rejected: number };
+};
+
+export type PipelineState = {
+  pipeline: Record<string, PipelineEntry>;
+  in_progress: number;
+  accepted: number;
+  rejected: number;
+  total: number;
+};
+
+export type ServiceStatus = {
+  id: string;
+  name: string;
+  icon: string;
+  status: 'running' | 'idle' | 'scheduled' | 'stopped';
+  status_label: string;
+  detail: string;
+  last_activity: string | null;
+  next_run: string | null;
 };

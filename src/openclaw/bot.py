@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
@@ -14,6 +15,8 @@ from .smc_wyckoff_signals import SmcWyckoffSignalEngine
 from .trade_execution import TradeExecution
 from .trade_journal import TradeJournal
 
+logger = logging.getLogger("openclaw.bot")
+
 Mode = Literal["research", "paper", "live"]
 
 
@@ -23,6 +26,7 @@ class BotConfig:
     context_tf: tuple[str, ...] = ("4H", "1H")
     entry_tf: str = "1H"
     mode: Mode = "paper"
+    enable_auto_borrow_repay: bool = False
 
 
 class OpenClawBot:
@@ -36,6 +40,13 @@ class OpenClawBot:
         self.paper = PaperTradeManager()
         self.execution = TradeExecution()
         self.journal = TradeJournal()
+        self._execution_service = None
+        if config.enable_auto_borrow_repay:
+            try:
+                from backend.app.services.execution import ExecutionService
+                self._execution_service = ExecutionService(paper_mode=(config.mode != "live"))
+            except ImportError:
+                logger.warning("ExecutionService unavailable — auto borrow/repay disabled")
 
     def run_once(self, risk_approval: bool = False, backtest_approval: bool = False) -> dict[str, Decision]:
         decisions: dict[str, Decision] = {}
@@ -90,6 +101,9 @@ class OpenClawBot:
                 metadata={"confidence": setup.confidence, "backtest": backtest.recommendation},
             )
 
+            auto_br = self.config.enable_auto_borrow_repay
+            exec_svc = self._execution_service if auto_br else None
+
             if self.config.mode == "paper":
                 order_id = self.paper.place(trade)
                 decision = Decision(
@@ -108,7 +122,23 @@ class OpenClawBot:
                     self.journal.log_decision(symbol, decision)
                     decisions[symbol] = decision
                     continue
-                order_id = self.execution.execute(trade, risk_approved=True, backtest_approved=backtest_ok)
+                try:
+                    order_id = self.execution.execute(
+                        trade,
+                        risk_approved=True,
+                        backtest_approved=backtest_ok,
+                        enable_auto_borrow_repay=auto_br,
+                        execution_service=exec_svc,
+                    )
+                except RuntimeError as exc:
+                    decision = Decision(
+                        status="rejected_setup",
+                        reason=f"borrow_failed: {exc}",
+                        setup=setup,
+                    )
+                    self.journal.log_decision(symbol, decision)
+                    decisions[symbol] = decision
+                    continue
                 decision = Decision(
                     status="valid_setup",
                     reason=f"live_order:{order_id}",

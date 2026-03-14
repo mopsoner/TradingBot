@@ -1,86 +1,203 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
+import type { AdminPage } from '../types';
+import { TIMEFRAMES, SYMBOL_PRICES } from '../constants';
+import { fmtDateTime } from '../utils/dateUtils';
 
-export function DataManagerPage() {
-  const { data: isolatedSymbols } = useApi(() => api.isolatedSymbols());
-  const { data: stats, refresh: refreshStats } = useApi(() => api.dataStats());
-  const { data: candles, refresh: refreshCandles } = useApi(() => api.candles('?limit=40'));
-  const [selected, setSelected] = useState<string[]>(['ETHUSDT', 'BTCUSDT']);
-  const [timeframe, setTimeframe] = useState('15m');
-  const [source, setSource] = useState('isolated-margin-feed');
-  const [result, setResult] = useState('');
+type Props = { onNavigate?: (page: AdminPage) => void };
 
-  const symbols = useMemo(() => isolatedSymbols ?? ['ETHUSDT', 'BTCUSDT'], [isolatedSymbols]);
+export function DataManagerPage({ onNavigate }: Props) {
+  const { data: allSymbols } = useApi(() => api.isolatedSymbols());
+  const { data: stats, reload: refreshStats } = useApi(() => api.dataStats());
+  const { data: candles, reload: refreshCandles } = useApi(() => api.candles('?limit=50'));
 
-  const enrichSelected = async () => {
-    const res = await api.enrichDaily(selected);
-    setResult(res.ok ? `DB enrichie: ${String(res.rows_added)} lignes.` : `Erreur: ${String(res.reason)}`);
-    refreshStats();
-    refreshCandles();
+  const symbols = allSymbols ?? [];
+  const [selected, setSelected] = useState<Set<string>>(new Set(['ETHUSDT', 'BTCUSDT']));
+  const [loading, setLoading] = useState<string | null>(null);
+  const [results, setResults] = useState<Record<string, { tf: string; rows: number }[]>>({});
+
+  const toggle = (sym: string) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      next.has(sym) ? next.delete(sym) : next.add(sym);
+      return next;
+    });
   };
 
-  const ingestQuickSample = async () => {
-    const now = new Date().toISOString();
-    const rows = selected.map((symbol, idx) => ({
-      symbol,
-      timeframe,
-      timestamp: now,
-      open: 100 + idx,
-      high: 101 + idx,
-      low: 99 + idx,
-      close: 100.5 + idx,
-      volume: 1200 + idx * 100,
-      source,
-    }));
-    const res = await api.ingestData(rows);
-    setResult(res.ok ? `Ajout manuel: ${String(res.inserted)} bougies.` : `Erreur: ${String(res.reason)}`);
-    refreshStats();
-    refreshCandles();
+  const selectAll = () => setSelected(new Set(symbols));
+  const clearAll  = () => setSelected(new Set());
+
+  const enrich = async (tf: string) => {
+    if (selected.size === 0) return;
+    setLoading(tf);
+    const syms = Array.from(selected);
+    try {
+      const res = await api.enrich({ symbols: syms, timeframe: tf });
+      const added = Number(res.rows_added ?? 0);
+      setResults(prev => ({
+        ...prev,
+        ...Object.fromEntries(syms.map(s => [
+          s,
+          [...(prev[s] ?? []).filter(r => r.tf !== tf), { tf, rows: Math.round(added / syms.length) }],
+        ])),
+      }));
+      refreshStats();
+      refreshCandles();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(null);
+    }
   };
+
+  const totalCandles = Number(stats?.total_candles ?? 0);
+  const trackedCount = (stats?.tracked_symbols as string[] | undefined)?.length ?? 0;
 
   return (
     <section>
-      <h2>Data manager (isolated margin)</h2>
+      <div className="flex items-center justify-between mb-16">
+        <h2 style={{ margin: 0 }}>Données de marché</h2>
+        {onNavigate && (
+          <button className="btn btn-primary" onClick={() => onNavigate('Stratégie')}>
+            Configurer la stratégie →
+          </button>
+        )}
+      </div>
+
       <div className="grid-3 mb-16">
-        <div className="card"><div className="stat-value blue">{stats?.total_candles ?? 0}</div><div className="stat-label">Candles en base</div></div>
-        <div className="card"><div className="stat-value">{(stats?.tracked_symbols as string[] | undefined)?.length ?? 0}</div><div className="stat-label">Symbols trackés</div></div>
-        <div className="card"><div className="stat-value" style={{ fontSize: 16 }}>{stats?.last_candle_at ? new Date(String(stats.last_candle_at)).toLocaleString() : '—'}</div><div className="stat-label">Dernière ingestion</div></div>
+        <div className="card">
+          <div className="stat-value blue">{totalCandles.toLocaleString()}</div>
+          <div className="stat-label">Bougies en base</div>
+        </div>
+        <div className="card">
+          <div className="stat-value">{trackedCount}</div>
+          <div className="stat-label">Symboles chargés</div>
+        </div>
+        <div className="card">
+          <div className="stat-value" style={{ fontSize: 15 }}>
+            {stats?.last_candle_at ? fmtDateTime(String(stats.last_candle_at)) : '—'}
+          </div>
+          <div className="stat-label">Dernière ingestion</div>
+        </div>
       </div>
 
       <div className="grid-2">
         <div className="card">
-          <h3>Alimenter la base par liste crypto margin isolated</h3>
-          <div className="form-group">
-            <label>Liste des cryptos</label>
-            <select multiple value={selected} onChange={e => setSelected(Array.from(e.target.selectedOptions).map(o => o.value))} style={{ minHeight: 140 }}>
-              {symbols.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
+          <h3>1 — Sélectionner les cryptos</h3>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+            <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={selectAll}>Tout</button>
+            <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={clearAll}>Aucun</button>
+            <span className="muted" style={{ lineHeight: '28px', fontSize: 12 }}>{selected.size} sélectionné(s)</span>
           </div>
-          <div className="form-group"><label>Timeframe</label><select value={timeframe} onChange={e => setTimeframe(e.target.value)}><option value="15m">15m</option><option value="1h">1h</option><option value="4h">4h</option></select></div>
-          <div className="form-group"><label>Source</label><input value={source} onChange={e => setSource(e.target.value)} /></div>
-          <div className="row">
-            <button className="btn btn-secondary" onClick={ingestQuickSample}>Ajouter un sample</button>
-            <button className="btn btn-primary" onClick={enrichSelected}>Scan & enrichissement journalier</button>
+          <div style={{
+            display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)',
+            gap: 6, maxHeight: 260, overflowY: 'auto',
+          }}>
+            {symbols.map(sym => (
+              <label
+                key={sym}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '5px 8px', borderRadius: 6, cursor: 'pointer',
+                  background: selected.has(sym) ? 'rgba(88,166,255,0.12)' : 'transparent',
+                  border: `1px solid ${selected.has(sym) ? 'var(--accent)' : 'var(--border)'}`,
+                  fontSize: 12, userSelect: 'none',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={selected.has(sym)}
+                  onChange={() => toggle(sym)}
+                  style={{ width: 'auto', margin: 0 }}
+                />
+                {sym.replace('USDT', '')}
+                {SYMBOL_PRICES[sym] && (
+                  <span className="muted" style={{ fontSize: 10, marginLeft: 'auto' }}>
+                    ${SYMBOL_PRICES[sym] >= 1000
+                      ? (SYMBOL_PRICES[sym] / 1000).toFixed(0) + 'k'
+                      : SYMBOL_PRICES[sym]}
+                  </span>
+                )}
+              </label>
+            ))}
           </div>
-          {result && <p className="muted" style={{ marginTop: 8 }}>{result}</p>}
+
+          <h3 style={{ marginTop: 20 }}>2 — Charger les bougies</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {TIMEFRAMES.map(tf => (
+              <div
+                key={tf.value}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '10px 14px', borderRadius: 8,
+                  background: 'var(--surface2)', border: '1px solid var(--border)',
+                }}
+              >
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>{tf.label}</div>
+                  <div className="muted" style={{ fontSize: 11 }}>~{tf.candles.toLocaleString()} bougies · {tf.desc}</div>
+                </div>
+                <button
+                  className="btn btn-primary"
+                  style={{ minWidth: 120 }}
+                  disabled={loading === tf.value || selected.size === 0}
+                  onClick={() => enrich(tf.value)}
+                >
+                  {loading === tf.value ? 'Chargement…' : `Charger ${tf.label}`}
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {Object.keys(results).length > 0 && (
+            <div style={{ marginTop: 16, padding: 12, background: 'rgba(63,185,80,0.1)', borderRadius: 8, border: '1px solid rgba(63,185,80,0.3)' }}>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6, color: 'var(--accent-green)' }}>✅ Données chargées</div>
+              {Object.entries(results).map(([sym, tfs]) => (
+                <div key={sym} style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.8 }}>
+                  <strong>{sym}</strong>: {tfs.map(t => `${t.tf} (${t.rows} bougies)`).join(', ')}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="card">
-          <h3>Données récentes</h3>
-          <div style={{ maxHeight: 380, overflowY: 'auto' }}>
+          <h3>Bougies récentes</h3>
+          <div style={{ maxHeight: 460, overflowY: 'auto' }}>
             <table>
-              <thead><tr><th>Timestamp</th><th>Symbol</th><th>TF</th><th>Close</th><th>Source</th></tr></thead>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Symbole</th>
+                  <th>TF</th>
+                  <th>Ouv.</th>
+                  <th>Haut</th>
+                  <th>Bas</th>
+                  <th>Clôture</th>
+                </tr>
+              </thead>
               <tbody>
                 {(candles?.rows as Array<Record<string, unknown>> | undefined)?.map((row, i) => (
                   <tr key={i}>
-                    <td className="muted">{new Date(String(row.timestamp)).toLocaleString()}</td>
-                    <td>{String(row.symbol)}</td>
+                    <td className="muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
+                      {fmtDateTime(String(row.timestamp))}
+                    </td>
+                    <td><strong style={{ fontSize: 12 }}>{String(row.symbol).replace('USDT', '')}</strong></td>
                     <td><span className="tag">{String(row.timeframe)}</span></td>
-                    <td>{Number(row.close).toFixed(2)}</td>
-                    <td>{String(row.source)}</td>
+                    <td style={{ fontSize: 12 }}>{Number(row.open).toFixed(2)}</td>
+                    <td style={{ fontSize: 12, color: 'var(--accent-green)' }}>{Number(row.high).toFixed(2)}</td>
+                    <td style={{ fontSize: 12, color: 'var(--accent-red)' }}>{Number(row.low).toFixed(2)}</td>
+                    <td style={{ fontSize: 12, fontWeight: 600 }}>{Number(row.close).toFixed(2)}</td>
                   </tr>
                 ))}
+                {(!candles?.rows || (candles.rows as unknown[]).length === 0) && (
+                  <tr>
+                    <td colSpan={7} style={{ textAlign: 'center', padding: 32, opacity: 0.5 }}>
+                      Aucune bougie — chargez des données à gauche
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>

@@ -1,12 +1,16 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlmodel import Field, SQLModel
 
 
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 class Signal(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=_now_utc)
     symbol: str
     timeframe: str
     setup_type: str
@@ -15,11 +19,21 @@ class Signal(SQLModel, table=True):
     bos_level: float
     fib_zone: str
     accepted: bool = False
+    direction: Optional[str] = None
+    reject_reason: Optional[str] = None
+    fake_breakout: bool = False
+    equal_highs_lows: bool = False
+    expansion: bool = False
+    tf_4h_structure: Optional[str] = None
+    tf_1h_validation: Optional[str] = None
+    session_name: Optional[str] = None
+    displacement_force: Optional[float] = None
+    wyckoff_event: Optional[str] = None
 
 
 class Trade(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=_now_utc)
     symbol: str
     side: str
     entry: float
@@ -36,11 +50,22 @@ class Position(SQLModel, table=True):
     entry_price: float
     current_price: float
     unrealized_pnl: float = 0.0
+    side: str = "LONG"
+    notional: float = 0.0
+    borrowed: float = 0.0
+    interest: float = 0.0
+    margin_level: float = 999.0
+    margin_level_status: str = "NORMAL"
+    liquidate_rate: float = 999.0
+    liquidate_price: float = 0.0
+    margin_ratio: float = 0.0
+    total_asset_value: float = 0.0
+    total_debt_value: float = 0.0
 
 
 class BacktestResult(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=_now_utc)
     symbol: str
     timeframe: str
     strategy_version: str
@@ -53,7 +78,7 @@ class BacktestResult(SQLModel, table=True):
 
 class Log(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=_now_utc)
     level: str
     message: str
 
@@ -79,7 +104,7 @@ class MarketCandle(SQLModel, table=True):
 
 class BotJob(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=_now_utc)
     symbol: str
     timeframe: str = "15m"
     session_name: str
@@ -101,7 +126,7 @@ class ScanSchedule(SQLModel, table=True):
 
 class StrategyProfile(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=_now_utc)
     name: str
     mode: str = "research"
     parameters: str
@@ -112,3 +137,5 @@ class StrategyProfile(SQLModel, table=True):
     last_backtest_win_rate: Optional[float] = None
     last_backtest_profit_factor: Optional[float] = None
     last_backtest_drawdown: Optional[float] = None
+    last_backtest_id: Optional[int] = None
+    enable_auto_borrow_repay: bool = False

@@ -292,3 +292,12 @@ input:focus, select:focus { border-color: var(--accent); }
   .grid-4, .grid-3 { grid-template-columns: 1fr; }
   .stat-value { font-size: 22px; }
 }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(1.12); }
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}

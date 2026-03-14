@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
+import { fmtDateTime } from '../utils/dateUtils';
 
 const LEVELS = ['All', 'INFO', 'WARN', 'ERROR'];
 
@@ -37,7 +38,7 @@ export function LogsPage() {
             {data.rows.map(l => (
               <div key={l.id} className="log-entry">
                 <span className="log-time">
-                  {new Date(l.timestamp).toLocaleDateString()}
+                  {fmtDateTime(l.timestamp)}
                 </span>
                 <span className={`log-${l.level}`}>[{l.level}]</span>
                 <span>{l.message}</span>

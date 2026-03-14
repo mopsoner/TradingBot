@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
+import { fmtDateTime } from '../utils/dateUtils';
 
 const STATUS_OPTIONS = ['All', 'OPEN', 'CLOSED_WIN', 'CLOSED_LOSS'];
 
@@ -80,7 +81,7 @@ export function LiveTradesPage() {
             <tbody>
               {data.rows.map(t => (
                 <tr key={t.id}>
-                  <td className="muted">{new Date(t.timestamp).toLocaleDateString()}</td>
+                  <td className="muted" style={{ whiteSpace: 'nowrap' }}>{fmtDateTime(t.timestamp)}</td>
                   <td>{t.symbol}</td>
                   <td className={t.side === 'LONG' ? 'green' : 'red'}>{t.side}</td>
                   <td>{t.entry.toFixed(2)}</td>

@@ -16,8 +16,13 @@ class MarketDataService:
     REQUIRED_TIMEFRAMES = ("15m", "1H", "4H")
 
     def load_symbols(self) -> list[str]:
-        # Stubbed dynamic loading for offline environments; replace with Binance exchangeInfo in production.
-        return ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "AVAXUSDT"]
+        return [
+            "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "AVAXUSDT",
+            "XRPUSDT", "ADAUSDT", "DOGEUSDT", "DOTUSDT", "MATICUSDT",
+            "LINKUSDT", "UNIUSDT", "LTCUSDT", "ATOMUSDT", "NEARUSDT",
+            "AAVEUSDT", "FILUSDT", "APTUSDT", "ARBUSDT", "OPUSDT",
+            "SUIUSDT", "INJUSDT", "TIAUSDT", "SEIUSDT", "WLDUSDT",
+        ]
 
     def normalize_candle(self, raw: dict) -> Candle:
         return Candle(

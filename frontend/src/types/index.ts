@@ -1,9 +1,13 @@
 export type AdminPage =
-  | 'Dashboard'
-  | 'Strategy settings'
-  | 'Data manager'
+  | 'Tableau de bord'
+  | 'Données de marché'
+  | 'Stratégie'
   | 'Backtests'
-  | 'Live trades'
-  | 'Admin'
-  | 'Signals'
-  | 'Logs';
+  | 'Workshop IA'
+  | 'Pipeline Live'
+  | 'Signaux'
+  | 'Trades'
+  | 'Positions'
+  | 'Journal Setups'
+  | 'Journaux'
+  | 'Paramètres';

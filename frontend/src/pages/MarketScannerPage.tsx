@@ -45,7 +45,7 @@ function MarketClocks() {
         <div key={z.name} className="card" style={{ marginBottom: 0 }}>
           <div className="stat-label">{z.name}</div>
           <div className="stat-value" style={{ fontSize: 20 }}>
-            {new Intl.DateTimeFormat('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: z.tz }).format(now)}
+            {new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: z.tz }).format(now)}
           </div>
         </div>
       ))}
@@ -101,14 +101,14 @@ export function MarketScannerPage() {
         <div className="card">
           <h3>Automation status</h3>
           {!batchResult && <p className="muted">Run full basket scan to see automation routing.</p>}
-          {batchResult?.automation && (
+          {batchResult && batchResult.automation ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div><span className="muted">Interval: </span>{String((batchResult.automation as Record<string, unknown>).scan_interval_minutes)} min</div>
               <div><span className="muted">Next scan ETA: </span>{String((batchResult.automation as Record<string, unknown>).next_scan_eta_seconds)} sec</div>
               <div><span className="muted">Routing: </span>{String((batchResult.automation as Record<string, unknown>).auto_route_to_paper ? 'paper by default' : 'manual')}</div>
               <div><span className="muted">Binance mode: </span><strong>{String((batchResult.automation as Record<string, unknown>).margin_type)}</strong></div>
             </div>
-          )}
+          ) : null}
           {singleResult && <p style={{ marginTop: 12 }} className={singleResult.accepted ? 'green' : 'red'}>{singleResult.accepted ? 'Signal validé (single scan).' : `Rejeté: ${String(singleResult.reason)}`}</p>}
         </div>
       </div>

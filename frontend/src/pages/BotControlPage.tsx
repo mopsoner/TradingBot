@@ -12,19 +12,19 @@ type StrategyProfile = {
 
 export function BotControlPage() {
   const { data: symbols } = useApi(() => api.symbols());
-  const { data: profiles, refresh: refreshProfiles } = useApi(() => api.strategyProfiles());
+  const { data: profiles, reload: refreshProfiles } = useApi(() => api.strategyProfiles());
   const [selectedSymbols, setSelectedSymbols] = useState<string[]>(['ETHUSDT', 'BTCUSDT']);
   const [mode, setMode] = useState<'paper' | 'live' | 'research'>('paper');
   const [riskApproved, setRiskApproved] = useState(false);
   const [executeOrders, setExecuteOrders] = useState(false);
   const [strategyProfileId, setStrategyProfileId] = useState<number | null>(null);
   const [startResult, setStartResult] = useState<Record<string, unknown> | null>(null);
-  const { data: status, refresh } = useApi(() => api.botStatus());
+  const { data: status, reload: refreshStatus } = useApi(() => api.botStatus());
 
   useEffect(() => {
-    const id = window.setInterval(() => refresh(), 4000);
+    const id = window.setInterval(() => refreshStatus(), 4000);
     return () => window.clearInterval(id);
-  }, [refresh]);
+  }, [refreshStatus]);
 
   useEffect(() => {
     if (!strategyProfileId && profiles?.rows?.length) {
@@ -47,7 +47,7 @@ export function BotControlPage() {
       strategy_profile_id: strategyProfileId,
     });
     setStartResult(result);
-    refresh();
+    refreshStatus();
     refreshProfiles();
   };
 
