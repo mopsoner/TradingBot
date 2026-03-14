@@ -387,6 +387,7 @@ class StartBotRequest(BaseModel):
 class StrategyProfileIn(BaseModel):
     name: str
     mode: str = "research"
+    description: Optional[str] = None
     parameters: dict[str, object] = Field(default_factory=dict)
     enable_auto_borrow_repay: bool = False
 
