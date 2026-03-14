@@ -1,56 +1,38 @@
-# OpenClaw SMC/Wyckoff Trading Bot — GitHub Project Scaffold
+# Web Trading Platform (OpenClaw-Inspired Architecture)
 
-Ce dépôt contient le **scaffold documentaire complet** du projet OpenClaw pour ETHUSDT/BTCUSDT.
+Standalone web-based crypto trading platform with modular "skills" inspired by OpenClaw architecture, without importing OpenClaw.
 
-## Objectif
-Définir une base claire pour implémenter un bot de trading avec une logique SMC/Wyckoff stricte :
-1. Liquidity zone
-2. Liquidity sweep
-3. Spring / UTAD
-4. Displacement
-5. Break of Structure (BOS)
-6. Fibonacci retracement entry (0.5 / 0.618 / 0.705)
-7. Expansion vers la prochaine zone de liquidité
+## Architecture
 
-> Règle clé : pas de sweep/displacement/BOS/fib entry = pas de trade.
+- `backend/` FastAPI backend API + trading engine orchestration.
+- `backend/skills/` isolated skill modules:
+  - market-data
+  - smc-wyckoff-signals
+  - session-filter
+  - risk-manager
+  - backtesting-manager
+  - paper-trade-manager
+  - trade-execution
+  - trade-journal
+- `frontend/` React admin dashboard with configurable pages.
+- `tests/` unit tests for critical engine flows.
 
-## Structure du dépôt
-- `AGENTS.md` : mission, contraintes, règles de sécurité.
-- `agents/` : définition de l’agent (`eth-liquidity-trader`), prompts et config.
-- `skills/` : spécifications de chaque module + schémas JSON.
-- `docs/` : architecture, stratégie, sessions, risque, journal, backtesting.
-- `cron/` : exemples de planification.
-- `templates/` : checklist setup et template de rapport de recherche.
-- `data/` : conventions d’organisation des données.
+## Features
 
-## Modes supportés
-- `research`
-- `paper` (mode par défaut)
-- `live` (après validations risque + backtest)
+- Dynamic Binance symbol universe loading.
+- SMC/Wyckoff sequence-only strategy (liquidity → sweep → spring/utad → displacement → BOS → fib retracement).
+- Per-symbol risk controls, max concurrent trades, and capital allocation.
+- Backtesting with walk-forward and performance metrics.
+- Paper-by-default execution safety with live-trade safeguards.
 
-## Démarrage rapide (implémentation)
-1. Implémenter les modules décrits dans `skills/`.
-2. Respecter les pipelines décrits dans `docs/architecture.md`.
-3. Valider la stratégie via `docs/backtesting.md`.
-4. Démarrer en `paper` avant tout passage en `live`.
-
-## Remarque
-Ce dépôt inclut maintenant une implémentation Python exécutable (pipeline signal/risk/backtest/paper/live simulé + journal), avec alimentation market data Binance et fallback de recherche.
-
-## Validation de la PR
-Exécuter la validation locale du scaffold :
+## Run backend
 
 ```bash
-python scripts/validate_scaffold.py
+uvicorn backend.app.main:app --reload
 ```
 
-La même vérification est exécutée automatiquement via GitHub Actions (`.github/workflows/validate-scaffold.yml`).
+## Run tests
 
-
-
-## État actuel
-- Binance klines intégrées pour market-data.
-- Détection SMC/Wyckoff stricte (sweep, Spring/UTAD, displacement, BOS, fib).
-- Gardes risque/backtest actives.
-- Paper trading avec slippage/frais simulés et limite de position par symbole.
-- Journal JSONL détaillé des setups acceptés/rejetés.
+```bash
+pytest -q
+```
