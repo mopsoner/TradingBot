@@ -16,6 +16,8 @@ const STEP_FULL = [
   'Fib Retracement (0.5 / 0.618 / 0.705)',
 ];
 
+type Mode = 'paper' | 'live';
+
 function StepDot({ step, index }: { step: PipelineStep; index: number }) {
   const [hover, setHover] = useState(false);
   const colors: Record<string, string> = {
@@ -79,35 +81,28 @@ function StepDot({ step, index }: { step: PipelineStep; index: number }) {
 
 function SymbolRow({ entry }: { entry: PipelineEntry }) {
   const sym = fmtSym(entry.symbol);
-  const isRunning = entry.final_status === null;
+  const isRunning  = entry.final_status === null;
   const isAccepted = entry.final_status === 'accepted';
   const isRejected = entry.final_status === 'rejected';
-  const checking = entry.steps.findIndex(s => s.status === 'checking');
-  const progress = isRunning
+  const checking   = entry.steps.findIndex(s => s.status === 'checking');
+  const progress   = isRunning
     ? entry.steps.filter(s => s.status !== 'pending').length
     : entry.steps.length;
 
   return (
     <div style={{
-      padding: '14px 16px',
-      borderRadius: 10,
+      padding: '14px 16px', borderRadius: 10, marginBottom: 10, transition: 'all 0.3s',
       border: `1px solid ${isAccepted ? 'rgba(63,185,80,0.35)' : isRejected ? 'rgba(248,81,73,0.25)' : 'var(--border)'}`,
       background: isAccepted ? 'rgba(63,185,80,0.06)' : isRejected ? 'rgba(248,81,73,0.04)' : 'var(--surface)',
-      transition: 'all 0.3s',
-      marginBottom: 10,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ minWidth: 90 }}>
           <div style={{ fontWeight: 700, fontSize: 15 }}>{sym}</div>
           <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{entry.timeframe}</div>
         </div>
-
         <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flex: 1, flexWrap: 'wrap' }}>
-          {entry.steps.map((step, i) => (
-            <StepDot key={i} step={step} index={i} />
-          ))}
+          {entry.steps.map((step, i) => <StepDot key={i} step={step} index={i} />)}
         </div>
-
         <div style={{ minWidth: 120, textAlign: 'right' }}>
           {isRunning && (
             <div style={{ color: '#f0b429', fontSize: 12, fontWeight: 600 }}>
@@ -130,9 +125,7 @@ function SymbolRow({ entry }: { entry: PipelineEntry }) {
           {isRejected && (
             <div>
               <div style={{ color: 'var(--accent-red)', fontWeight: 700, fontSize: 14 }}>❌ Rejeté</div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-                {entry.final_reason}
-              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{entry.final_reason}</div>
             </div>
           )}
           {entry.final_status === 'error' && (
@@ -140,7 +133,6 @@ function SymbolRow({ entry }: { entry: PipelineEntry }) {
           )}
         </div>
       </div>
-
       {isRunning && (
         <div style={{ marginTop: 8, height: 3, background: 'var(--surface2)', borderRadius: 2, overflow: 'hidden' }}>
           <div style={{
@@ -163,21 +155,25 @@ export function PipelinePage() {
   const quotes              = Object.keys(byQuote ?? { USDT: [] });
   const universe            = (byQuote ?? {})[quote] ?? [];
 
-  const [selected, setSelected] = useState<string[]>([]);
+  const [selected, setSelected]   = useState<string[]>([]);
   const [timeframe, setTimeframe] = useState('1h');
   const [profileId, setProfileId] = useState<number | null>(null);
-  const [state, setState] = useState<Record<string, PipelineEntry>>({});
-  const [stats, setStats] = useState({ in_progress: 0, accepted: 0, rejected: 0, total: 0 });
-  const [running, setRunning] = useState(false);
-  const [lastRun, setLastRun] = useState<string | null>(null);
+  const [mode, setMode]           = useState<Mode>('paper');
+
+  const [state, setState]   = useState<Record<string, PipelineEntry>>({});
+  const [stats, setStats]   = useState({ in_progress: 0, accepted: 0, rejected: 0, total: 0 });
+  const [running, setRunning]   = useState(false);
+  const [lastRun, setLastRun]   = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const [liveConfirm, setLiveConfirm]         = useState(false);
+  const [liveStatus, setLiveStatus]           = useState<string | null>(null);
+  const [liveSubmitting, setLiveSubmitting]   = useState(false);
 
   const profileRows = (profiles?.rows as Array<Record<string, unknown>> | undefined) ?? [];
 
   useEffect(() => {
-    if (profileId === null && profileRows.length > 0) {
-      setProfileId(Number(profileRows[0].id));
-    }
+    if (profileId === null && profileRows.length > 0) setProfileId(Number(profileRows[0].id));
   }, [profileRows.length]);
 
   const selectedProfile = profileRows.find(p => Number(p.id) === profileId);
@@ -198,8 +194,9 @@ export function PipelinePage() {
       if (res.in_progress === 0 && res.total > 0) {
         setRunning(false);
         stopPolling();
+        if (mode === 'live' && res.accepted > 0) setLiveConfirm(true);
       }
-    } catch { /* network hiccup — ignore */ }
+    } catch { /* network hiccup */ }
   };
 
   const launch = async () => {
@@ -208,12 +205,39 @@ export function PipelinePage() {
     setLastRun(nowTime());
     setState({});
     setStats({ in_progress: 0, accepted: 0, rejected: 0, total: 0 });
+    setLiveConfirm(false);
+    setLiveStatus(null);
     stopPolling();
     try {
       await api.runPipeline({ symbols: selected, timeframe, profile_id: profileId });
       pollRef.current = setInterval(poll, 500);
     } catch {
       setRunning(false);
+    }
+  };
+
+  const submitLiveOrders = async () => {
+    setLiveSubmitting(true);
+    try {
+      const res = await api.startBot({
+        symbols: selected,
+        timeframe,
+        strategy_profile_id: profileId,
+        mode: 'live',
+        execute_orders: true,
+        risk_approved: true,
+        expansion_to_next_liquidity: true,
+      });
+      if (res.ok) {
+        setLiveStatus(`✅ ${String(res.orders_submitted ?? 0)} ordre(s) soumis au marché.`);
+      } else {
+        setLiveStatus(`⛔ Bloqué : ${String(res.reason ?? 'erreur inconnue')}`);
+      }
+    } catch {
+      setLiveStatus('⛔ Erreur réseau lors de la soumission.');
+    } finally {
+      setLiveSubmitting(false);
+      setLiveConfirm(false);
     }
   };
 
@@ -225,40 +249,81 @@ export function PipelinePage() {
 
   const entries = Object.values(state);
   const allDone = stats.total > 0 && stats.in_progress === 0;
+  const acceptedEntries = entries.filter(e => e.final_status === 'accepted');
 
   return (
     <section>
+      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h2 style={{ margin: 0 }}>Pipeline Live</h2>
           <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
-            Validation en temps réel des setups SMC/Wyckoff — séquence obligatoire 7 étapes (RSI/MACD jamais déclencheurs)
+            Validation en temps réel des setups SMC/Wyckoff — séquence obligatoire 7 étapes
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           {lastRun && <span className="muted" style={{ fontSize: 12 }}>Dernier scan : {lastRun}</span>}
           <button
-            className="btn btn-primary"
+            className={`btn ${mode === 'live' ? 'btn-danger' : 'btn-primary'}`}
             onClick={launch}
             disabled={running || selected.length === 0}
-            style={{ minWidth: 160, display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center' }}
+            style={{ minWidth: 180, display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center' }}
           >
             {running
               ? <><span style={{ animation: 'spin 1s linear infinite', display: 'inline-block' }}>⟳</span> Analyse…</>
-              : '▶ Lancer le pipeline'}
+              : mode === 'live' ? '⚡ Analyser (mode LIVE)' : '▶ Lancer en Paper'}
           </button>
         </div>
       </div>
 
       <div className="grid-2" style={{ marginBottom: 20 }}>
+        {/* Config card */}
         <div className="card">
           <h3>Configuration</h3>
+
+          {/* Mode Paper / Live */}
+          <div className="form-group">
+            <label>Mode d'exécution</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {(['paper', 'live'] as Mode[]).map(m => (
+                <button key={m} onClick={() => { setMode(m); setLiveConfirm(false); setLiveStatus(null); }}
+                  style={{
+                    flex: 1, padding: '8px 12px', borderRadius: 8, fontWeight: 700, fontSize: 13,
+                    cursor: 'pointer', transition: 'all 0.2s',
+                    border: mode === m
+                      ? `2px solid ${m === 'live' ? 'var(--accent-red)' : 'var(--accent)'}`
+                      : '2px solid var(--border)',
+                    background: mode === m
+                      ? m === 'live' ? 'rgba(248,81,73,0.15)' : 'rgba(88,166,255,0.15)'
+                      : 'var(--surface2)',
+                    color: mode === m
+                      ? m === 'live' ? 'var(--accent-red)' : 'var(--accent)'
+                      : 'var(--text-muted)',
+                  }}
+                >
+                  {m === 'paper' ? '📄 Paper' : '⚡ Live'}
+                </button>
+              ))}
+            </div>
+            {mode === 'paper' && (
+              <p style={{ margin: '6px 0 0', fontSize: 11, color: 'var(--text-muted)' }}>
+                Simulation — aucun ordre réel envoyé, résultats enregistrés en DB.
+              </p>
+            )}
+            {mode === 'live' && (
+              <p style={{ margin: '6px 0 0', fontSize: 11, color: 'var(--accent-red)', fontWeight: 600 }}>
+                Mode LIVE — ordres réels sur Binance après confirmation explicite.
+              </p>
+            )}
+          </div>
+
           <div className="form-group">
             <label>Timeframe</label>
             <select value={timeframe} onChange={e => setTimeframe(e.target.value)}>
               {TIMEFRAMES.map(tf => <option key={tf.value} value={tf.value}>{tf.label} — {tf.desc}</option>)}
             </select>
           </div>
+
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               Profil stratégie
@@ -286,18 +351,12 @@ export function PipelinePage() {
                 );
               })}
             </select>
-            {!profileAllowsWeekend && profileId !== null && (
-              <p style={{ margin: '4px 0 0', fontSize: 11, color: 'var(--accent-yellow)' }}>
-                Trading week-end désactivé sur ce profil — modifiez-le dans Stratégie si besoin
-              </p>
-            )}
           </div>
         </div>
 
+        {/* Crypto selector */}
         <div className="card">
           <h3 style={{ marginBottom: 10 }}>Cryptos à analyser ({selected.length} sélectionnées)</h3>
-
-          {/* Quote tabs */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
             {quotes.map(q => (
               <button key={q} onClick={() => setQuote(q)}
@@ -309,15 +368,13 @@ export function PipelinePage() {
                 }}>{q}</button>
             ))}
           </div>
-
-          {/* Symbol grid */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 120, overflowY: 'auto' }}>
             {universe.map(sym => {
-              const isOn = selected.includes(sym);
+              const isOn  = selected.includes(sym);
               const entry = state[sym];
-              const dot = entry?.final_status === 'accepted' ? '🟢'
-                : entry?.final_status === 'rejected' ? '🔴'
-                : entry ? '🟡' : null;
+              const dot   = entry?.final_status === 'accepted' ? '🟢'
+                          : entry?.final_status === 'rejected' ? '🔴'
+                          : entry ? '🟡' : null;
               return (
                 <button key={sym} onClick={() => toggleSymbol(sym)}
                   style={{
@@ -326,15 +383,13 @@ export function PipelinePage() {
                     border: `1px solid ${isOn ? 'var(--accent)' : 'var(--border)'}`,
                     color: isOn ? 'var(--accent)' : 'var(--text-muted)',
                     cursor: 'pointer', transition: 'all 0.15s',
-                  }}
-                >
+                  }}>
                   {dot && <span style={{ marginRight: 4 }}>{dot}</span>}
                   {fmtSym(sym)}
                 </button>
               );
             })}
           </div>
-
           <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
             <button className="btn btn-secondary" style={{ fontSize: 11, padding: '3px 8px' }}
               onClick={() => setSelected(prev => [...new Set([...prev, ...universe])])}>
@@ -342,7 +397,7 @@ export function PipelinePage() {
             </button>
             <button className="btn btn-secondary" style={{ fontSize: 11, padding: '3px 8px' }}
               onClick={() => setSelected(prev => prev.filter(s => !universe.includes(s)))}>
-              Tout désélect. ({quote})
+              Tout désélect.
             </button>
             {selected.length > 0 && (
               <button className="btn btn-secondary" style={{ fontSize: 11, padding: '3px 8px' }}
@@ -354,37 +409,34 @@ export function PipelinePage() {
         </div>
       </div>
 
+      {/* Stats */}
       {stats.total > 0 && (
         <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
-          <div className="card" style={{ flex: 1, textAlign: 'center', padding: '12px 16px' }}>
-            <div style={{ fontSize: 28, fontWeight: 900, color: 'var(--accent)' }}>{stats.total}</div>
-            <div className="muted" style={{ fontSize: 12 }}>Total</div>
-          </div>
-          <div className="card" style={{ flex: 1, textAlign: 'center', padding: '12px 16px' }}>
-            <div style={{ fontSize: 28, fontWeight: 900, color: '#f0b429' }}>{stats.in_progress}</div>
-            <div className="muted" style={{ fontSize: 12 }}>En cours</div>
-          </div>
-          <div className="card" style={{ flex: 1, textAlign: 'center', padding: '12px 16px' }}>
-            <div style={{ fontSize: 28, fontWeight: 900, color: 'var(--accent-green)' }}>{stats.accepted}</div>
-            <div className="muted" style={{ fontSize: 12 }}>Acceptés</div>
-          </div>
-          <div className="card" style={{ flex: 1, textAlign: 'center', padding: '12px 16px' }}>
-            <div style={{ fontSize: 28, fontWeight: 900, color: 'var(--accent-red)' }}>{stats.rejected}</div>
-            <div className="muted" style={{ fontSize: 12 }}>Rejetés</div>
-          </div>
+          {[
+            { label: 'Total',     value: stats.total,       color: 'var(--accent)' },
+            { label: 'En cours',  value: stats.in_progress, color: '#f0b429' },
+            { label: 'Acceptés',  value: stats.accepted,    color: 'var(--accent-green)' },
+            { label: 'Rejetés',   value: stats.rejected,    color: 'var(--accent-red)' },
+          ].map(s => (
+            <div key={s.label} className="card" style={{ flex: 1, textAlign: 'center', padding: '12px 16px' }}>
+              <div style={{ fontSize: 28, fontWeight: 900, color: s.color }}>{s.value}</div>
+              <div className="muted" style={{ fontSize: 12 }}>{s.label}</div>
+            </div>
+          ))}
         </div>
       )}
 
-      {allDone && stats.accepted > 0 && (
+      {/* Paper — résultats validés */}
+      {allDone && stats.accepted > 0 && mode === 'paper' && (
         <div style={{
           marginBottom: 16, padding: 16, borderRadius: 10,
           background: 'rgba(63,185,80,0.08)', border: '1px solid rgba(63,185,80,0.3)',
         }}>
           <div style={{ fontWeight: 700, color: 'var(--accent-green)', marginBottom: 8 }}>
-            ✅ {stats.accepted} signal{stats.accepted > 1 ? 's' : ''} validé{stats.accepted > 1 ? 's' : ''}
+            ✅ {stats.accepted} signal{stats.accepted > 1 ? 's' : ''} paper validé{stats.accepted > 1 ? 's' : ''} — enregistrés en base
           </div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            {entries.filter(e => e.final_status === 'accepted').map(e => (
+            {acceptedEntries.map(e => (
               <div key={e.symbol} style={{
                 padding: '8px 14px', borderRadius: 8,
                 background: 'rgba(63,185,80,0.12)', border: '1px solid rgba(63,185,80,0.4)',
@@ -397,17 +449,88 @@ export function PipelinePage() {
         </div>
       )}
 
-      {entries.length === 0 && !running && (
-        <div className="card" style={{ textAlign: 'center', padding: 48 }}>
-          <div style={{ fontSize: 48, marginBottom: 12 }}>🔬</div>
-          <div style={{ fontWeight: 700, marginBottom: 8 }}>Pipeline prêt</div>
-          <div className="muted" style={{ maxWidth: 400, margin: '0 auto' }}>
-            Sélectionnez vos cryptos et cliquez sur <strong>Lancer le pipeline</strong> pour voir en direct
-            comment chaque setup est validé ou rejeté étape par étape.
+      {/* Live — panneau de confirmation */}
+      {liveConfirm && mode === 'live' && acceptedEntries.length > 0 && (
+        <div style={{
+          marginBottom: 16, padding: 20, borderRadius: 10,
+          background: 'rgba(248,81,73,0.08)', border: '2px solid rgba(248,81,73,0.5)',
+        }}>
+          <div style={{ fontWeight: 800, fontSize: 16, color: 'var(--accent-red)', marginBottom: 10 }}>
+            ⚡ {acceptedEntries.length} signal{acceptedEntries.length > 1 ? 's' : ''} validé{acceptedEntries.length > 1 ? 's' : ''} — confirmation requise
+          </div>
+
+          {/* Signaux à envoyer */}
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+            {acceptedEntries.map(e => (
+              <div key={e.symbol} style={{
+                padding: '8px 14px', borderRadius: 8,
+                background: 'rgba(248,81,73,0.12)', border: '1px solid rgba(248,81,73,0.4)',
+              }}>
+                <strong>{fmtSym(e.symbol)}</strong>
+                <span style={{
+                  marginLeft: 8, fontWeight: 700,
+                  color: e.final_direction === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)',
+                }}>
+                  {e.final_direction}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <div style={{
+            padding: '10px 14px', borderRadius: 8, background: 'rgba(248,81,73,0.1)',
+            fontSize: 12, color: 'var(--accent-red)', fontWeight: 600, marginBottom: 14,
+          }}>
+            ⚠ Ces ordres seront envoyés en <strong>LIVE sur Binance</strong> avec de l'argent réel.
+            Vérifie ton profil, ton levier et ta gestion du risque avant de confirmer.
+          </div>
+
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button
+              className="btn btn-danger"
+              onClick={submitLiveOrders}
+              disabled={liveSubmitting}
+              style={{ fontWeight: 700 }}
+            >
+              {liveSubmitting ? '⟳ Envoi en cours…' : `✅ Confirmer ${acceptedEntries.length} ordre(s) LIVE`}
+            </button>
+            <button
+              className="btn btn-secondary"
+              onClick={() => { setLiveConfirm(false); setLiveStatus(null); }}
+              disabled={liveSubmitting}
+            >
+              Annuler
+            </button>
           </div>
         </div>
       )}
 
+      {/* Live — résultat de la soumission */}
+      {liveStatus && (
+        <div style={{
+          marginBottom: 16, padding: 14, borderRadius: 10,
+          background: liveStatus.startsWith('✅') ? 'rgba(63,185,80,0.08)' : 'rgba(248,81,73,0.08)',
+          border: `1px solid ${liveStatus.startsWith('✅') ? 'rgba(63,185,80,0.3)' : 'rgba(248,81,73,0.3)'}`,
+          fontWeight: 600,
+          color: liveStatus.startsWith('✅') ? 'var(--accent-green)' : 'var(--accent-red)',
+        }}>
+          {liveStatus}
+        </div>
+      )}
+
+      {/* Placeholder vide */}
+      {entries.length === 0 && !running && (
+        <div className="card" style={{ textAlign: 'center', padding: 48 }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>🔬</div>
+          <div style={{ fontWeight: 700, marginBottom: 8 }}>Pipeline prêt</div>
+          <div className="muted" style={{ maxWidth: 420, margin: '0 auto' }}>
+            Sélectionne tes cryptos, choisis le mode <strong>Paper</strong> ou <strong>Live</strong>,
+            puis clique sur le bouton de lancement pour voir la validation des 7 étapes en direct.
+          </div>
+        </div>
+      )}
+
+      {/* Résultats */}
       {entries.length > 0 && (
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, padding: '4px 16px' }}>
@@ -428,14 +551,15 @@ export function PipelinePage() {
         </div>
       )}
 
+      {/* Légende */}
       <div style={{ marginTop: 20, padding: 14, borderRadius: 8, background: 'var(--surface2)', fontSize: 12 }}>
         <div style={{ fontWeight: 700, marginBottom: 6 }}>Légende des étapes</div>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
           {[
-            ['○', 'var(--text-muted)', 'En attente'],
-            ['◉', '#f0b429', 'Analyse en cours'],
+            ['○', 'var(--text-muted)',    'En attente'],
+            ['◉', '#f0b429',             'Analyse en cours'],
             ['✓', 'var(--accent-green)', 'Passé'],
-            ['✗', 'var(--accent-red)', 'Échoué (stop)'],
+            ['✗', 'var(--accent-red)',   'Échoué (stop)'],
           ].map(([icon, color, label]) => (
             <div key={label as string} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <span style={{ color: color as string, fontWeight: 700 }}>{icon}</span>
@@ -444,7 +568,8 @@ export function PipelinePage() {
           ))}
         </div>
         <div style={{ marginTop: 8, color: 'var(--text-muted)' }}>
-          Survolez une étape pour voir le détail. Un setup est validé seulement si les 7 étapes passent dans l'ordre. RSI / MACD / EMA : jamais des déclencheurs, sessions et weekend : filtres uniquement.
+          Survole une étape pour voir le détail. 7 étapes obligatoires dans l'ordre.
+          RSI / MACD / EMA : jamais déclencheurs, sessions et weekend : filtres uniquement.
         </div>
       </div>
     </section>
