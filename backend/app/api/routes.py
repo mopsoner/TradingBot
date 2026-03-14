@@ -1715,7 +1715,7 @@ Réponds UNIQUEMENT avec le JSON valide, rien d'autre."""
 
     try:
         response = client.chat.completions.create(
-            model="codex-mini-latest",
+            model="gpt-4o",
             max_completion_tokens=2000,
             messages=[
                 {"role": "system", "content": "Tu es un expert en trading algorithmique. Réponds uniquement en JSON valide."},
@@ -1829,7 +1829,7 @@ Format attendu (JSON valide UNIQUEMENT, aucun texte avant ou après):
         from openai import OpenAI
         client = OpenAI(base_url=base_url, api_key=api_key)
         response = client.chat.completions.create(
-            model="codex-mini-latest",
+            model="gpt-4o",
             max_completion_tokens=2000,
             messages=[
                 {"role": "system", "content": "Tu es un expert en trading algorithmique SMC/Wyckoff. Réponds UNIQUEMENT en JSON valide, aucune explication en dehors du JSON."},
@@ -2008,7 +2008,7 @@ Réponds UNIQUEMENT en JSON valide:
 }}"""
 
             response = client.chat.completions.create(
-                model="codex-mini-latest",
+                model="gpt-4o",
                 max_completion_tokens=2000,
                 messages=[
                     {"role": "system", "content": "Tu es un expert en trading algorithmique SMC/Wyckoff. Réponds UNIQUEMENT en JSON valide."},
