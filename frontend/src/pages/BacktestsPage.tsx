@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
 import type { BacktestResult } from '../services/api';
@@ -965,7 +965,30 @@ const STEP_LABELS: Record<string, string> = {
   fib_match: 'Fib Retracement',
 };
 
-function WalkForwardPanel({ profiles, onClose }: { profiles: Array<Record<string, unknown>>; onClose: () => void }) {
+
+export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../types').AdminPage) => void }) {
+  const { data, reload } = useApi(() => api.backtests());
+  const { data: profiles, reload: reloadProfiles } = useApi(() => api.strategyProfiles());
+  const { data: loadedData } = useApi(() => api.loadedSymbols());
+
+  const loadedEntries = loadedData ?? [];
+  const hasData = loadedEntries.length > 0;
+
+  const [symbol, setSymbol]       = useState('');
+  const [timeframe, setTimeframe] = useState('1h');
+  const [profileId, setProfileId] = useState<number | null>(null);
+  const [report, setReport]       = useState<Record<string, unknown> | null>(null);
+  const [lastResult, setLastResult] = useState<BacktestResult | null>(null);
+  const [status, setStatus]       = useState('');
+  const [running, setRunning]     = useState(false);
+  const [compareIds, setCompareIds] = useState<[number | null, number | null]>([null, null]);
+  const [optimizeTarget, setOptimizeTarget] = useState<BacktestResult | null>(null);
+  const [optimizeIds, setOptimizeIds] = useState<Set<number>>(new Set());
+  const [showMultiOptimize, setShowMultiOptimize] = useState(false);
+  const [showWorkshop, setShowWorkshop] = useState(false);
+  const [leftTab, setLeftTab] = useState<'sim' | 'real'>('sim');
+  const [expandedRow, setExpandedRow] = useState<number | null>(null);
+
   const [wfSymbol, setWfSymbol] = useState('ETHUSDT');
   const [wfYears, setWfYears] = useState(4);
   const [wfTimeframe, setWfTimeframe] = useState('1h');
@@ -973,9 +996,9 @@ function WalkForwardPanel({ profiles, onClose }: { profiles: Array<Record<string
   const [wfRunning, setWfRunning] = useState(false);
   const [wfResult, setWfResult] = useState<WFResult | null>(null);
   const [wfError, setWfError] = useState('');
-  const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
-  const [sortCol, setSortCol] = useState<'timestamp' | 'direction' | 'result' | 'r_multiple'>('timestamp');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [wfExpandedIdx, setWfExpandedIdx] = useState<number | null>(null);
+  const [wfSortCol, setWfSortCol] = useState<'timestamp' | 'direction' | 'result' | 'r_multiple'>('timestamp');
+  const [wfSortDir, setWfSortDir] = useState<'asc' | 'desc'>('asc');
 
   const runWalkForward = async () => {
     setWfRunning(true);
@@ -1000,293 +1023,30 @@ function WalkForwardPanel({ profiles, onClose }: { profiles: Array<Record<string
     }
   };
 
-  const sortedSignals = useMemo(() => {
+  const wfSortedSignals = useMemo(() => {
     if (!wfResult) return [];
     const sigs = [...wfResult.signals];
     sigs.sort((a, b) => {
       let cmp = 0;
-      if (sortCol === 'timestamp') cmp = a.timestamp.localeCompare(b.timestamp);
-      else if (sortCol === 'direction') cmp = a.direction.localeCompare(b.direction);
-      else if (sortCol === 'result') cmp = a.result.localeCompare(b.result);
-      else if (sortCol === 'r_multiple') cmp = a.r_multiple - b.r_multiple;
-      return sortDir === 'asc' ? cmp : -cmp;
+      if (wfSortCol === 'timestamp') cmp = a.timestamp.localeCompare(b.timestamp);
+      else if (wfSortCol === 'direction') cmp = a.direction.localeCompare(b.direction);
+      else if (wfSortCol === 'result') cmp = a.result.localeCompare(b.result);
+      else if (wfSortCol === 'r_multiple') cmp = a.r_multiple - b.r_multiple;
+      return wfSortDir === 'asc' ? cmp : -cmp;
     });
     return sigs;
-  }, [wfResult, sortCol, sortDir]);
+  }, [wfResult, wfSortCol, wfSortDir]);
 
-  const toggleSort = (col: typeof sortCol) => {
-    if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
-    else { setSortCol(col); setSortDir('asc'); }
+  const toggleWfSort = (col: typeof wfSortCol) => {
+    if (wfSortCol === col) setWfSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setWfSortCol(col); setWfSortDir('asc'); }
   };
 
-  const SortTh = ({ col, children }: { col: typeof sortCol; children: React.ReactNode }) => (
-    <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(col)}>
-      {children} {sortCol === col ? (sortDir === 'asc' ? '▲' : '▼') : ''}
+  const WfSortTh = ({ col, children }: { col: typeof wfSortCol; children: React.ReactNode }) => (
+    <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleWfSort(col)}>
+      {children} {wfSortCol === col ? (wfSortDir === 'asc' ? '▲' : '▼') : ''}
     </th>
   );
-
-  return (
-    <div className="card" style={{
-      marginTop: 20,
-      border: '1px solid rgba(16,185,129,0.4)',
-      background: 'linear-gradient(135deg, rgba(16,185,129,0.06) 0%, var(--surface) 100%)',
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
-        <div>
-          <h3 style={{ margin: 0, color: '#34d399' }}>
-            Test sur donnees reelles (Walk-Forward)
-          </h3>
-          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-            Telecharge des donnees OHLCV reelles via yfinance, analyse chaque fenetre avec le moteur SMC/Wyckoff 7 etapes, et simule les trades en paper.
-          </div>
-        </div>
-        <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={onClose}>X Fermer</button>
-      </div>
-
-      {!wfResult && !wfRunning && (
-        <>
-          <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-            <div className="form-group" style={{ flex: 1, margin: 0, minWidth: 140 }}>
-              <label style={{ fontSize: 11 }}>Symbole</label>
-              <select value={wfSymbol} onChange={e => setWfSymbol(e.target.value)} style={{ fontSize: 13 }}>
-                {WF_SYMBOLS.map(s => <option key={s} value={s}>{fmtSym(s)}</option>)}
-              </select>
-            </div>
-            <div className="form-group" style={{ flex: 1, margin: 0, minWidth: 120 }}>
-              <label style={{ fontSize: 11 }}>Duree</label>
-              <select value={wfYears} onChange={e => setWfYears(Number(e.target.value))} style={{ fontSize: 13 }}>
-                <option value={1}>1 an</option>
-                <option value={2}>2 ans</option>
-                <option value={3}>3 ans</option>
-                <option value={4}>4 ans</option>
-              </select>
-            </div>
-            <div className="form-group" style={{ flex: 1, margin: 0, minWidth: 100 }}>
-              <label style={{ fontSize: 11 }}>Timeframe</label>
-              <select value={wfTimeframe} onChange={e => setWfTimeframe(e.target.value)} style={{ fontSize: 13 }}>
-                <option value="15m">15m</option>
-                <option value="1h">1H</option>
-                <option value="4h">4H</option>
-                <option value="1d">1D</option>
-              </select>
-            </div>
-            <div className="form-group" style={{ flex: 1, margin: 0, minWidth: 140 }}>
-              <label style={{ fontSize: 11 }}>Profil strategie</label>
-              <select value={wfProfileId ?? ''} onChange={e => setWfProfileId(e.target.value ? Number(e.target.value) : null)} style={{ fontSize: 13 }}>
-                <option value="">SMC-Wyckoff (defaut)</option>
-                {profiles.map(p => <option key={String(p.id)} value={String(p.id)}>{String(p.name)}</option>)}
-              </select>
-            </div>
-          </div>
-
-          <div style={{ padding: 10, borderRadius: 6, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', fontSize: 12, marginBottom: 16, color: 'var(--text-muted)' }}>
-            Le calcul peut prendre 30-60 secondes selon la quantite de donnees. Les donnees sont telechargees en temps reel depuis yfinance (pas d'acces Binance requis).
-            {wfTimeframe === '15m' && (
-              <span style={{ color: '#fbbf24', display: 'block', marginTop: 4 }}>
-                Yahoo Finance limite les donnees 15m a ~60 jours. La periode reelle sera indiquee dans les resultats.
-              </span>
-            )}
-            {(wfTimeframe === '1h' || wfTimeframe === '4h') && wfYears > 2 && (
-              <span style={{ color: '#fbbf24', display: 'block', marginTop: 4 }}>
-                Yahoo Finance limite les donnees {wfTimeframe} a ~730 jours (~2 ans). Pour 4 ans complets, utilisez le timeframe 1D.
-              </span>
-            )}
-          </div>
-
-          {wfError && (
-            <div style={{ marginBottom: 12, padding: 10, borderRadius: 6, background: 'rgba(248,81,73,0.1)', color: 'var(--accent-red)', fontSize: 13 }}>
-              {wfError}
-            </div>
-          )}
-
-          <button
-            className="btn btn-primary"
-            onClick={runWalkForward}
-            style={{
-              width: '100%', fontSize: 15, padding: '14px 0', fontWeight: 700,
-              background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-              borderColor: '#10b981',
-            }}
-          >
-            Lancer le test reel {wfYears} an{wfYears > 1 ? 's' : ''}
-          </button>
-        </>
-      )}
-
-      {wfRunning && (
-        <div style={{ textAlign: 'center', padding: 48 }}>
-          <div style={{ fontSize: 48, marginBottom: 12 }}>📊</div>
-          <div style={{ fontWeight: 700, marginBottom: 6 }}>Telechargement et analyse en cours...</div>
-          <div className="muted" style={{ fontSize: 13 }}>
-            Telechargement des donnees {fmtSym(wfSymbol)} {wfTimeframe} sur {wfYears} an{wfYears > 1 ? 's' : ''}, puis detection SMC/Wyckoff sur chaque fenetre...
-          </div>
-          <div style={{ marginTop: 16, height: 4, background: 'var(--surface2)', borderRadius: 2, overflow: 'hidden' }}>
-            <div style={{
-              height: '100%', borderRadius: 2,
-              background: 'linear-gradient(90deg, #10b981, #059669)',
-              animation: 'pulse 2s ease-in-out infinite', width: '70%',
-            }} />
-          </div>
-        </div>
-      )}
-
-      {wfResult && (
-        <div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 20 }}>
-            {([
-              ['Signaux trouves', wfResult.metrics.total_signals, '#34d399'],
-              ['Win rate', pct(wfResult.metrics.win_rate), wfResult.metrics.win_rate >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)'],
-              ['Profit factor', num(wfResult.metrics.profit_factor), wfResult.metrics.profit_factor >= 1.2 ? 'var(--accent-green)' : 'var(--accent-yellow)'],
-              ['Max drawdown', pct(wfResult.metrics.max_drawdown), wfResult.metrics.max_drawdown <= 0.1 ? 'var(--accent-green)' : 'var(--accent-red)'],
-            ] as [string, string | number, string][]).map(([label, value, color]) => (
-              <div key={label} style={{ padding: 14, borderRadius: 8, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', textAlign: 'center' }}>
-                <div style={{ fontSize: 22, fontWeight: 800, color }}>{value}</div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{label}</div>
-              </div>
-            ))}
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 20 }}>
-            {([
-              ['Trades gagnants', wfResult.metrics.wins, 'var(--accent-green)'],
-              ['Trades perdants', wfResult.metrics.losses, 'var(--accent-red)'],
-              ['En cours', wfResult.metrics.pending, 'var(--accent-yellow)'],
-              ['Total R', wfResult.metrics.total_r + 'R', wfResult.metrics.total_r >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'],
-            ] as [string, string | number, string][]).map(([label, value, color]) => (
-              <div key={label} style={{ padding: 10, borderRadius: 8, background: 'var(--surface2)', textAlign: 'center' }}>
-                <div style={{ fontSize: 18, fontWeight: 700, color }}>{value}</div>
-                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{label}</div>
-              </div>
-            ))}
-          </div>
-
-          <div style={{ padding: 10, borderRadius: 6, background: 'var(--surface2)', fontSize: 12, marginBottom: 16, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-            <span className="muted">Bougies : <strong style={{ color: 'var(--text)' }}>{wfResult.candles_downloaded.toLocaleString()}</strong></span>
-            <span className="muted">Periode : <strong style={{ color: 'var(--text)' }}>{wfResult.period_start?.slice(0, 10)}</strong> → <strong style={{ color: 'var(--text)' }}>{wfResult.period_end?.slice(0, 10)}</strong></span>
-          </div>
-
-          {sortedSignals.length > 0 && (
-            <div style={{ maxHeight: 500, overflowY: 'auto', marginBottom: 16 }}>
-              <table>
-                <thead>
-                  <tr>
-                    <SortTh col="timestamp">Date</SortTh>
-                    <SortTh col="direction">Direction</SortTh>
-                    <th>Entree</th>
-                    <th>TP</th>
-                    <th>SL</th>
-                    <SortTh col="result">Resultat</SortTh>
-                    <SortTh col="r_multiple">R</SortTh>
-                    <th>Etapes</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedSignals.map((sig, idx) => {
-                    const isExpanded = expandedIdx === idx;
-                    const resultColor = sig.result === 'TP' ? 'var(--accent-green)' : sig.result === 'SL' ? 'var(--accent-red)' : 'var(--accent-yellow)';
-                    const dirColor = sig.direction === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)';
-                    const stepKeys = ['liquidity_zone', 'sweep', 'displacement', 'bos', 'expansion', 'fib_match'];
-                    const wyckoff = sig.steps.spring === true || sig.steps.utad === true;
-                    const stepsValid = stepKeys.filter(k => sig.steps[k] === true).length + (wyckoff ? 1 : 0);
-                    return (
-                      <tr key={idx} style={{ cursor: 'pointer', background: isExpanded ? 'rgba(16,185,129,0.08)' : 'transparent' }} onClick={() => setExpandedIdx(isExpanded ? null : idx)}>
-                        <td style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{sig.timestamp.slice(0, 16).replace('T', ' ')}</td>
-                        <td><span style={{ fontWeight: 700, color: dirColor }}>{sig.direction}</span></td>
-                        <td style={{ fontFamily: 'monospace', fontSize: 12 }}>${sig.entry_price.toLocaleString()}</td>
-                        <td style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--accent-green)' }}>${sig.tp_price.toLocaleString()}</td>
-                        <td style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--accent-red)' }}>${sig.sl_price.toLocaleString()}</td>
-                        <td><span style={{ fontWeight: 700, color: resultColor }}>{sig.result === 'TP' ? 'TP' : sig.result === 'SL' ? 'SL' : 'En cours'}</span></td>
-                        <td style={{ fontWeight: 700, color: sig.r_multiple >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>{sig.r_multiple > 0 ? '+' : ''}{sig.r_multiple}R</td>
-                        <td>
-                          <span style={{ fontSize: 11, padding: '2px 6px', borderRadius: 4, background: stepsValid >= 7 ? 'rgba(63,185,80,0.15)' : 'rgba(255,165,0,0.15)', color: stepsValid >= 7 ? 'var(--accent-green)' : 'var(--accent-yellow)' }}>
-                            {stepsValid}/7 {isExpanded ? '▲' : '▼'}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {expandedIdx !== null && sortedSignals[expandedIdx] && (
-            <div style={{ padding: 14, borderRadius: 8, background: 'var(--surface2)', border: '1px solid rgba(16,185,129,0.2)', marginBottom: 16 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10, color: '#34d399' }}>
-                Etapes de detection — Signal du {sortedSignals[expandedIdx].timestamp.slice(0, 16).replace('T', ' ')}
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 8 }}>
-                {Object.entries(STEP_LABELS).map(([key, label]) => {
-                  const val = sortedSignals[expandedIdx].steps[key];
-                  const passed = val === true;
-                  return (
-                    <div key={key} style={{
-                      padding: '8px 10px', borderRadius: 6,
-                      background: passed ? 'rgba(63,185,80,0.1)' : 'rgba(248,81,73,0.06)',
-                      border: `1px solid ${passed ? 'rgba(63,185,80,0.3)' : 'rgba(248,81,73,0.2)'}`,
-                    }}>
-                      <span style={{ fontSize: 13, marginRight: 6 }}>{passed ? 'V' : 'X'}</span>
-                      <span style={{ fontSize: 12, color: passed ? 'var(--accent-green)' : 'var(--accent-red)' }}>{label}</span>
-                    </div>
-                  );
-                })}
-                {sortedSignals[expandedIdx].steps.atr !== undefined && (
-                  <div style={{ padding: '8px 10px', borderRadius: 6, background: 'var(--surface)', border: '1px solid var(--border)' }}>
-                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>ATR: </span>
-                    <span style={{ fontSize: 12, fontWeight: 700 }}>{Number(sortedSignals[expandedIdx].steps.atr).toFixed(2)}</span>
-                  </div>
-                )}
-                {sortedSignals[expandedIdx].steps.fib_retracement !== undefined && (
-                  <div style={{ padding: '8px 10px', borderRadius: 6, background: 'var(--surface)', border: '1px solid var(--border)' }}>
-                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Fib: </span>
-                    <span style={{ fontSize: 12, fontWeight: 700 }}>{String(sortedSignals[expandedIdx].steps.fib_retracement)}</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {sortedSignals.length === 0 && (
-            <div style={{ textAlign: 'center', padding: 32, color: 'var(--text-muted)' }}>
-              <div style={{ fontSize: 28, marginBottom: 8 }}>📭</div>
-              <p>Aucun signal SMC/Wyckoff detecte sur cette periode. Essayez un autre timeframe ou une duree plus longue.</p>
-            </div>
-          )}
-
-          <button
-            className="btn btn-secondary"
-            style={{ width: '100%', marginTop: 8 }}
-            onClick={() => { setWfResult(null); setExpandedIdx(null); }}
-          >
-            Nouvelle analyse
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../types').AdminPage) => void }) {
-  const { data, reload } = useApi(() => api.backtests());
-  const { data: profiles, reload: reloadProfiles } = useApi(() => api.strategyProfiles());
-  const { data: loadedData } = useApi(() => api.loadedSymbols());
-
-  const loadedEntries = loadedData ?? [];
-  const hasData = loadedEntries.length > 0;
-
-  const [symbol, setSymbol]       = useState('');
-  const [timeframe, setTimeframe] = useState('1h');
-  const [profileId, setProfileId] = useState<number | null>(null);
-  const [report, setReport]       = useState<Record<string, unknown> | null>(null);
-  const [lastResult, setLastResult] = useState<BacktestResult | null>(null);
-  const [status, setStatus]       = useState('');
-  const [running, setRunning]     = useState(false);
-  const [compareIds, setCompareIds] = useState<[number | null, number | null]>([null, null]);
-  const [optimizeTarget, setOptimizeTarget] = useState<BacktestResult | null>(null);
-  const [optimizeIds, setOptimizeIds] = useState<Set<number>>(new Set());
-  const [showMultiOptimize, setShowMultiOptimize] = useState(false);
-  const [showWorkshop, setShowWorkshop] = useState(false);
-  const [showWalkForward, setShowWalkForward] = useState(false);
 
   // ── Derived from DB-loaded candle data ────────────────────────────────────
   const availableSymbols = useMemo(() => loadedEntries.map(e => e.symbol), [loadedEntries]);
@@ -1390,22 +1150,7 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
         <div style={{ display: 'flex', gap: 8 }}>
           <button
             className="btn btn-primary"
-            onClick={() => { setShowWalkForward(v => !v); if (!showWalkForward) setShowWorkshop(false); }}
-            style={{
-              background: showWalkForward
-                ? 'rgba(16,185,129,0.2)'
-                : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-              borderColor: '#10b981',
-              fontSize: 13, padding: '8px 18px', fontWeight: 700,
-              display: 'flex', alignItems: 'center', gap: 8,
-            }}
-          >
-            <span>📊</span>
-            {showWalkForward ? 'Fermer' : 'Test reel 4 ans'}
-          </button>
-          <button
-            className="btn btn-primary"
-            onClick={() => { setShowWorkshop(v => !v); if (!showWorkshop) setShowWalkForward(false); }}
+            onClick={() => setShowWorkshop(v => !v)}
             style={{
               background: showWorkshop
                 ? 'rgba(139,92,246,0.2)'
@@ -1460,121 +1205,367 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
 
       <div className="grid-2">
         <div className="card">
-          <h3>Lancer un backtest</h3>
+          <div style={{ display: 'flex', gap: 0, marginBottom: 16, borderBottom: '1px solid var(--border)' }}>
+            {([
+              ['sim', 'Backtest simulé'],
+              ['real', 'Test réel (yfinance)'],
+            ] as ['sim' | 'real', string][]).map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setLeftTab(key)}
+                style={{
+                  flex: 1, padding: '10px 0', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                  background: 'transparent', border: 'none',
+                  color: leftTab === key ? (key === 'real' ? '#34d399' : 'var(--accent)') : 'var(--text-muted)',
+                  borderBottom: leftTab === key ? `2px solid ${key === 'real' ? '#34d399' : 'var(--accent)'}` : '2px solid transparent',
+                  transition: 'all 0.2s',
+                }}
+              >
+                {key === 'real' ? '📊 ' : '▶ '}{label}
+              </button>
+            ))}
+          </div>
 
-          {!hasData && loadedData !== undefined && (
-            <div style={{
-              background: 'rgba(255,165,0,0.10)', border: '1px solid rgba(255,165,0,0.4)',
-              borderRadius: 8, padding: '14px 16px', marginBottom: 16,
-            }}>
-              <div style={{ fontWeight: 700, color: 'var(--accent-yellow)', marginBottom: 6 }}>
-                Aucune donnée chargée en base
-              </div>
-              <div className="muted" style={{ fontSize: 13, marginBottom: 12 }}>
-                Charge d'abord des bougies pour au moins une crypto avant de lancer un backtest.
-              </div>
-              {onNavigate && (
-                <button
-                  className="btn btn-primary"
-                  style={{ fontSize: 12 }}
-                  onClick={() => onNavigate('Données de marché')}
-                >
-                  Aller charger des données →
-                </button>
-              )}
-            </div>
-          )}
-
-          {hasData && (
+          {leftTab === 'sim' && (
             <>
-              <div className="form-group">
-                <label>Crypto ({availableSymbols.length} disponibles en base)</label>
-                <select value={symbol} onChange={e => setSymbol(e.target.value)}>
-                  {loadedEntries.map(e => {
-                    const totalCandles = e.total;
-                    const tfs = Object.keys(e.timeframes).sort().join(', ');
-                    return (
-                      <option key={e.symbol} value={e.symbol}>
-                        {fmtSym(e.symbol)} — {totalCandles.toLocaleString()} bougies ({tfs})
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
+              {!hasData && loadedData !== undefined && (
+                <div style={{
+                  background: 'rgba(255,165,0,0.10)', border: '1px solid rgba(255,165,0,0.4)',
+                  borderRadius: 8, padding: '14px 16px', marginBottom: 16,
+                }}>
+                  <div style={{ fontWeight: 700, color: 'var(--accent-yellow)', marginBottom: 6 }}>
+                    Aucune donnée chargée en base
+                  </div>
+                  <div className="muted" style={{ fontSize: 13, marginBottom: 12 }}>
+                    Charge d'abord des bougies pour au moins une crypto avant de lancer un backtest.
+                  </div>
+                  {onNavigate && (
+                    <button
+                      className="btn btn-primary"
+                      style={{ fontSize: 12 }}
+                      onClick={() => onNavigate('Données de marché')}
+                    >
+                      Aller charger des données →
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {hasData && (
+                <>
+                  <div className="form-group">
+                    <label>Crypto ({availableSymbols.length} disponibles en base)</label>
+                    <select value={symbol} onChange={e => setSymbol(e.target.value)}>
+                      {loadedEntries.map(e => {
+                        const totalCandles = e.total;
+                        const tfs = Object.keys(e.timeframes).sort().join(', ');
+                        return (
+                          <option key={e.symbol} value={e.symbol}>
+                            {fmtSym(e.symbol)} — {totalCandles.toLocaleString()} bougies ({tfs})
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label>
+                      <Tooltip text="Seuls les timeframes pour lesquels des données sont chargées sont affichés.">
+                        Timeframe
+                      </Tooltip>
+                    </label>
+                    <select value={timeframe} onChange={e => setTimeframe(e.target.value)}>
+                      {availableTimeframes.map(tf => {
+                        const entry = loadedEntries.find(e => e.symbol === symbol);
+                        const count = entry?.timeframes[tf] ?? 0;
+                        return (
+                          <option key={tf} value={tf}>{tf} — {count.toLocaleString()} bougies</option>
+                        );
+                      })}
+                    </select>
+                  </div>
+                </>
+              )}
+
+              {!hasData && loadedData === undefined && (
+                <div className="muted" style={{ fontSize: 13, marginBottom: 12 }}>Chargement…</div>
+              )}
               <div className="form-group">
                 <label>
-                  <Tooltip text="Seuls les timeframes pour lesquels des données sont chargées sont affichés.">
-                    Timeframe
+                  <Tooltip text="Le profil stratégie contient tous les paramètres de votre système (Spring, UTAD, BOS, Fib, RSI, Volume). Créez des profils dans la page Stratégie.">
+                    Profil stratégie
                   </Tooltip>
                 </label>
-                <select value={timeframe} onChange={e => setTimeframe(e.target.value)}>
-                  {availableTimeframes.map(tf => {
-                    const entry = loadedEntries.find(e => e.symbol === symbol);
-                    const count = entry?.timeframes[tf] ?? 0;
-                    return (
-                      <option key={tf} value={tf}>{tf} — {count.toLocaleString()} bougies</option>
-                    );
-                  })}
+                <select value={profileId ?? ''} onChange={e => setProfileId(e.target.value ? Number(e.target.value) : null)}>
+                  <option value="">default-smc</option>
+                  {(profiles?.rows as Array<Record<string, unknown>> | undefined)?.map(p => (
+                    <option key={String(p.id)} value={String(p.id)}>{String(p.name)}</option>
+                  ))}
                 </select>
               </div>
+              <button className="btn btn-primary" onClick={runBacktest} disabled={running} style={{ width: '100%' }}>
+                {running ? 'Calcul en cours…' : '▶ Lancer le backtest'}
+              </button>
+              {status && (
+                <div style={{ marginTop: 12, padding: 10, borderRadius: 6, background: 'var(--surface2)', fontSize: 13 }}>
+                  {status}
+                </div>
+              )}
+
+              {report && (
+                <div style={{ marginTop: 16 }}>
+                  <h3>Résultats</h3>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                    {([
+                      ['Win rate',      pct(Number(report.win_rate)),      'Trades gagnants / total trades'],
+                      ['Profit factor', num(Number(report.profit_factor)), 'Gains bruts / pertes brutes (>1.2 = rentable)'],
+                      ['Drawdown',      pct(Number(report.drawdown)),      'Perte max depuis un sommet (moins = mieux)'],
+                      ['Expectancy',    num(Number(report.expectancy), 4), 'Gain moyen par trade en unités de risque (R)'],
+                      ['R multiple',    num(Number(report.r_multiple)) + 'R', 'Rendement total exprimé en multiples du risque initial'],
+                      ['Stratégie',     String(report.strategy_version),  'Profil stratégie utilisé pour ce backtest'],
+                    ] as [string, string, string][]).map(([label, value, tip]) => (
+                      <div key={label} style={{ padding: '8px 10px', background: 'var(--surface2)', borderRadius: 6 }}>
+                        <div style={{ fontSize: 11, opacity: 0.6, marginBottom: 2 }}>
+                          <Tooltip text={tip}>{label}</Tooltip>
+                        </div>
+                        <div style={{ fontWeight: 700, fontSize: 15 }}>{value}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {lastResult && (
+                    <button
+                      className="btn btn-secondary"
+                      style={{ width: '100%', marginTop: 12, borderColor: 'rgba(88,166,255,0.4)', color: 'var(--accent)' }}
+                      onClick={() => setOptimizeTarget(lastResult)}
+                    >
+                      🤖 Optimiser cette stratégie avec l'IA
+                    </button>
+                  )}
+                </div>
+              )}
             </>
           )}
 
-          {!hasData && loadedData === undefined && (
-            <div className="muted" style={{ fontSize: 13, marginBottom: 12 }}>Chargement…</div>
-          )}
-          <div className="form-group">
-            <label>
-              <Tooltip text="Le profil stratégie contient tous les paramètres de votre système (Spring, UTAD, BOS, Fib, RSI, Volume). Créez des profils dans la page Stratégie.">
-                Profil stratégie
-              </Tooltip>
-            </label>
-            <select value={profileId ?? ''} onChange={e => setProfileId(e.target.value ? Number(e.target.value) : null)}>
-              <option value="">default-smc</option>
-              {(profiles?.rows as Array<Record<string, unknown>> | undefined)?.map(p => (
-                <option key={String(p.id)} value={String(p.id)}>{String(p.name)}</option>
-              ))}
-            </select>
-          </div>
-          <button className="btn btn-primary" onClick={runBacktest} disabled={running} style={{ width: '100%' }}>
-            {running ? 'Calcul en cours…' : '▶ Lancer le backtest'}
-          </button>
-          {status && (
-            <div style={{ marginTop: 12, padding: 10, borderRadius: 6, background: 'var(--surface2)', fontSize: 13 }}>
-              {status}
-            </div>
-          )}
-
-          {report && (
-            <div style={{ marginTop: 16 }}>
-              <h3>Résultats</h3>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                {([
-                  ['Win rate',      pct(Number(report.win_rate)),      'Trades gagnants / total trades'],
-                  ['Profit factor', num(Number(report.profit_factor)), 'Gains bruts / pertes brutes (>1.2 = rentable)'],
-                  ['Drawdown',      pct(Number(report.drawdown)),      'Perte max depuis un sommet (moins = mieux)'],
-                  ['Expectancy',    num(Number(report.expectancy), 4), 'Gain moyen par trade en unités de risque (R)'],
-                  ['R multiple',    num(Number(report.r_multiple)) + 'R', 'Rendement total exprimé en multiples du risque initial'],
-                  ['Stratégie',     String(report.strategy_version),  'Profil stratégie utilisé pour ce backtest'],
-                ] as [string, string, string][]).map(([label, value, tip]) => (
-                  <div key={label} style={{ padding: '8px 10px', background: 'var(--surface2)', borderRadius: 6 }}>
-                    <div style={{ fontSize: 11, opacity: 0.6, marginBottom: 2 }}>
-                      <Tooltip text={tip}>{label}</Tooltip>
-                    </div>
-                    <div style={{ fontWeight: 700, fontSize: 15 }}>{value}</div>
+          {leftTab === 'real' && (
+            <>
+              {!wfResult && !wfRunning && (
+                <>
+                  <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+                    Telecharge des donnees OHLCV reelles via yfinance, analyse chaque fenetre avec le moteur SMC/Wyckoff 7 etapes, et simule les trades en paper.
                   </div>
-                ))}
-              </div>
-              {lastResult && (
-                <button
-                  className="btn btn-secondary"
-                  style={{ width: '100%', marginTop: 12, borderColor: 'rgba(88,166,255,0.4)', color: 'var(--accent)' }}
-                  onClick={() => setOptimizeTarget(lastResult)}
-                >
-                  🤖 Optimiser cette stratégie avec l'IA
-                </button>
+                  <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+                    <div className="form-group" style={{ flex: 1, margin: 0, minWidth: 140 }}>
+                      <label style={{ fontSize: 11 }}>Symbole</label>
+                      <select value={wfSymbol} onChange={e => setWfSymbol(e.target.value)} style={{ fontSize: 13 }}>
+                        {WF_SYMBOLS.map(s => <option key={s} value={s}>{fmtSym(s)}</option>)}
+                      </select>
+                    </div>
+                    <div className="form-group" style={{ flex: 1, margin: 0, minWidth: 120 }}>
+                      <label style={{ fontSize: 11 }}>Duree</label>
+                      <select value={wfYears} onChange={e => setWfYears(Number(e.target.value))} style={{ fontSize: 13 }}>
+                        <option value={1}>1 an</option>
+                        <option value={2}>2 ans</option>
+                        <option value={3}>3 ans</option>
+                        <option value={4}>4 ans</option>
+                      </select>
+                    </div>
+                    <div className="form-group" style={{ flex: 1, margin: 0, minWidth: 100 }}>
+                      <label style={{ fontSize: 11 }}>Timeframe</label>
+                      <select value={wfTimeframe} onChange={e => setWfTimeframe(e.target.value)} style={{ fontSize: 13 }}>
+                        <option value="15m">15m</option>
+                        <option value="1h">1H</option>
+                        <option value="4h">4H</option>
+                        <option value="1d">1D</option>
+                      </select>
+                    </div>
+                    <div className="form-group" style={{ flex: 1, margin: 0, minWidth: 140 }}>
+                      <label style={{ fontSize: 11 }}>Profil strategie</label>
+                      <select value={wfProfileId ?? ''} onChange={e => setWfProfileId(e.target.value ? Number(e.target.value) : null)} style={{ fontSize: 13 }}>
+                        <option value="">SMC-Wyckoff (defaut)</option>
+                        {(profiles?.rows as Array<Record<string, unknown>> | undefined)?.map(p => <option key={String(p.id)} value={String(p.id)}>{String(p.name)}</option>)}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div style={{ padding: 10, borderRadius: 6, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', fontSize: 12, marginBottom: 16, color: 'var(--text-muted)' }}>
+                    Le calcul peut prendre 30-60 secondes selon la quantite de donnees.
+                    {wfTimeframe === '15m' && (
+                      <span style={{ color: '#fbbf24', display: 'block', marginTop: 4 }}>
+                        Yahoo Finance limite les donnees 15m a ~60 jours.
+                      </span>
+                    )}
+                    {(wfTimeframe === '1h' || wfTimeframe === '4h') && wfYears > 2 && (
+                      <span style={{ color: '#fbbf24', display: 'block', marginTop: 4 }}>
+                        Yahoo Finance limite les donnees {wfTimeframe} a ~730 jours (~2 ans). Pour 4 ans complets, utilisez 1D.
+                      </span>
+                    )}
+                  </div>
+
+                  {wfError && (
+                    <div style={{ marginBottom: 12, padding: 10, borderRadius: 6, background: 'rgba(248,81,73,0.1)', color: 'var(--accent-red)', fontSize: 13 }}>
+                      {wfError}
+                    </div>
+                  )}
+
+                  <button
+                    className="btn btn-primary"
+                    onClick={runWalkForward}
+                    style={{
+                      width: '100%', fontSize: 14, padding: '12px 0', fontWeight: 700,
+                      background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                      borderColor: '#10b981',
+                    }}
+                  >
+                    Lancer le test reel {wfYears} an{wfYears > 1 ? 's' : ''}
+                  </button>
+                </>
               )}
-            </div>
+
+              {wfRunning && (
+                <div style={{ textAlign: 'center', padding: 48 }}>
+                  <div style={{ fontSize: 48, marginBottom: 12 }}>📊</div>
+                  <div style={{ fontWeight: 700, marginBottom: 6 }}>Telechargement et analyse en cours...</div>
+                  <div className="muted" style={{ fontSize: 13 }}>
+                    {fmtSym(wfSymbol)} {wfTimeframe} sur {wfYears} an{wfYears > 1 ? 's' : ''}...
+                  </div>
+                  <div style={{ marginTop: 16, height: 4, background: 'var(--surface2)', borderRadius: 2, overflow: 'hidden' }}>
+                    <div style={{
+                      height: '100%', borderRadius: 2,
+                      background: 'linear-gradient(90deg, #10b981, #059669)',
+                      animation: 'pulse 2s ease-in-out infinite', width: '70%',
+                    }} />
+                  </div>
+                </div>
+              )}
+
+              {wfResult && (
+                <div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8, marginBottom: 12 }}>
+                    {([
+                      ['Signaux', String(wfResult.metrics.total_signals), '#34d399'],
+                      ['Win rate', pct(wfResult.metrics.win_rate), wfResult.metrics.win_rate >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)'],
+                      ['Profit factor', num(wfResult.metrics.profit_factor), wfResult.metrics.profit_factor >= 1.2 ? 'var(--accent-green)' : 'var(--accent-yellow)'],
+                      ['Max DD', pct(wfResult.metrics.max_drawdown), wfResult.metrics.max_drawdown <= 0.1 ? 'var(--accent-green)' : 'var(--accent-red)'],
+                    ] as [string, string, string][]).map(([label, value, color]) => (
+                      <div key={label} style={{ padding: '8px 10px', borderRadius: 6, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.15)', textAlign: 'center' }}>
+                        <div style={{ fontSize: 18, fontWeight: 800, color }}>{value}</div>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{label}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8, marginBottom: 12 }}>
+                    {([
+                      ['Wins', String(wfResult.metrics.wins), 'var(--accent-green)'],
+                      ['Losses', String(wfResult.metrics.losses), 'var(--accent-red)'],
+                      ['En cours', String(wfResult.metrics.pending), 'var(--accent-yellow)'],
+                      ['Total R', wfResult.metrics.total_r + 'R', wfResult.metrics.total_r >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'],
+                    ] as [string, string, string][]).map(([label, value, color]) => (
+                      <div key={label} style={{ padding: '6px 8px', borderRadius: 6, background: 'var(--surface2)', textAlign: 'center' }}>
+                        <div style={{ fontSize: 15, fontWeight: 700, color }}>{value}</div>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 1 }}>{label}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ padding: 8, borderRadius: 6, background: 'var(--surface2)', fontSize: 11, marginBottom: 12, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                    <span className="muted">Bougies : <strong style={{ color: 'var(--text)' }}>{wfResult.candles_downloaded.toLocaleString()}</strong></span>
+                    <span className="muted">Periode : <strong style={{ color: 'var(--text)' }}>{wfResult.period_start?.slice(0, 10)}</strong> → <strong style={{ color: 'var(--text)' }}>{wfResult.period_end?.slice(0, 10)}</strong></span>
+                  </div>
+
+                  {wfSortedSignals.length > 0 && (
+                    <div style={{ maxHeight: 350, overflowY: 'auto', marginBottom: 12 }}>
+                      <table>
+                        <thead>
+                          <tr>
+                            <WfSortTh col="timestamp">Date</WfSortTh>
+                            <WfSortTh col="direction">Dir</WfSortTh>
+                            <th>Entree</th>
+                            <WfSortTh col="result">Res</WfSortTh>
+                            <WfSortTh col="r_multiple">R</WfSortTh>
+                            <th>Etapes</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {wfSortedSignals.map((sig, idx) => {
+                            const isExpanded = wfExpandedIdx === idx;
+                            const resultColor = sig.result === 'TP' ? 'var(--accent-green)' : sig.result === 'SL' ? 'var(--accent-red)' : 'var(--accent-yellow)';
+                            const dirColor = sig.direction === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)';
+                            const stepKeys = ['liquidity_zone', 'sweep', 'displacement', 'bos', 'expansion', 'fib_match'];
+                            const wyckoff = sig.steps.spring === true || sig.steps.utad === true;
+                            const stepsValid = stepKeys.filter(k => sig.steps[k] === true).length + (wyckoff ? 1 : 0);
+                            return (
+                              <tr key={idx} style={{ cursor: 'pointer', background: isExpanded ? 'rgba(16,185,129,0.08)' : 'transparent' }} onClick={() => setWfExpandedIdx(isExpanded ? null : idx)}>
+                                <td style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{sig.timestamp.slice(0, 10)}</td>
+                                <td><span style={{ fontWeight: 700, color: dirColor, fontSize: 11 }}>{sig.direction}</span></td>
+                                <td style={{ fontFamily: 'monospace', fontSize: 11 }}>${sig.entry_price.toLocaleString()}</td>
+                                <td><span style={{ fontWeight: 700, color: resultColor, fontSize: 11 }}>{sig.result === 'TP' ? 'TP' : sig.result === 'SL' ? 'SL' : 'Open'}</span></td>
+                                <td style={{ fontWeight: 700, fontSize: 11, color: sig.r_multiple >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>{sig.r_multiple > 0 ? '+' : ''}{sig.r_multiple}R</td>
+                                <td>
+                                  <span style={{ fontSize: 10, padding: '2px 5px', borderRadius: 4, background: stepsValid >= 7 ? 'rgba(63,185,80,0.15)' : 'rgba(255,165,0,0.15)', color: stepsValid >= 7 ? 'var(--accent-green)' : 'var(--accent-yellow)' }}>
+                                    {stepsValid}/7 {isExpanded ? '▲' : '▼'}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {wfExpandedIdx !== null && wfSortedSignals[wfExpandedIdx] && (
+                    <div style={{ padding: 12, borderRadius: 8, background: 'var(--surface2)', border: '1px solid rgba(16,185,129,0.2)', marginBottom: 12 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 8, color: '#34d399' }}>
+                        Etapes — {wfSortedSignals[wfExpandedIdx].timestamp.slice(0, 16).replace('T', ' ')}
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 6 }}>
+                        {Object.entries(STEP_LABELS).map(([key, label]) => {
+                          const val = wfSortedSignals[wfExpandedIdx].steps[key];
+                          const passed = val === true;
+                          return (
+                            <div key={key} style={{
+                              padding: '6px 8px', borderRadius: 6,
+                              background: passed ? 'rgba(63,185,80,0.1)' : 'rgba(248,81,73,0.06)',
+                              border: `1px solid ${passed ? 'rgba(63,185,80,0.3)' : 'rgba(248,81,73,0.2)'}`,
+                            }}>
+                              <span style={{ fontSize: 12, marginRight: 4 }}>{passed ? 'V' : 'X'}</span>
+                              <span style={{ fontSize: 11, color: passed ? 'var(--accent-green)' : 'var(--accent-red)' }}>{label}</span>
+                            </div>
+                          );
+                        })}
+                        {wfSortedSignals[wfExpandedIdx].steps.atr !== undefined && (
+                          <div style={{ padding: '6px 8px', borderRadius: 6, background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>ATR: </span>
+                            <span style={{ fontSize: 11, fontWeight: 700 }}>{Number(wfSortedSignals[wfExpandedIdx].steps.atr).toFixed(2)}</span>
+                          </div>
+                        )}
+                        {wfSortedSignals[wfExpandedIdx].steps.fib_retracement !== undefined && (
+                          <div style={{ padding: '6px 8px', borderRadius: 6, background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Fib: </span>
+                            <span style={{ fontSize: 11, fontWeight: 700 }}>{String(wfSortedSignals[wfExpandedIdx].steps.fib_retracement)}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {wfSortedSignals.length === 0 && (
+                    <div style={{ textAlign: 'center', padding: 24, color: 'var(--text-muted)' }}>
+                      <div style={{ fontSize: 28, marginBottom: 8 }}>📭</div>
+                      <p style={{ fontSize: 12 }}>Aucun signal SMC/Wyckoff detecte. Essayez un autre timeframe ou une duree plus longue.</p>
+                    </div>
+                  )}
+
+                  <button
+                    className="btn btn-secondary"
+                    style={{ width: '100%', marginTop: 8 }}
+                    onClick={() => { setWfResult(null); setWfExpandedIdx(null); }}
+                  >
+                    Nouvelle analyse
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
 
@@ -1664,47 +1655,82 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
                     const isSelected = compareIds[0] === r.id || compareIds[1] === r.id;
                     const isA = compareIds[0] === r.id;
                     const isOptimize = optimizeIds.has(r.id);
+                    const isExpanded = expandedRow === r.id;
                     return (
-                      <tr
-                        key={r.id}
-                        style={{
-                          background: isOptimize
-                            ? 'rgba(139,92,246,0.1)'
-                            : isSelected
-                            ? isA ? 'rgba(88,166,255,0.15)' : 'rgba(63,185,80,0.12)'
-                            : optimizeTarget?.id === r.id ? 'rgba(88,166,255,0.08)' : 'transparent',
-                          cursor: 'pointer',
-                        }}
-                        onClick={() => toggleCompare(r.id)}
-                      >
-                        <td onClick={e => e.stopPropagation()}>
-                          <input type="checkbox" checked={isSelected} onChange={() => toggleCompare(r.id)}
-                            style={{ width: 'auto', cursor: 'pointer' }} />
-                        </td>
-                        <td onClick={e => e.stopPropagation()}>
-                          <input
-                            type="checkbox"
-                            checked={isOptimize}
-                            onChange={() => toggleOptimizeId(r.id)}
-                            style={{ width: 'auto', cursor: 'pointer', accentColor: '#7c3aed' }}
-                          />
-                        </td>
-                        <td className="muted">{r.id}</td>
-                        <td><strong style={{ fontSize: 12 }}>{fmtSym(r.symbol)}</strong></td>
-                        <td><span className="tag">{r.timeframe}</span></td>
-                        <td className={r.win_rate >= 0.5 ? 'green' : 'red'}>{pct(r.win_rate)}</td>
-                        <td className={r.profit_factor >= 1.2 ? 'green' : 'yellow'}>{num(r.profit_factor)}</td>
-                        <td className={r.drawdown <= 0.1 ? 'green' : r.drawdown <= 0.2 ? 'yellow' : 'red'}>{pct(r.drawdown)}</td>
-                        <td onClick={e => e.stopPropagation()}>
-                          <button
-                            className="btn btn-secondary"
-                            style={{ fontSize: 10, padding: '2px 6px', opacity: 0.8 }}
-                            onClick={() => setOptimizeTarget(optimizeTarget?.id === r.id ? null : r)}
-                          >
-                            {optimizeTarget?.id === r.id ? '▼' : '🤖'}
-                          </button>
-                        </td>
-                      </tr>
+                      <React.Fragment key={r.id}>
+                        <tr
+                          style={{
+                            background: isExpanded
+                              ? 'rgba(59,130,246,0.12)'
+                              : isOptimize
+                              ? 'rgba(139,92,246,0.1)'
+                              : isSelected
+                              ? isA ? 'rgba(88,166,255,0.15)' : 'rgba(63,185,80,0.12)'
+                              : optimizeTarget?.id === r.id ? 'rgba(88,166,255,0.08)' : 'transparent',
+                            cursor: 'pointer',
+                          }}
+                          onClick={() => setExpandedRow(isExpanded ? null : r.id)}
+                        >
+                          <td onClick={e => e.stopPropagation()}>
+                            <input type="checkbox" checked={isSelected} onChange={() => toggleCompare(r.id)}
+                              style={{ width: 'auto', cursor: 'pointer' }} />
+                          </td>
+                          <td onClick={e => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              checked={isOptimize}
+                              onChange={() => toggleOptimizeId(r.id)}
+                              style={{ width: 'auto', cursor: 'pointer', accentColor: '#7c3aed' }}
+                            />
+                          </td>
+                          <td className="muted">{r.id}</td>
+                          <td><strong style={{ fontSize: 12 }}>{fmtSym(r.symbol)}</strong></td>
+                          <td><span className="tag">{r.timeframe}</span></td>
+                          <td className={r.win_rate >= 0.5 ? 'green' : 'red'}>{pct(r.win_rate)}</td>
+                          <td className={r.profit_factor >= 1.2 ? 'green' : 'yellow'}>{num(r.profit_factor)}</td>
+                          <td className={r.drawdown <= 0.1 ? 'green' : r.drawdown <= 0.2 ? 'yellow' : 'red'}>{pct(r.drawdown)}</td>
+                          <td onClick={e => e.stopPropagation()}>
+                            <button
+                              className="btn btn-secondary"
+                              style={{ fontSize: 10, padding: '2px 6px', opacity: 0.8 }}
+                              onClick={() => setOptimizeTarget(optimizeTarget?.id === r.id ? null : r)}
+                            >
+                              {optimizeTarget?.id === r.id ? '▼' : '🤖'}
+                            </button>
+                          </td>
+                        </tr>
+                        {isExpanded && (
+                          <tr>
+                            <td colSpan={9} style={{ padding: 0, border: 'none' }}>
+                              <div style={{
+                                padding: '12px 14px', background: 'rgba(59,130,246,0.05)',
+                                borderBottom: '1px solid rgba(59,130,246,0.15)',
+                              }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 10 }}>
+                                  {([
+                                    ['Win rate', pct(r.win_rate), r.win_rate >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)'],
+                                    ['Profit factor', num(r.profit_factor), r.profit_factor >= 1.2 ? 'var(--accent-green)' : 'var(--accent-yellow)'],
+                                    ['Drawdown', pct(r.drawdown), r.drawdown <= 0.1 ? 'var(--accent-green)' : 'var(--accent-red)'],
+                                    ['Expectancy', num(r.expectancy, 4), r.expectancy > 0 ? 'var(--accent-green)' : 'var(--accent-red)'],
+                                    ['R multiple', num(r.r_multiple) + 'R', r.r_multiple > 0 ? 'var(--accent-green)' : 'var(--accent-red)'],
+                                    ['Stratégie', String(r.strategy_version || 'default-smc'), 'var(--text)'],
+                                  ] as [string, string, string][]).map(([label, value, color]) => (
+                                    <div key={label} style={{ padding: '6px 8px', borderRadius: 6, background: 'var(--surface2)' }}>
+                                      <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 2 }}>{label}</div>
+                                      <div style={{ fontWeight: 700, fontSize: 13, color }}>{value}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                                <div style={{ display: 'flex', gap: 12, fontSize: 11, color: 'var(--text-muted)', flexWrap: 'wrap' }}>
+                                  <span>Symbole : <strong style={{ color: 'var(--text)' }}>{fmtSym(r.symbol)}</strong></span>
+                                  <span>TF : <strong style={{ color: 'var(--text)' }}>{r.timeframe}</strong></span>
+                                  <span>Date : <strong style={{ color: 'var(--text)' }}>{new Date(r.timestamp).toLocaleString('fr-FR')}</strong></span>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
                     );
                   })}
                 </tbody>
@@ -1719,13 +1745,6 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
           )}
         </div>
       </div>
-
-      {showWalkForward && (
-        <WalkForwardPanel
-          profiles={(profiles?.rows as Array<Record<string, unknown>> | undefined) ?? []}
-          onClose={() => setShowWalkForward(false)}
-        />
-      )}
 
       {showWorkshop && (
         <AiWorkshopPanel
