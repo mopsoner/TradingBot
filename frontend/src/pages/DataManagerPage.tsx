@@ -32,7 +32,7 @@ export function DataManagerPage({ onNavigate }: Props) {
   const quotes = Object.keys(byQuote ?? { USDT: [] });
   const symbols = (byQuote ?? {})[quote] ?? [];
 
-  const [selected, setSelected] = useState<Set<string>>(new Set(['ETHUSDT', 'BTCUSDT']));
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [days, setDays] = useState(365);
   const [loading, setLoading] = useState<string | null>(null);
   const [results, setResults] = useState<Record<string, { tf: string; rows: number }[]>>({});

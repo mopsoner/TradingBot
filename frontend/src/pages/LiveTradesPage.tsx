@@ -27,7 +27,7 @@ export function LiveTradesPage() {
   const startLiveAutotrade = async () => {
     const defaultSymbols = (byQuote?.['USDT'] ?? []).slice(0, 5);
     const res = await api.startBot({
-      symbols: defaultSymbols.length ? defaultSymbols : ['ETHUSDT', 'BTCUSDT'],
+      symbols: defaultSymbols,
       mode: 'live',
       risk_approved: true,
       execute_orders: true,

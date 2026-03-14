@@ -56,14 +56,14 @@ function MarketClocks() {
 export function MarketScannerPage() {
   const { data: byQuote } = useApi(() => api.symbolsByQuote());
   const [quote, setQuote] = useState<string>('USDT');
-  const [selectedSymbols, setSelectedSymbols] = useState<string[]>(['ETHUSDT', 'BTCUSDT']);
+  const [selectedSymbols, setSelectedSymbols] = useState<string[]>([]);
   const [fib, setFib] = useState(0.618);
   const [singleResult, setSingleResult] = useState<Record<string, unknown> | null>(null);
   const [batchResult, setBatchResult] = useState<Record<string, unknown> | null>(null);
   const [scanning, setScanning] = useState(false);
 
   const quotes = Object.keys(byQuote ?? { USDT: [] });
-  const symbolUniverse = (byQuote ?? {})[quote] ?? ['ETHUSDT', 'BTCUSDT'];
+  const symbolUniverse = (byQuote ?? {})[quote] ?? [];
 
   const switchQuote = (q: string) => {
     setQuote(q);

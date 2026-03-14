@@ -374,7 +374,7 @@ class MultiScanRequest(BaseModel):
 
 
 class StartBotRequest(BaseModel):
-    symbols: list[str] = Field(default_factory=lambda: ["ETHUSDT", "BTCUSDT"], min_length=1)
+    symbols: list[str] = Field(min_length=1)
     timeframe: str = "15m"
     mode: str = "paper"
     risk_approved: bool = False
@@ -646,12 +646,22 @@ def backtest_strategy_profile(profile_id: int) -> dict:
         if not profile:
             return {"ok": False, "reason": "profile_not_found"}
 
+        # Pick the richest symbol+timeframe available in DB, fallback to BTCUSDT/1h
+        row = s.exec(
+            select(MarketCandle.symbol, MarketCandle.timeframe, func.count(MarketCandle.id).label("n"))
+            .group_by(MarketCandle.symbol, MarketCandle.timeframe)
+            .order_by(func.count(MarketCandle.id).desc())
+        ).first()
+        bt_symbol = row[0] if row else "BTCUSDT"
+        bt_tf     = row[1] if row else "1h"
+
         candles = s.exec(
             select(MarketCandle)
+            .where(MarketCandle.symbol == bt_symbol, MarketCandle.timeframe == bt_tf)
             .order_by(MarketCandle.timestamp.desc())
             .limit(500)
         ).all()
-        outcomes = _simulate_outcomes(profile, "BTCUSDT", "1h", 30, candles)
+        outcomes = _simulate_outcomes(profile, bt_symbol, bt_tf, 30, candles)
         metrics = backtesting.run(outcomes)
         profile.last_backtest_win_rate = metrics.win_rate
         profile.last_backtest_profit_factor = metrics.profit_factor
@@ -659,7 +669,7 @@ def backtest_strategy_profile(profile_id: int) -> dict:
         profile.approved_for_live = metrics.profit_factor >= config.backtest.approved_pf_threshold and metrics.drawdown <= config.backtest.approved_dd_threshold
         profile.mode = "research"
         bt_result = BacktestResult(
-            symbol="BTCUSDT", timeframe="1h",
+            symbol=bt_symbol, timeframe=bt_tf,
             strategy_version=profile.name,
             win_rate=metrics.win_rate, profit_factor=metrics.profit_factor,
             expectancy=metrics.expectancy, drawdown=metrics.drawdown,
