@@ -71,6 +71,8 @@ export type Dashboard = {
 export const api = {
   dashboard:  ()                              => get<Dashboard>('/api/dashboard'),
   signals:    (params = '')                   => get<{ total: number; rows: Signal[] }>(`/api/signals${params}`),
+  signalsForBacktest: (symbol: string, timeframe: string) =>
+    get<{ total: number; rows: Signal[] }>(`/api/signals?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=50`),
   trades:     (params = '')                   => get<{ total: number; rows: Trade[] }>(`/api/trades${params}`),
   positions:  ()                              => get<Position[]>('/api/positions'),
   backtests:  (params = '')                   => get<{ total: number; rows: BacktestResult[] }>(`/api/backtests${params}`),

@@ -91,6 +91,8 @@ def get_signals(
     limit: int = Query(100, le=500),
     offset: int = 0,
     accepted: Optional[bool] = None,
+    symbol: Optional[str] = None,
+    timeframe: Optional[str] = None,
 ) -> dict:
     with Session(engine) as s:
         q = select(Signal).order_by(Signal.timestamp.desc())
@@ -98,6 +100,12 @@ def get_signals(
         if accepted is not None:
             q = q.where(Signal.accepted == accepted)
             count_q = count_q.where(Signal.accepted == accepted)
+        if symbol is not None:
+            q = q.where(Signal.symbol == symbol)
+            count_q = count_q.where(Signal.symbol == symbol)
+        if timeframe is not None:
+            q = q.where(Signal.timeframe == timeframe)
+            count_q = count_q.where(Signal.timeframe == timeframe)
         total = s.exec(count_q).one()
         rows = s.exec(q.offset(offset).limit(limit)).all()
     return {"total": total, "rows": [r.model_dump() for r in rows]}

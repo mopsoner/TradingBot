@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
-import type { BacktestResult } from '../services/api';
+import type { BacktestResult, Signal } from '../services/api';
 import { TIMEFRAMES } from '../constants';
 import { fmtSym } from '../utils/dateUtils';
 import { Tooltip } from '../components/Tooltip';
@@ -9,6 +9,150 @@ import { useSortable } from '../hooks/useSortable';
 
 function pct(n: number) { return (n * 100).toFixed(1) + '%'; }
 function num(n: number, d = 2) { return n.toFixed(d); }
+
+function qualityBadge(wr: number, pf: number, dd: number): { label: string; color: string; bg: string } {
+  const score = (wr >= 0.55 ? 2 : wr >= 0.45 ? 1 : 0) +
+                (pf >= 1.5 ? 2 : pf >= 1.1 ? 1 : 0) +
+                (dd <= 0.08 ? 2 : dd <= 0.15 ? 1 : 0);
+  if (score >= 5) return { label: 'Excellent', color: '#22c55e', bg: 'rgba(34,197,94,0.12)' };
+  if (score >= 3) return { label: 'Bon',       color: '#3b82f6', bg: 'rgba(59,130,246,0.12)' };
+  if (score >= 2) return { label: 'Attention',  color: '#eab308', bg: 'rgba(234,179,8,0.12)' };
+  return                  { label: 'Insuffisant', color: '#ef4444', bg: 'rgba(239,68,68,0.12)' };
+}
+
+function BacktestDetailPanel({ r }: { r: BacktestResult }) {
+  const [signals, setSignals] = useState<Signal[]>([]);
+  const [loadingSigs, setLoadingSigs] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingSigs(true);
+    api.signalsForBacktest(r.symbol, r.timeframe)
+      .then(res => { if (!cancelled) setSignals(res.rows); })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoadingSigs(false); });
+    return () => { cancelled = true; };
+  }, [r.symbol, r.timeframe]);
+
+  const q = qualityBadge(r.win_rate, r.profit_factor, r.drawdown);
+
+  const metrics: [string, string, string][] = [
+    ['Win Rate',      pct(r.win_rate),                        r.win_rate >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)'],
+    ['Profit Factor', num(r.profit_factor),                   r.profit_factor >= 1.2 ? 'var(--accent-green)' : r.profit_factor >= 1.0 ? 'var(--accent-yellow)' : 'var(--accent-red)'],
+    ['Drawdown',      pct(r.drawdown),                        r.drawdown <= 0.1 ? 'var(--accent-green)' : r.drawdown <= 0.2 ? 'var(--accent-yellow)' : 'var(--accent-red)'],
+    ['Expectancy',    num(r.expectancy, 4),                   r.expectancy > 0 ? 'var(--accent-green)' : 'var(--accent-red)'],
+    ['R Multiple',    num(r.r_multiple) + 'R',                r.r_multiple > 0 ? 'var(--accent-green)' : 'var(--accent-red)'],
+  ];
+
+  return (
+    <div style={{
+      padding: '16px 18px', background: 'rgba(59,130,246,0.04)',
+      borderBottom: '2px solid rgba(59,130,246,0.15)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+        <span style={{
+          padding: '3px 10px', borderRadius: 5, fontSize: 11, fontWeight: 700,
+          background: q.bg, color: q.color, letterSpacing: 0.3,
+        }}>{q.label}</span>
+        <span style={{ fontSize: 13, fontWeight: 700 }}>
+          {fmtSym(r.symbol)} <span className="tag" style={{ marginLeft: 4 }}>{r.timeframe}</span>
+        </span>
+        <span className="muted" style={{ fontSize: 11, marginLeft: 'auto' }}>
+          Stratégie : <strong style={{ color: 'var(--text)' }}>{r.strategy_version || 'default-smc'}</strong>
+          &nbsp;·&nbsp;{new Date(r.timestamp).toLocaleString('fr-FR')}
+        </span>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+        <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 60, textAlign: 'right' }}>Win Rate</span>
+        <div style={{ flex: 1, height: 10, borderRadius: 5, background: 'var(--surface2)', overflow: 'hidden', position: 'relative' }}>
+          <div style={{
+            height: '100%', width: `${Math.min(r.win_rate * 100, 100)}%`, borderRadius: 5,
+            background: r.win_rate >= 0.5
+              ? `linear-gradient(90deg, #22c55e, #4ade80)`
+              : `linear-gradient(90deg, #ef4444, #f87171)`,
+            transition: 'width 0.4s ease',
+          }} />
+          <div style={{
+            position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1,
+            background: 'rgba(255,255,255,0.2)',
+          }} />
+        </div>
+        <span style={{ fontSize: 12, fontWeight: 700, minWidth: 44, color: r.win_rate >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+          {pct(r.win_rate)}
+        </span>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, marginBottom: 16 }}>
+        {metrics.map(([label, value, color]) => (
+          <div key={label} style={{ padding: '8px 10px', borderRadius: 8, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 3, textTransform: 'uppercase', letterSpacing: 0.5 }}>{label}</div>
+            <div style={{ fontWeight: 700, fontSize: 15, color }}>{value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+          <span style={{ fontSize: 13, fontWeight: 700 }}>Signaux liés</span>
+          <span className="muted" style={{ fontSize: 11 }}>{fmtSym(r.symbol)} · {r.timeframe}</span>
+          {!loadingSigs && <span className="muted" style={{ fontSize: 11, marginLeft: 'auto' }}>{signals.length} signal{signals.length !== 1 ? 'x' : ''}</span>}
+        </div>
+
+        {loadingSigs ? (
+          <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>Chargement des signaux…</div>
+        ) : signals.length === 0 ? (
+          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12, background: 'var(--surface2)', borderRadius: 8 }}>
+            Aucun signal détecté pour {fmtSym(r.symbol)} {r.timeframe}
+          </div>
+        ) : (
+          <div style={{ maxHeight: 240, overflowY: 'auto', borderRadius: 8, border: '1px solid var(--border)' }}>
+            <table style={{ marginBottom: 0 }}>
+              <thead>
+                <tr>
+                  <th style={{ fontSize: 10 }}>Date</th>
+                  <th style={{ fontSize: 10 }}>Type</th>
+                  <th style={{ fontSize: 10 }}>Direction</th>
+                  <th style={{ fontSize: 10 }}>Fib Zone</th>
+                  <th style={{ fontSize: 10 }}>Wyckoff</th>
+                  <th style={{ fontSize: 10 }}>Statut</th>
+                </tr>
+              </thead>
+              <tbody>
+                {signals.map(sig => (
+                  <tr key={sig.id}>
+                    <td className="muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{new Date(sig.timestamp).toLocaleString('fr-FR')}</td>
+                    <td style={{ fontSize: 11 }}>{sig.setup_type}</td>
+                    <td>
+                      {sig.direction ? (
+                        <span style={{
+                          fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4,
+                          background: sig.direction === 'LONG' ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
+                          color: sig.direction === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)',
+                        }}>{sig.direction}</span>
+                      ) : <span className="muted" style={{ fontSize: 10 }}>—</span>}
+                    </td>
+                    <td style={{ fontSize: 11, fontFamily: 'monospace' }}>{sig.fib_zone}</td>
+                    <td style={{ fontSize: 11 }}>{sig.wyckoff_event || '—'}</td>
+                    <td>
+                      <span style={{
+                        fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4,
+                        background: sig.accepted ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
+                        color: sig.accepted ? 'var(--accent-green)' : 'var(--accent-red)',
+                      }}>
+                        {sig.accepted ? 'Accepté' : 'Rejeté'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 const IMPACT_COLOR = { haut: 'var(--accent-red)', moyen: 'var(--accent-yellow)', faible: 'var(--accent-green)' } as const;
 
@@ -1703,31 +1847,7 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
                         {isExpanded && (
                           <tr>
                             <td colSpan={9} style={{ padding: 0, border: 'none' }}>
-                              <div style={{
-                                padding: '12px 14px', background: 'rgba(59,130,246,0.05)',
-                                borderBottom: '1px solid rgba(59,130,246,0.15)',
-                              }}>
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 10 }}>
-                                  {([
-                                    ['Win rate', pct(r.win_rate), r.win_rate >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)'],
-                                    ['Profit factor', num(r.profit_factor), r.profit_factor >= 1.2 ? 'var(--accent-green)' : 'var(--accent-yellow)'],
-                                    ['Drawdown', pct(r.drawdown), r.drawdown <= 0.1 ? 'var(--accent-green)' : 'var(--accent-red)'],
-                                    ['Expectancy', num(r.expectancy, 4), r.expectancy > 0 ? 'var(--accent-green)' : 'var(--accent-red)'],
-                                    ['R multiple', num(r.r_multiple) + 'R', r.r_multiple > 0 ? 'var(--accent-green)' : 'var(--accent-red)'],
-                                    ['Stratégie', String(r.strategy_version || 'default-smc'), 'var(--text)'],
-                                  ] as [string, string, string][]).map(([label, value, color]) => (
-                                    <div key={label} style={{ padding: '6px 8px', borderRadius: 6, background: 'var(--surface2)' }}>
-                                      <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 2 }}>{label}</div>
-                                      <div style={{ fontWeight: 700, fontSize: 13, color }}>{value}</div>
-                                    </div>
-                                  ))}
-                                </div>
-                                <div style={{ display: 'flex', gap: 12, fontSize: 11, color: 'var(--text-muted)', flexWrap: 'wrap' }}>
-                                  <span>Symbole : <strong style={{ color: 'var(--text)' }}>{fmtSym(r.symbol)}</strong></span>
-                                  <span>TF : <strong style={{ color: 'var(--text)' }}>{r.timeframe}</strong></span>
-                                  <span>Date : <strong style={{ color: 'var(--text)' }}>{new Date(r.timestamp).toLocaleString('fr-FR')}</strong></span>
-                                </div>
-                              </div>
+                              <BacktestDetailPanel r={r} />
                             </td>
                           </tr>
                         )}
