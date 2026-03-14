@@ -1,10 +1,13 @@
 from datetime import datetime, timedelta, timezone
 import json
+import logging
 import os
 import random
 import threading
 import time
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Query
 from fastapi.responses import Response
@@ -928,106 +931,103 @@ def ingest_data(payload: list[CandleIn]) -> dict:
     return {"ok": True, "inserted": len(payload)}
 
 
-TF_SECONDS: dict[str, int] = {"5m": 5 * 60, "15m": 15 * 60, "1h": 3600, "4h": 4 * 3600}
-
-
-class EnrichRequest(BaseModel):
+class FetchRequest(BaseModel):
     symbols: list[str] = Field(min_length=1)
     timeframe: str = "1h"
-    days: int | None = Field(default=None, ge=1, le=1460)
+    days: int = Field(default=365, ge=1, le=1460)
+    source: str | None = Field(default=None, description="Override source for this request (binance/yfinance). Falls back to config.")
 
 
-@router.post("/data/enrich")
-def enrich_data(req: EnrichRequest) -> dict:
-    import random
-    tf = req.timeframe if req.timeframe in TF_SECONDS else "1h"
-    interval_seconds = TF_SECONDS[tf]
-    candles_per_day = {"5m": 288, "15m": 96, "1h": 24, "4h": 6}
-    if req.days:
-        n_candles = req.days * candles_per_day.get(tf, 24)
-    else:
-        n_candles = {"5m": config.data.candles_5m, "15m": config.data.candles_15m, "1h": config.data.candles_1h, "4h": config.data.candles_4h}.get(tf, config.data.candles_1h)
-    now = datetime.now(timezone.utc)
-    rows_added = 0
+@router.post("/data/fetch")
+def fetch_candles(req: FetchRequest) -> dict:
+    """
+    Download real candles from Binance or yfinance and store in DB.
+    Source: req.source if provided, else config.data.candle_source.
+    """
+    from backend.app.services.candle_importer import import_candles
+
+    source = req.source or config.data.candle_source
+    if source not in ("binance", "yfinance"):
+        return {"ok": False, "reason": f"unknown source '{source}'. Use 'binance' or 'yfinance'."}
+
+    tf = req.timeframe if req.timeframe in ("5m", "15m", "1h", "4h", "1d") else "1h"
+
+    results = []
+    total_inserted = 0
+    for symbol in req.symbols:
+        try:
+            r = import_candles(symbol=symbol, timeframe=tf, days=req.days, source=source)
+            results.append(r)
+            total_inserted += r.get("inserted", 0)
+        except Exception as exc:
+            logger.warning("fetch_candles failed %s: %s", symbol, exc)
+            results.append({"ok": False, "symbol": symbol, "error": str(exc)})
 
     with Session(engine) as s:
-        for symbol in req.symbols:
-            base = config.data.symbol_prices.get(symbol, 100.0)
-            volatility = base * 0.012
-            price = base
-            for i in range(n_candles, 0, -1):
-                ts = now - timedelta(seconds=interval_seconds * i)
-                change = random.gauss(0, volatility)
-                price = max(price + change, base * 0.5)
-                high  = price + abs(random.gauss(0, volatility * 0.5))
-                low   = price - abs(random.gauss(0, volatility * 0.5))
-                open_ = price - random.gauss(0, volatility * 0.3)
-                vol   = base * random.uniform(0.8, 3.0) * 100
-                s.add(MarketCandle(
-                    symbol=symbol, timeframe=tf, timestamp=ts,
-                    open=round(open_, 6), high=round(high, 6),
-                    low=round(low, 6), close=round(price, 6),
-                    volume=round(vol, 2), source="enrich",
-                ))
-                rows_added += 1
-
-        s.add(Log(level="INFO", message=f"Enrich {tf}: {rows_added} candles pour {len(req.symbols)} symboles"))
+        s.add(Log(level="INFO", message=f"Fetch {tf}/{source}: {total_inserted} bougies insérées pour {len(req.symbols)} symbole(s)"))
         s.commit()
 
-    return {"ok": True, "symbols": req.symbols, "timeframe": tf, "rows_added": rows_added, "candles_per_symbol": n_candles}
+    return {"ok": True, "source": source, "timeframe": tf, "results": results, "total_inserted": total_inserted}
 
 
-@router.post("/data/enrich/daily")
-def daily_enrichment(symbols: list[str]) -> dict:
-    if not symbols:
-        symbols = market_data.load_symbols()[:5]
+class CsvImportRequest(BaseModel):
+    symbol: str
+    timeframe: str = "1h"
+    csv_text: str = Field(description="Contenu du fichier CSV (timestamp,open,high,low,close,volume)")
 
-    now = datetime.now(timezone.utc)
-    rows_added = 0
+
+@router.post("/data/import/csv")
+def import_csv(req: CsvImportRequest) -> dict:
+    """
+    Import candles from CSV text (parsed on backend with pandas).
+    CSV format: timestamp,open,high,low,close,volume
+    timestamp can be ISO string, Unix seconds, or Unix ms.
+    """
+    from backend.app.services.candle_importer import parse_csv, save_candles_to_db
+
+    tf = req.timeframe if req.timeframe in ("5m", "15m", "1h", "4h", "1d") else "1h"
+    try:
+        candles = parse_csv(req.csv_text, req.symbol, tf)
+    except ValueError as exc:
+        return {"ok": False, "reason": str(exc)}
+    except Exception as exc:
+        return {"ok": False, "reason": f"CSV parse error: {exc}"}
+
+    if not candles:
+        return {"ok": False, "reason": "CSV produced 0 valid candles — check format and data."}
+
+    inserted = save_candles_to_db(candles, req.symbol, tf, source="csv")
+
     with Session(engine) as s:
-        for symbol in symbols:
-            base = 100 if symbol == "ETHUSDT" else 180
-            for i in range(24):
-                close = base + i * 0.4
-                candle = MarketCandle(
-                    symbol=symbol,
-                    timeframe="1h",
-                    timestamp=now - timedelta(hours=i),
-                    open=close - 0.6,
-                    high=close + 0.8,
-                    low=close - 1,
-                    close=close,
-                    volume=1000 + i * 15,
-                    source="daily-enrichment",
-                )
-                s.add(candle)
-                rows_added += 1
-
-            s.add(BotJob(
-                symbol=symbol,
-                timeframe="1h",
-                session_name=resolve_session(now),
-                mode="research",
-                status="DB_ENRICHED",
-                details="Daily enrichment stored for backtesting",
-            ))
-
-        schedule = s.exec(select(ScanSchedule).where(ScanSchedule.name == "daily_enrichment")).first()
-        if not schedule:
-            schedule = ScanSchedule(name="daily_enrichment", cron="0 1 * * *", enabled=True, task_type="enrichment")
-            s.add(schedule)
-        schedule.last_run = now
-        schedule.next_run = now + timedelta(days=1)
-
-        s.add(Log(level="INFO", message=f"Daily enrichment completed for {len(symbols)} symbols ({rows_added} candles)"))
+        s.add(Log(level="INFO", message=f"CSV import {req.symbol}/{tf}: {inserted} bougies insérées"))
         s.commit()
 
     return {
-        "ok": True,
-        "symbols": symbols,
-        "rows_added": rows_added,
-        "next_daily_run": now + timedelta(days=1),
+        "ok": True, "symbol": req.symbol, "timeframe": tf, "source": "csv",
+        "parsed": len(candles), "inserted": inserted, "skipped": len(candles) - inserted,
+        "period_start": candles[0].timestamp.date().isoformat(),
+        "period_end": candles[-1].timestamp.date().isoformat(),
     }
+
+
+class DeleteCandlesRequest(BaseModel):
+    symbol: str
+    timeframe: str | None = None
+
+
+@router.delete("/data/candles")
+def delete_candles(req: DeleteCandlesRequest) -> dict:
+    """Delete all candles for a symbol (and optionally a timeframe)."""
+    with Session(engine) as s:
+        q = select(MarketCandle).where(MarketCandle.symbol == req.symbol)
+        if req.timeframe:
+            q = q.where(MarketCandle.timeframe == req.timeframe)
+        rows = s.exec(q).all()
+        for row in rows:
+            s.delete(row)
+        s.add(Log(level="INFO", message=f"Deleted {len(rows)} candles for {req.symbol}/{req.timeframe or 'all TF'}"))
+        s.commit()
+    return {"ok": True, "deleted": len(rows), "symbol": req.symbol, "timeframe": req.timeframe}
 
 
 

@@ -16,8 +16,11 @@ const send = async <T>(path: string, method: 'POST' | 'PUT', body: unknown): Pro
 
 const post = async <T>(path: string, body: unknown): Promise<T> => send(path, 'POST', body);
 const put  = async <T>(path: string, body: unknown): Promise<T> => send(path, 'PUT', body);
-const del  = async <T>(path: string): Promise<T> => {
-  const r = await fetch(path, { method: 'DELETE' });
+const del  = async <T>(path: string, body?: unknown): Promise<T> => {
+  const r = await fetch(path, {
+    method: 'DELETE',
+    ...(body !== undefined ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+  });
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
   return r.json();
 };
@@ -98,9 +101,13 @@ export const api = {
   startBot:   (body: Record<string, unknown>) => post<Record<string, unknown>>('/api/bot/start', body),
   dataStats:  ()                              => get<Record<string, unknown>>('/api/data/stats'),
   candles:    (params = '')                   => get<{ total: number; rows: Record<string, unknown>[] }>(`/api/data/candles${params}`),
-  ingestData: (body: Record<string, unknown>[]) => post<Record<string, unknown>>('/api/data/ingest', body),
-  enrichDaily:(symbols: string[])             => post<Record<string, unknown>>('/api/data/enrich/daily', symbols),
-  enrich:     (body: { symbols: string[]; timeframe: string; days?: number }) => post<Record<string, unknown>>('/api/data/enrich', body),
+  ingestData:    (body: Record<string, unknown>[]) => post<Record<string, unknown>>('/api/data/ingest', body),
+  fetchCandles:  (body: { symbols: string[]; timeframe: string; days: number; source?: string }) =>
+    post<Record<string, unknown>>('/api/data/fetch', body),
+  importCsv:     (body: { symbol: string; timeframe: string; csv_text: string }) =>
+    post<Record<string, unknown>>('/api/data/import/csv', body),
+  deleteCandles: (body: { symbol: string; timeframe?: string }) =>
+    del<Record<string, unknown>>('/api/data/candles', body),
   services:   () => get<{ services: ServiceStatus[]; refreshed_at: string; mode: string }>('/api/services'),
   optimizeBacktest: (id: number) => post<Record<string, unknown>>(`/api/backtest/${id}/optimize`, {}),
   multiOptimize: (backtest_ids: number[]) => post<Record<string, unknown>>('/api/backtest/multi-optimize', { backtest_ids }),

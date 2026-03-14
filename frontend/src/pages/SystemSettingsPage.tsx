@@ -1,7 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
-import { fmtSym } from '../utils/dateUtils';
 
 type Cfg = Record<string, unknown>;
 
@@ -300,13 +299,6 @@ export function SystemSettingsPage() {
     setDraft({ ...draft, [group]: { ...grp, [key]: value } });
   }
 
-  function setNested(group: string, key: string, subkey: string, value: unknown) {
-    if (!draft) return;
-    const grp = (draft[group] as Cfg) ?? {};
-    const sub = (grp[key] as Cfg) ?? {};
-    setDraft({ ...draft, [group]: { ...grp, [key]: { ...sub, [subkey]: value } } });
-  }
-
   function grp(name: string): Cfg {
     return (draft?.[name] as Cfg) ?? {};
   }
@@ -334,7 +326,6 @@ export function SystemSettingsPage() {
   const bt      = grp('backtest');
   const sess    = grp('session');
   const dat     = grp('data');
-  const symPrices = (dat.symbol_prices as Record<string, number>) ?? {};
   const activeSessions = (sess.active_sessions as string[]) ?? [];
 
   function toggleSession(s: string) {
@@ -518,40 +509,23 @@ export function SystemSettingsPage() {
 
       <SectionCard title="Données de marché" icon="📊">
         <div className="grid-2">
-          <Field label="Cron d'enrichissement quotidien" desc="Format cron Unix — ex: '0 1 * * *' = tous les jours à 01h00 UTC">
-            <input value={String(dat.enrichment_cron ?? '0 1 * * *')} onChange={e => setGroup('data', 'enrichment_cron', e.target.value)} style={{ fontFamily: 'monospace' }} />
-          </Field>
-          <div />
-          <Field label="Bougies générées en 15m" desc="Nombre de bougies 15min à générer (672 = 7 jours)">
-            <Num val={Number(dat.candles_15m ?? 672)} min={1} max={5000} step={1} onChange={v => setGroup('data', 'candles_15m', v)} />
-          </Field>
-          <Field label="Bougies générées en 1h" desc="Nombre de bougies 1h à générer (720 = 30 jours)">
-            <Num val={Number(dat.candles_1h ?? 720)} min={1} max={5000} step={1} onChange={v => setGroup('data', 'candles_1h', v)} />
-          </Field>
-          <Field label="Bougies générées en 4h" desc="Nombre de bougies 4h à générer (540 = 90 jours)">
-            <Num val={Number(dat.candles_4h ?? 540)} min={1} max={5000} step={1} onChange={v => setGroup('data', 'candles_4h', v)} />
+          <Field
+            label="Source de données bougies"
+            desc="Binance : données temps réel (nécessite accès réseau). yfinance : données historiques gratuites via Yahoo Finance. CSV : import manuel de fichier."
+          >
+            <select
+              value={String(dat.candle_source ?? 'yfinance')}
+              onChange={e => setGroup('data', 'candle_source', e.target.value)}
+            >
+              <option value="yfinance">Yahoo Finance (yfinance) — recommandé</option>
+              <option value="binance">Binance API — accès réseau requis</option>
+              <option value="csv">Fichier CSV (import manuel)</option>
+            </select>
           </Field>
         </div>
-        <div style={{ marginTop: 16 }}>
-          <label style={{ fontWeight: 600, marginBottom: 8, display: 'block' }}>
-            Prix de référence par symbole
-            <span className="muted" style={{ fontWeight: 400, marginLeft: 8 }}>(utilisés pour la génération de bougies réalistes)</span>
-          </label>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8 }}>
-            {Object.entries(symPrices).map(([sym, price]) => (
-              <div key={sym} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px', background: 'var(--surface2)', borderRadius: 6 }}>
-                <span style={{ fontSize: 12, fontWeight: 600, minWidth: 80 }}>{fmtSym(sym)}</span>
-                <input
-                  type="number"
-                  value={price}
-                  step={sym === 'BTCUSDT' ? 100 : sym === 'ETHUSDT' ? 10 : 0.01}
-                  onChange={e => setNested('data', 'symbol_prices', sym, Number(e.target.value))}
-                  style={{ flex: 1, padding: '3px 6px', fontSize: 12 }}
-                />
-                <span className="muted" style={{ fontSize: 11 }}>$</span>
-              </div>
-            ))}
-          </div>
+        <div style={{ marginTop: 12, padding: '10px 14px', borderRadius: 8, background: 'rgba(124,58,237,0.08)', border: '1px solid rgba(124,58,237,0.2)', fontSize: 12, color: 'var(--text-muted)' }}>
+          ℹ️ Le choix de source s'applique à tous les imports depuis la page <strong>Données de marché</strong>.
+          Les bougies importées sont stockées en base de données et réutilisées par le backtest et le pipeline.
         </div>
       </SectionCard>
 
