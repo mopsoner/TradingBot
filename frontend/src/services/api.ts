@@ -63,4 +63,16 @@ export const api = {
   marginEndpoints: ()                         => get<Record<string, unknown>>('/api/execution/endpoints'),
   scan:       (body: Record<string, unknown>) => post<Record<string, unknown>>('/api/scan', body),
   marketScan: (body: Record<string, unknown>) => post<Record<string, unknown>>('/api/scan/market', body),
+
+  strategyProfiles: ()                        => get<{ rows: Record<string, unknown>[] }>('/api/strategy/profiles'),
+  saveStrategyProfile: (body: Record<string, unknown>) => post<Record<string, unknown>>('/api/strategy/profiles', body),
+  backtestStrategyProfile: (profileId: number) => post<Record<string, unknown>>(`/api/strategy/profiles/${profileId}/backtest`, {}),
+  approveStrategyProfile: (profileId: number, body: Record<string, unknown>) => post<Record<string, unknown>>(`/api/strategy/profiles/${profileId}/approve-live`, body),
+
+  botStatus:  ()                              => get<Record<string, unknown>>('/api/bot/status'),
+  startBot:   (body: Record<string, unknown>) => post<Record<string, unknown>>('/api/bot/start', body),
+  dataStats:  ()                              => get<Record<string, unknown>>('/api/data/stats'),
+  candles:    (params = '')                   => get<{ total: number; rows: Record<string, unknown>[] }>(`/api/data/candles${params}`),
+  ingestData: (body: Record<string, unknown>[]) => post<Record<string, unknown>>('/api/data/ingest', body),
+  enrichDaily:(symbols: string[])             => post<Record<string, unknown>>('/api/data/enrich/daily', symbols),
 };
