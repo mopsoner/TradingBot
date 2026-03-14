@@ -1439,6 +1439,7 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
 
               {wfResult && (
                 <div>
+                  <h3 style={{ color: '#34d399', marginBottom: 12 }}>Résultats</h3>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8, marginBottom: 12 }}>
                     {([
                       ['Signaux', String(wfResult.metrics.total_signals), '#34d399'],
