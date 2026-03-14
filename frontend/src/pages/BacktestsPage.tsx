@@ -23,13 +23,15 @@ function qualityBadge(wr: number, pf: number, dd: number): { label: string; colo
 function BacktestDetailPanel({ r }: { r: BacktestResult }) {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [loadingSigs, setLoadingSigs] = useState(true);
+  const [sigError, setSigError] = useState('');
 
   useEffect(() => {
     let cancelled = false;
     setLoadingSigs(true);
+    setSigError('');
     api.signalsForBacktest(r.symbol, r.timeframe)
       .then(res => { if (!cancelled) setSignals(res.rows); })
-      .catch(() => {})
+      .catch(err => { if (!cancelled) setSigError(String(err)); })
       .finally(() => { if (!cancelled) setLoadingSigs(false); });
     return () => { cancelled = true; };
   }, [r.symbol, r.timeframe]);
@@ -101,6 +103,10 @@ function BacktestDetailPanel({ r }: { r: BacktestResult }) {
 
         {loadingSigs ? (
           <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>Chargement des signaux…</div>
+        ) : sigError ? (
+          <div style={{ padding: 14, textAlign: 'center', fontSize: 12, color: 'var(--accent-red)', background: 'rgba(239,68,68,0.08)', borderRadius: 8 }}>
+            Erreur lors du chargement des signaux
+          </div>
         ) : signals.length === 0 ? (
           <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12, background: 'var(--surface2)', borderRadius: 8 }}>
             Aucun signal détecté pour {fmtSym(r.symbol)} {r.timeframe}
