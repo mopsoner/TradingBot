@@ -59,7 +59,6 @@ function SectionCard({ title, icon, children }: { title: string; icon: string; c
 
 export function SystemSettingsPage() {
   const { data, loading, error } = useApi(() => api.config());
-  const { data: endpoints } = useApi(() => api.marginEndpoints());
   const [draft, setDraft] = useState<Cfg | null>(null);
   const [status, setStatus] = useState('');
   const [saving, setSaving] = useState(false);
@@ -129,29 +128,20 @@ export function SystemSettingsPage() {
 
       <SectionCard title="Système & exécution" icon="⚙️">
         <div className="grid-2">
-          <Field label="Mode de trading" desc="paper = simulation, live = ordres réels sur exchange">
+          <Field label="Mode de trading" desc="research = analyse seule · paper = simulation · live = ordres réels sur exchange">
             <select value={String(sys.mode)} onChange={e => setGroup('system', 'mode', e.target.value)}>
               <option value="research">🔬 Research</option>
               <option value="paper">📋 Paper (simulation)</option>
               <option value="live">⚡ Live (exchange réel)</option>
             </select>
           </Field>
-          <Field label="Execution mode (lecture seule)" desc="Mode actuel côté exchange">
-            <input value={String(endpoints?.execution_mode ?? sys.mode ?? 'paper')} disabled />
-          </Field>
           <Field label="API Key" desc="Clé API de votre exchange (Binance, etc.)">
-            <input value={String(sys.api_key ?? '')} placeholder="Laissez vide pour Paper mode"
+            <input value={String(sys.api_key ?? '')} placeholder="Laissez vide pour Paper / Research"
               onChange={e => setGroup('system', 'api_key', e.target.value || null)} />
           </Field>
           <Field label="API Secret" desc="Secret API — stocké en mémoire uniquement">
             <input type="password" value={String(sys.api_secret ?? '')} placeholder="••••••••••••"
               onChange={e => setGroup('system', 'api_secret', e.target.value || null)} />
-          </Field>
-          <Field label="Perte journalière max" desc="Seuil d'arrêt automatique du jour (fraction du capital)">
-            <Pct val={Number(sys.max_daily_loss ?? 0.03)} onChange={v => setGroup('system', 'max_daily_loss', v)} />
-          </Field>
-          <Field label="Perte hebdomadaire max" desc="Seuil d'arrêt automatique de la semaine">
-            <Pct val={Number(sys.max_weekly_loss ?? 0.08)} onChange={v => setGroup('system', 'max_weekly_loss', v)} />
           </Field>
         </div>
       </SectionCard>
@@ -334,24 +324,6 @@ export function SystemSettingsPage() {
             ))}
           </div>
         </div>
-      </SectionCard>
-
-      <SectionCard title="Endpoints isolated margin (lecture seule)" icon="🔌">
-        {Object.entries((endpoints?.endpoints ?? {}) as Record<string, { method: string; path: string; description: string } | string>).map(([k, v]) => {
-          const isObj = typeof v === 'object' && v !== null;
-          const method = isObj ? (v as { method: string }).method : '';
-          const path = isObj ? (v as { path: string }).path : String(v);
-          const desc = isObj ? (v as { description: string }).description : '';
-          return (
-            <div key={k} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, padding: '4px 0', borderBottom: '1px solid var(--border)' }}>
-              <div>
-                <span className="muted" style={{ fontSize: 12 }}>{k}</span>
-                {desc && <span className="muted" style={{ fontSize: 10, marginLeft: 8, opacity: 0.6 }}>{desc}</span>}
-              </div>
-              <code style={{ fontSize: 11 }}>{method ? `${method} ${path}` : path}</code>
-            </div>
-          );
-        })}
       </SectionCard>
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 8, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
