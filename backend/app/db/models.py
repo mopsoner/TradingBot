@@ -62,3 +62,53 @@ class Configuration(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     key: str
     payload: str
+
+
+class MarketCandle(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    timestamp: datetime
+    symbol: str
+    timeframe: str = "15m"
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    source: str = "manual"
+
+
+class BotJob(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    symbol: str
+    timeframe: str = "15m"
+    session_name: str
+    mode: str
+    status: str
+    signal: Optional[str] = None
+    details: str = ""
+
+
+class ScanSchedule(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str
+    cron: str
+    enabled: bool = True
+    last_run: Optional[datetime] = None
+    next_run: Optional[datetime] = None
+    task_type: str = "scan"
+
+
+class StrategyProfile(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    name: str
+    mode: str = "research"
+    parameters: str
+    is_active: bool = False
+    approved_for_live: bool = False
+    approved_by: Optional[str] = None
+    approved_at: Optional[datetime] = None
+    last_backtest_win_rate: Optional[float] = None
+    last_backtest_profit_factor: Optional[float] = None
+    last_backtest_drawdown: Optional[float] = None
