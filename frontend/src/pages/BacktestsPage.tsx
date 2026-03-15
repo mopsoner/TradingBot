@@ -140,54 +140,320 @@ function ExpandedOverrides({ overridesJson }: { overridesJson: string }) {
   );
 }
 
-/* ── BacktestOverridesPanel ──────────────────────────────────────────────── */
-function BacktestOverridesPanel({ lastBacktest, onOptimize }: { lastBacktest: BacktestResult | null; onOptimize: (r: BacktestResult) => void }) {
-  const { data: cfgData } = useApi(() => api.config());
+/* ── BacktestOverridesConfigPanel ────────────────────────────────────────── */
+const OVERRIDE_DEFAULTS: Record<string, unknown> = {
+  enabled: true,
+  wyckoff_lookback: 20,
+  displacement_threshold: 0.35,
+  displacement_atr_min: 0.60,
+  displacement_vol_min: 1.00,
+  bos_sensitivity: 9,
+  bos_close_confirmation: false,
+  volume_multiplier_active: 1.00,
+  volume_multiplier_offpeak: 0.80,
+  skip_htf_1h_validation: true,
+  allow_weekend_trading: true,
+  use_5m_refinement: false,
+};
+
+function NumInput({ val, min, max, step, onChange }: { val: number; min: number; max: number; step: number; onChange: (v: number) => void }) {
+  return (
+    <input
+      type="number" value={val} min={min} max={max} step={step}
+      onChange={e => onChange(parseFloat(e.target.value) || min)}
+      style={{
+        width: 90, padding: '4px 8px', borderRadius: 4, fontSize: 12, fontFamily: 'monospace',
+        background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.15)',
+        color: 'var(--text-primary)', textAlign: 'right',
+      }}
+    />
+  );
+}
+
+function OvField({ label, desc, children }: { label: string; desc?: string; children: React.ReactNode }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)' }}>{label}</label>
+      {desc && <div style={{ fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.4, marginBottom: 2 }}>{desc}</div>}
+      {children}
+    </div>
+  );
+}
+
+interface AiOverrideResult {
+  score: number;
+  verdict: string;
+  suggested_overrides: Record<string, unknown>;
+  suggestions: Array<{ titre: string; probleme: string; action: string; impact: string }>;
+}
+
+function BacktestOverridesConfigPanel({ lastBacktest }: { lastBacktest: BacktestResult | null }) {
+  const { data: cfgData, reload: reloadCfg } = useApi(() => api.config());
   const cfg = cfgData as Record<string, unknown> | null;
-  const bt = cfg?.backtest as Record<string, unknown> | undefined;
-  const ov = bt?.overrides as Record<string, unknown> | undefined;
 
-  if (!ov) return null;
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<Record<string, unknown> | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiResult, setAiResult] = useState<AiOverrideResult | null>(null);
+  const [aiError, setAiError] = useState('');
 
-  const items = Object.entries(ov).filter(([k]) => k !== 'enabled');
+  useEffect(() => {
+    if (!cfg || draft) return;
+    const bt = cfg.backtest as Record<string, unknown> | undefined;
+    const ov = (bt?.overrides as Record<string, unknown> | undefined) ?? {};
+    setDraft({ ...OVERRIDE_DEFAULTS, ...ov });
+  }, [cfg]);
+
+  const setOv = (key: string, value: unknown) => {
+    setDraft(prev => prev ? { ...prev, [key]: value } : null);
+  };
+
+  const save = async () => {
+    if (!cfg || !draft) return;
+    setSaving(true); setSaveStatus('');
+    try {
+      const bt = (cfg.backtest as Record<string, unknown>) ?? {};
+      const newCfg = { ...cfg, backtest: { ...bt, overrides: draft } };
+      await api.updateConfig(newCfg);
+      setSaveStatus('✅ Sauvegardé');
+      reloadCfg();
+    } catch (e) { setSaveStatus('❌ Erreur: ' + String(e)); }
+    finally { setSaving(false); setTimeout(() => setSaveStatus(''), 3000); }
+  };
+
+  const runAi = async () => {
+    if (!lastBacktest) return;
+    setAiLoading(true); setAiError(''); setAiResult(null);
+    try {
+      const res = await api.optimizeBacktestOverrides(lastBacktest.id);
+      if (!res.ok) { setAiError(String(res.reason ?? 'Erreur IA')); return; }
+      setAiResult(res.analysis as AiOverrideResult);
+    } catch (e) { setAiError(String(e)); }
+    finally { setAiLoading(false); }
+  };
+
+  const applyAi = () => {
+    if (!aiResult?.suggested_overrides) return;
+    setDraft(prev => prev ? { ...prev, ...aiResult.suggested_overrides } : aiResult.suggested_overrides);
+    setAiResult(null);
+  };
+
+  if (!draft) return null;
+
+  const enabled = Boolean(draft.enabled ?? true);
+  const impactColor = (i: string) => i === 'haut' ? '#22c55e' : i === 'moyen' ? '#eab308' : '#9ca3af';
 
   return (
-    <div style={{ marginBottom: 24, borderRadius: 10, border: '1px solid rgba(168,85,247,0.25)', background: 'rgba(168,85,247,0.04)', overflow: 'hidden' }}>
-      <div style={{ padding: '12px 18px', borderBottom: '1px solid rgba(168,85,247,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+    <div style={{ marginBottom: 24, borderRadius: 10, border: '1px solid rgba(168,85,247,0.3)', background: 'rgba(168,85,247,0.04)', overflow: 'hidden' }}>
+      {/* ── Header ── */}
+      <div
+        onClick={() => setOpen(o => !o)}
+        style={{ padding: '12px 18px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, userSelect: 'none' }}
+      >
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: '#a855f7' }}>Paramètres backtest actifs</span>
-          {ov.enabled ? (
-            <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 4, background: 'rgba(168,85,247,0.2)', color: '#a855f7' }}>Overrides ON</span>
-          ) : (
-            <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 4, background: 'rgba(100,116,139,0.15)', color: 'var(--text-muted)' }}>Overrides OFF</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: '#a855f7' }}>⚙️ Overrides pipeline backtest</span>
+          <span style={{
+            fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 4,
+            background: enabled ? 'rgba(168,85,247,0.2)' : 'rgba(100,116,139,0.15)',
+            color: enabled ? '#a855f7' : 'var(--text-muted)',
+          }}>
+            {enabled ? 'Overrides ON' : 'Overrides OFF'}
+          </span>
+        </div>
+        <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{open ? '▲ Réduire' : '▼ Configurer'}</span>
+      </div>
+
+      {!open && (
+        <div style={{ padding: '0 18px 12px', display: 'flex', flexWrap: 'wrap', gap: '6px 18px' }}>
+          {Object.entries(draft).filter(([k]) => k !== 'enabled').map(([k, v]) => (
+            <div key={k} style={{ fontSize: 11, display: 'flex', gap: 4 }}>
+              <span style={{ color: 'var(--text-muted)' }}>{OVERRIDE_LABELS[k] ?? k}:</span>
+              <span style={{ fontWeight: 700, fontFamily: 'monospace', color: v === true ? 'var(--accent-green)' : v === false ? '#ef4444' : 'var(--text)' }}>{String(v)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {open && (
+        <div style={{ borderTop: '1px solid rgba(168,85,247,0.15)', padding: '16px 18px' }}>
+          {/* Master toggle */}
+          <label style={{
+            display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', marginBottom: 16,
+            background: enabled ? 'rgba(59,130,246,0.08)' : 'rgba(255,255,255,0.03)',
+            borderRadius: 6, cursor: 'pointer',
+            border: `1px solid ${enabled ? 'rgba(59,130,246,0.4)' : 'rgba(255,255,255,0.1)'}`,
+          }}>
+            <input type="checkbox" checked={enabled} onChange={e => setOv('enabled', e.target.checked)} style={{ width: 'auto' }} />
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 12 }}>Activer les overrides backtest</div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                Quand désactivé, le backtest utilise exactement le même pipeline que le mode paper/live.
+              </div>
+            </div>
+          </label>
+
+          <div style={{ opacity: enabled ? 1 : 0.4, pointerEvents: enabled ? 'auto' : 'none' }}>
+            {/* Wyckoff */}
+            <div style={{ fontSize: 10, color: '#a855f7', fontWeight: 700, letterSpacing: 1, marginBottom: 8, textTransform: 'uppercase' }}>Wyckoff (Spring / UTAD)</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(220px,1fr))', gap: '10px 20px', marginBottom: 14 }}>
+              <OvField label="Lookback Wyckoff (bougies 15m)" desc="Fenêtre de scan. Live=5. Augmenter améliore la détection multi-mois.">
+                <NumInput val={Number(draft.wyckoff_lookback ?? 20)} min={5} max={96} step={1} onChange={v => setOv('wyckoff_lookback', v)} />
+              </OvField>
+            </div>
+
+            {/* Displacement */}
+            <div style={{ fontSize: 10, color: '#a855f7', fontWeight: 700, letterSpacing: 1, marginBottom: 8, marginTop: 4, textTransform: 'uppercase' }}>Displacement</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(220px,1fr))', gap: '10px 20px', marginBottom: 14 }}>
+              <OvField label="Seuil force displacement" desc="Force min. Live=0.40. Abaisser = plus de signaux.">
+                <NumInput val={Number(draft.displacement_threshold ?? 0.35)} min={0.1} max={1.0} step={0.05} onChange={v => setOv('displacement_threshold', v)} />
+              </OvField>
+              <OvField label="Ratio ATR minimum" desc="Taille vs ATR. Live=0.75. Abaisser = mouvements plus petits acceptés.">
+                <NumInput val={Number(draft.displacement_atr_min ?? 0.60)} min={0.1} max={3.0} step={0.05} onChange={v => setOv('displacement_atr_min', v)} />
+              </OvField>
+              <OvField label="Volume min (×SMA20)" desc="Confirmation volumétrique. Live=1.2. Abaisser = moins de filtrage.">
+                <NumInput val={Number(draft.displacement_vol_min ?? 1.00)} min={0.3} max={3.0} step={0.1} onChange={v => setOv('displacement_vol_min', v)} />
+              </OvField>
+            </div>
+
+            {/* BOS */}
+            <div style={{ fontSize: 10, color: '#a855f7', fontWeight: 700, letterSpacing: 1, marginBottom: 8, marginTop: 4, textTransform: 'uppercase' }}>Break of Structure (BOS)</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(220px,1fr))', gap: '10px 20px', marginBottom: 14 }}>
+              <OvField label="Sensibilité BOS (lookback)" desc="Bougies pour swing point. Live=7. Plus élevé = swings plus significatifs.">
+                <NumInput val={Number(draft.bos_sensitivity ?? 9)} min={2} max={30} step={1} onChange={v => setOv('bos_sensitivity', v)} />
+              </OvField>
+            </div>
+            <label style={{
+              display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', marginBottom: 14,
+              background: 'rgba(255,255,255,0.03)', borderRadius: 6, cursor: 'pointer',
+              border: `1px solid ${Boolean(draft.bos_close_confirmation) ? 'rgba(59,130,246,0.4)' : 'rgba(255,255,255,0.1)'}`,
+            }}>
+              <input type="checkbox" checked={Boolean(draft.bos_close_confirmation)} onChange={e => setOv('bos_close_confirmation', e.target.checked)} style={{ width: 'auto' }} />
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600 }}>BOS : clôture obligatoire</div>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 1 }}>Le BOS exige une clôture au-delà du swing (pas juste un wick). Live défaut: activé.</div>
+              </div>
+            </label>
+
+            {/* Volume */}
+            <div style={{ fontSize: 10, color: '#a855f7', fontWeight: 700, letterSpacing: 1, marginBottom: 8, marginTop: 4, textTransform: 'uppercase' }}>Volume</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(220px,1fr))', gap: '10px 20px', marginBottom: 14 }}>
+              <OvField label="Multiplicateur vol. sessions actives" desc="London/NY. Live=1.2. 1.0 = volume normal suffit.">
+                <NumInput val={Number(draft.volume_multiplier_active ?? 1.00)} min={0.3} max={4.0} step={0.1} onChange={v => setOv('volume_multiplier_active', v)} />
+              </OvField>
+              <OvField label="Multiplicateur vol. hors session" desc="Hors sessions actives. Live=0.9.">
+                <NumInput val={Number(draft.volume_multiplier_offpeak ?? 0.80)} min={0.3} max={4.0} step={0.1} onChange={v => setOv('volume_multiplier_offpeak', v)} />
+              </OvField>
+            </div>
+
+            {/* Filtres */}
+            <div style={{ fontSize: 10, color: '#a855f7', fontWeight: 700, letterSpacing: 1, marginBottom: 8, marginTop: 4, textTransform: 'uppercase' }}>Filtres contournés</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 4 }}>
+              {([
+                ['skip_htf_1h_validation', 'Ignorer la validation HTF 1H vs 4H', 'Bypass le filtre 1H aligné/divergent. Élimine ~30% des rejets. Live: toujours actif.'],
+                ['allow_weekend_trading', 'Autoriser le trading le weekend', 'Ignore le filtre weekend. Permet de couvrir tous les timestamps.'],
+                ['use_5m_refinement', "Affiner l'entrée sur bougies 5m", 'Utilise les bougies 5m pour affiner l\'entrée. Désactivé = plus rapide.'],
+              ] as [string, string, string][]).map(([key, title, desc]) => {
+                const checked = Boolean(draft[key]);
+                return (
+                  <label key={key} style={{
+                    display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
+                    background: 'rgba(255,255,255,0.03)', borderRadius: 6, cursor: 'pointer',
+                    border: `1px solid ${checked ? 'rgba(59,130,246,0.4)' : 'rgba(255,255,255,0.1)'}`,
+                  }}>
+                    <input type="checkbox" checked={checked} onChange={e => setOv(key, e.target.checked)} style={{ width: 'auto' }} />
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 600 }}>{title}</div>
+                      <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 1 }}>{desc}</div>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* ── Actions ── */}
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 16, paddingTop: 14, borderTop: '1px solid rgba(168,85,247,0.15)', flexWrap: 'wrap' }}>
+            <button
+              onClick={save} disabled={saving}
+              style={{
+                padding: '7px 20px', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: saving ? 'default' : 'pointer',
+                background: 'rgba(168,85,247,0.18)', border: '1px solid rgba(168,85,247,0.4)', color: '#a855f7',
+                opacity: saving ? 0.6 : 1,
+              }}
+            >
+              {saving ? 'Sauvegarde…' : '💾 Sauvegarder les overrides'}
+            </button>
+            <button
+              onClick={runAi}
+              disabled={aiLoading || !lastBacktest}
+              title={!lastBacktest ? 'Lance un backtest pour activer l\'optimisation IA' : ''}
+              style={{
+                padding: '7px 20px', borderRadius: 6, fontSize: 12, fontWeight: 700,
+                cursor: aiLoading || !lastBacktest ? 'default' : 'pointer',
+                background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.4)', color: 'var(--accent)',
+                opacity: aiLoading || !lastBacktest ? 0.5 : 1,
+              }}
+            >
+              {aiLoading ? '⏳ Analyse IA…' : '✨ Optimiser via IA'}
+            </button>
+            {lastBacktest && (
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                basé sur le backtest <strong style={{ color: 'var(--text)' }}>{lastBacktest.symbol}</strong> ({lastBacktest.date_from?.slice(0, 7)} → {lastBacktest.date_to?.slice(0, 7)})
+              </span>
+            )}
+            {saveStatus && <span style={{ fontSize: 12, color: saveStatus.startsWith('✅') ? 'var(--accent-green)' : 'var(--accent-red)' }}>{saveStatus}</span>}
+            {aiError && <span style={{ fontSize: 12, color: 'var(--accent-red)' }}>{aiError}</span>}
+          </div>
+
+          {/* ── AI Result Panel ── */}
+          {aiResult && (
+            <div style={{ marginTop: 16, borderRadius: 8, border: '1px solid rgba(59,130,246,0.3)', background: 'rgba(59,130,246,0.05)', overflow: 'hidden' }}>
+              <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(59,130,246,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-primary)' }}>Résultats IA</span>
+                  <span style={{
+                    padding: '2px 10px', borderRadius: 4, fontSize: 11, fontWeight: 700,
+                    background: (aiResult.score ?? 0) >= 60 ? 'rgba(34,197,94,0.15)' : (aiResult.score ?? 0) >= 40 ? 'rgba(234,179,8,0.15)' : 'rgba(239,68,68,0.15)',
+                    color: (aiResult.score ?? 0) >= 60 ? '#22c55e' : (aiResult.score ?? 0) >= 40 ? '#eab308' : '#ef4444',
+                  }}>
+                    Score {aiResult.score}/100
+                  </span>
+                </div>
+                <button onClick={applyAi} style={{
+                  padding: '6px 16px', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                  background: 'rgba(34,197,94,0.2)', border: '1px solid rgba(34,197,94,0.4)', color: '#22c55e',
+                }}>
+                  ✓ Appliquer les suggestions
+                </button>
+              </div>
+              <div style={{ padding: '12px 16px' }}>
+                {aiResult.verdict && (
+                  <p style={{ fontSize: 12, color: 'var(--text-primary)', marginBottom: 12, lineHeight: 1.5 }}>{aiResult.verdict}</p>
+                )}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {(aiResult.suggestions ?? []).map((s, i) => (
+                    <div key={i} style={{ padding: '10px 12px', borderRadius: 6, background: 'rgba(255,255,255,0.04)', borderLeft: `3px solid ${impactColor(s.impact)}` }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                        <span style={{ fontWeight: 700, fontSize: 12, color: 'var(--text-primary)' }}>{s.titre}</span>
+                        <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 3, background: `${impactColor(s.impact)}22`, color: impactColor(s.impact) }}>{s.impact}</span>
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3 }}>{s.probleme}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-secondary)', fontStyle: 'italic' }}>→ {s.action}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 6, background: 'rgba(255,255,255,0.03)', fontSize: 11, color: 'var(--text-muted)' }}>
+                  Valeurs suggérées : {Object.entries(aiResult.suggested_overrides ?? {}).map(([k, v]) => (
+                    <span key={k} style={{ marginRight: 12 }}><strong style={{ color: 'var(--text)' }}>{OVERRIDE_LABELS[k] ?? k}</strong>: <code style={{ color: '#a855f7' }}>{String(v)}</code></span>
+                  ))}
+                </div>
+              </div>
+            </div>
           )}
         </div>
-        {lastBacktest && (
-          <button
-            onClick={() => onOptimize(lastBacktest)}
-            style={{
-              padding: '5px 14px', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer',
-              background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.4)',
-              color: 'var(--accent)',
-            }}
-          >
-            ✨ Optimiser via IA
-          </button>
-        )}
-      </div>
-      <div style={{ padding: '12px 18px', display: 'flex', flexWrap: 'wrap', gap: '8px 24px' }}>
-        {items.map(([k, v]) => (
-          <div key={k} style={{ fontSize: 12, display: 'flex', gap: 6, alignItems: 'center' }}>
-            <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>{OVERRIDE_LABELS[k] ?? k}</span>
-            <span style={{
-              fontWeight: 700, fontFamily: 'monospace', fontSize: 12,
-              color: v === true ? 'var(--accent-green)' : v === false ? 'var(--accent-red)' : 'var(--text)',
-            }}>
-              {String(v)}
-            </span>
-          </div>
-        ))}
-      </div>
+      )}
     </div>
   );
 }
@@ -615,7 +881,7 @@ export function BacktestsPage({ onNavigate: _onNavigate }: { onNavigate?: (page:
 
       <LaunchForm onLaunched={reload} />
 
-      <BacktestOverridesPanel lastBacktest={rows[0] ?? null} onOptimize={r => setOptimize(r)} />
+      <BacktestOverridesConfigPanel lastBacktest={rows[0] ?? null} />
 
       <BacktestProcessCard onDone={reload} />
 

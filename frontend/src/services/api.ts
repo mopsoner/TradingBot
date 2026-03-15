@@ -169,6 +169,7 @@ export const api = {
     del<Record<string, unknown>>('/api/data/candles', body),
   services:   () => get<{ services: ServiceStatus[]; refreshed_at: string; mode: string }>('/api/services'),
   optimizeBacktest: (id: number) => post<Record<string, unknown>>(`/api/backtest/${id}/optimize`, {}),
+  optimizeBacktestOverrides: (id: number) => post<Record<string, unknown>>(`/api/backtest/${id}/optimize-overrides`, {}),
   multiOptimize: (backtest_ids: number[]) => post<Record<string, unknown>>('/api/backtest/multi-optimize', { backtest_ids }),
   startAiWorkshop: (body: { symbols: string[]; timeframe: string; horizon_days: number; profile_id?: number | null }) =>
     post<Record<string, unknown>>('/api/strategy/ai-workshop/start', body),

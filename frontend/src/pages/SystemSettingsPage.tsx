@@ -326,20 +326,12 @@ export function SystemSettingsPage() {
   const sess     = grp('session');
   const dat      = grp('data');
   const strategy = grp('strategy');
-  const btov     = ((grp('backtest') as Cfg).overrides as Cfg) ?? {};
   const activeSessions = (sess.active_sessions as string[]) ?? [];
 
   function toggleSession(s: string) {
     const cur = activeSessions;
     const next = cur.includes(s) ? cur.filter(x => x !== s) : [...cur, s];
     setGroup('session', 'active_sessions', next);
-  }
-
-  function setBtOverride(key: string, value: unknown) {
-    if (!draft) return;
-    const bt  = (draft.backtest as Cfg) ?? {};
-    const ov  = (bt.overrides as Cfg) ?? {};
-    setDraft({ ...draft, backtest: { ...bt, overrides: { ...ov, [key]: value } } });
   }
 
   return (
@@ -506,116 +498,6 @@ export function SystemSettingsPage() {
         </div>
         <div style={{ marginTop: 8, padding: '8px 12px', borderRadius: 6, background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.15)', fontSize: 11, color: 'var(--text-muted)' }}>
           Ces réglages sont les <strong>défauts globaux</strong> du système. Chaque profil de stratégie peut les surcharger individuellement depuis la page <strong>Stratégie</strong>.
-        </div>
-      </SectionCard>
-
-      <SectionCard title="Overrides backtest (pipeline assoupli)" icon="🧪">
-        {/* Master toggle */}
-        <label style={{
-          display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', marginBottom: 14,
-          background: Boolean(btov.enabled ?? true) ? 'rgba(59,130,246,0.08)' : 'var(--surface2)',
-          borderRadius: 6, cursor: 'pointer',
-          border: `1px solid ${Boolean(btov.enabled ?? true) ? 'var(--accent)' : 'var(--border)'}`,
-        }}>
-          <input type="checkbox" checked={Boolean(btov.enabled ?? true)}
-            onChange={e => setBtOverride('enabled', e.target.checked)} style={{ width: 'auto' }} />
-          <div>
-            <div style={{ fontWeight: 700, fontSize: 13 }}>Activer les overrides backtest</div>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-              Quand activé, les paramètres ci-dessous remplacent les défauts live pendant les backtests walk-forward.
-              Désactiver = le backtest utilise exactement le même pipeline que le mode paper/live.
-            </div>
-          </div>
-        </label>
-
-        <div style={{ opacity: Boolean(btov.enabled ?? true) ? 1 : 0.4, pointerEvents: Boolean(btov.enabled ?? true) ? 'auto' : 'none' }}>
-          {/* Wyckoff */}
-          <div style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 700, letterSpacing: 1, marginBottom: 8, marginTop: 4 }}>WYCKOFF (Spring / UTAD)</div>
-          <div className="grid-2">
-            <Field label="Lookback Wyckoff (bougies 15m)" desc="Fenêtre de scan pour Spring/UTAD. Live = 5. Augmenter améliore la détection sur des backtests multi-mois.">
-              <Num val={Number(btov.wyckoff_lookback ?? 20)} min={5} max={96} step={1} onChange={v => setBtOverride('wyckoff_lookback', v)} />
-            </Field>
-          </div>
-
-          {/* Displacement */}
-          <div style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 700, letterSpacing: 1, marginBottom: 8, marginTop: 12 }}>DISPLACEMENT</div>
-          <div className="grid-2">
-            <Field label="Seuil force displacement" desc="Force minimale du mouvement directionnel. Live défaut: 0.40. Abaisser = plus de signaux, moins sélectif.">
-              <Num val={Number(btov.displacement_threshold ?? 0.35)} min={0.1} max={1.0} step={0.05} onChange={v => setBtOverride('displacement_threshold', v)} />
-            </Field>
-            <Field label="Ratio ATR minimum" desc="Taille du mouvement par rapport à l'ATR. Live défaut: 0.75. Abaisser accepte des mouvements plus petits.">
-              <Num val={Number(btov.displacement_atr_min ?? 0.60)} min={0.1} max={3.0} step={0.05} onChange={v => setBtOverride('displacement_atr_min', v)} />
-            </Field>
-            <Field label="Volume minimum displacement (×SMA20)" desc="Confirmation volumétrique du displacement. Live défaut: 1.2. Abaisser = moins de filtrage par le volume.">
-              <Num val={Number(btov.displacement_vol_min ?? 1.00)} min={0.3} max={3.0} step={0.1} onChange={v => setBtOverride('displacement_vol_min', v)} />
-            </Field>
-          </div>
-
-          {/* BOS */}
-          <div style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 700, letterSpacing: 1, marginBottom: 8, marginTop: 12 }}>BREAK OF STRUCTURE (BOS)</div>
-          <div className="grid-2">
-            <Field label="Sensibilité BOS (bougies lookback)" desc="Nombre de bougies pour détecter un swing point. Live défaut: 7. Plus élevé = swings plus significatifs.">
-              <Num val={Number(btov.bos_sensitivity ?? 9)} min={2} max={30} step={1} onChange={v => setBtOverride('bos_sensitivity', v)} />
-            </Field>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 8 }}>
-            <label style={{
-              display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
-              background: 'var(--surface2)', borderRadius: 6, cursor: 'pointer',
-              border: `1px solid ${Boolean(btov.bos_close_confirmation ?? false) ? 'var(--accent)' : 'var(--border)'}`,
-            }}>
-              <input type="checkbox" checked={Boolean(btov.bos_close_confirmation ?? false)}
-                onChange={e => setBtOverride('bos_close_confirmation', e.target.checked)} style={{ width: 'auto' }} />
-              <div>
-                <div style={{ fontWeight: 600, fontSize: 12 }}>BOS : clôture obligatoire</div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>
-                  Si activé, le BOS exige une clôture au-delà du swing (pas juste un wick). Live défaut: activé.
-                </div>
-              </div>
-            </label>
-          </div>
-
-          {/* Volume */}
-          <div style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 700, letterSpacing: 1, marginBottom: 8, marginTop: 12 }}>VOLUME</div>
-          <div className="grid-2">
-            <Field label="Multiplicateur volume session active" desc="Volume requis pendant sessions london/ny. Live défaut: 1.2. 1.0 = volume normal suffit.">
-              <Num val={Number(btov.volume_multiplier_active ?? 1.00)} min={0.3} max={4.0} step={0.1} onChange={v => setBtOverride('volume_multiplier_active', v)} />
-            </Field>
-            <Field label="Multiplicateur volume hors-session" desc="Volume requis hors sessions actives. Live défaut: 0.9.">
-              <Num val={Number(btov.volume_multiplier_offpeak ?? 0.80)} min={0.3} max={4.0} step={0.1} onChange={v => setBtOverride('volume_multiplier_offpeak', v)} />
-            </Field>
-          </div>
-
-          {/* Filtres bypassed */}
-          <div style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 700, letterSpacing: 1, marginBottom: 8, marginTop: 12 }}>FILTRES CONTOURNÉS</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {([
-              ['skip_htf_1h_validation', btov.skip_htf_1h_validation ?? true, 'Ignorer la validation HTF 1H vs 4H',
-               'Bypass le filtre 1H aligné/divergent. Élimine ~30% des rejets. Live : toujours actif.'],
-              ['allow_weekend_trading', btov.allow_weekend_trading ?? true, 'Autoriser le trading le weekend',
-               'Ignore le filtre weekend. Permet de couvrir tous les timestamps du walk-forward.'],
-              ['use_5m_refinement', btov.use_5m_refinement ?? false, 'Affiner l\'entrée sur bougies 5m',
-               'Utilise les bougies 5m pour affiner l\'entrée. Désactivé = plus rapide, moins précis.'],
-            ] as [string, boolean, string, string][]).map(([key, checked, title, desc]) => (
-              <label key={key} style={{
-                display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
-                background: 'var(--surface2)', borderRadius: 6, cursor: 'pointer',
-                border: `1px solid ${checked ? 'var(--accent)' : 'var(--border)'}`,
-              }}>
-                <input type="checkbox" checked={checked}
-                  onChange={e => setBtOverride(key, e.target.checked)} style={{ width: 'auto' }} />
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: 12 }}>{title}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>{desc}</div>
-                </div>
-              </label>
-            ))}
-          </div>
-        </div>
-
-        <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 6, background: 'rgba(234,179,8,0.06)', border: '1px solid rgba(234,179,8,0.2)', fontSize: 11, color: 'var(--text-muted)' }}>
-          ⚠️ Ces paramètres s'appliquent <strong>uniquement en mode backtest</strong>. Le pipeline paper/live n'est pas affecté.
-          Les valeurs des profils de stratégie ont priorité si explicitement définies.
         </div>
       </SectionCard>
 

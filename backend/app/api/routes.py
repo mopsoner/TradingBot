@@ -1548,8 +1548,11 @@ def run_walkforward(req: WalkForwardRequest) -> dict:
         rr_ratio=rr_ratio,
     )
 
-    # ── Persist BacktestResult ────────────────────────────────────────────────
-    profile_name_label = profile.name if req.profile_id and profile else f"SMC/Wyckoff — yfinance"
+    # ── Persist BacktestResult + Signals ──────────────────────────────────────
+    import uuid as _uuid
+    wf_run_id = f"wf-{req.symbol.lower()}-{_uuid.uuid4().hex[:8]}"
+
+    profile_name_label = profile.name if req.profile_id and profile else "SMC/Wyckoff — yfinance"
     gross_win  = sum(s.r_multiple for s in result.signals if s.result == "win")
     gross_loss = sum(abs(s.r_multiple) for s in result.signals if s.result == "loss")
     wins   = [s for s in result.signals if s.result == "win"]
@@ -1569,9 +1572,34 @@ def run_walkforward(req: WalkForwardRequest) -> dict:
         date_to=str(result.period_end)[:10] if result.period_end else None,
         profile_id=req.profile_id,
         overrides_json=json.dumps(config.backtest.overrides.model_dump()),
+        pipeline_run_id=wf_run_id,
     )
     with Session(engine) as s:
         s.add(_bt)
+        for sig in result.signals:
+            try:
+                ts = datetime.fromisoformat(str(sig.timestamp).replace("Z", "+00:00")) if sig.timestamp else datetime.now(timezone.utc)
+            except Exception:
+                ts = datetime.now(timezone.utc)
+            s.add(Signal(
+                timestamp=ts,
+                symbol=req.symbol,
+                timeframe=req.timeframe,
+                setup_type="SMC/Wyckoff",
+                liquidity_zone="wf",
+                sweep_level=sig.entry_price or 0.0,
+                bos_level=sig.entry_price or 0.0,
+                fib_zone="0.618",
+                accepted=True,
+                direction=sig.direction,
+                entry_price=sig.entry_price,
+                tp_price=sig.tp_price,
+                sl_price=sig.sl_price,
+                bt_outcome="win" if sig.result in ("TP", "win") else ("loss" if sig.result in ("SL", "loss") else sig.result),
+                bt_r_multiple=sig.r_multiple,
+                pipeline_run_id=wf_run_id,
+                mode="backtest",
+            ))
         s.add(Log(level="INFO", message=f"Walk-forward {req.symbol} {req.timeframe} {req.years}y: {result.total_signals} signals, WR {result.win_rate:.2%}, PF {result.profit_factor:.2f}"))
         s.commit()
         s.refresh(_bt)
@@ -2835,6 +2863,123 @@ Réponds UNIQUEMENT avec le JSON valide, rien d'autre."""
             "profile_name": profile.name if profile else None,
             "analysis": analysis,
         }
+    except json.JSONDecodeError as e:
+        return {"ok": False, "reason": f"ai_parse_error: {e}"}
+    except Exception as e:
+        return {"ok": False, "reason": str(e)}
+
+
+@router.post("/backtest/{backtest_id}/optimize-overrides")
+def optimize_backtest_overrides(backtest_id: int) -> dict:
+    """Analyse GPT-4o des métriques du backtest → suggestions d'overrides optimisés."""
+    with Session(engine) as s:
+        result = s.get(BacktestResult, backtest_id)
+        if not result:
+            return {"ok": False, "reason": "backtest_not_found"}
+
+    base_url = os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
+    api_key  = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY", "replit")
+    if not base_url:
+        return {"ok": False, "reason": "openai_integration_not_configured"}
+
+    try:
+        cur_ov = json.loads(result.overrides_json) if result.overrides_json else {}
+    except Exception:
+        cur_ov = {}
+
+    prompt = f"""Tu es un expert en trading algorithmique SMC (Smart Money Concepts) et Wyckoff.
+Tu dois analyser les résultats d'un backtest walk-forward et proposer des valeurs optimisées
+pour les paramètres d'override du pipeline de backtesting.
+
+RÉSULTATS DU BACKTEST:
+- Symbole: {result.symbol}
+- Timeframe: {result.timeframe}
+- Stratégie: {result.strategy_version}
+- Win Rate: {result.win_rate:.1%}
+- Profit Factor: {result.profit_factor:.2f}
+- Max Drawdown: {result.drawdown:.1%}
+- Expectancy: {result.expectancy:.4f}
+- R Multiple moyen: {result.r_multiple:.2f}R
+- Nombre de signaux: {result.signal_count}
+- Période: {result.date_from} → {result.date_to}
+
+OVERRIDES ACTUELS UTILISÉS:
+{json.dumps(cur_ov, indent=2)}
+
+DESCRIPTION DES OVERRIDES:
+- enabled: Active/désactive les overrides (bool)
+- wyckoff_lookback: Fenêtre de scan Spring/UTAD en bougies 15m (int, 5-96). Défaut live=5.
+- displacement_threshold: Force min du displacement (float, 0.1-1.0). Défaut live=0.40.
+- displacement_atr_min: Taille min vs ATR (float, 0.1-3.0). Défaut live=0.75.
+- displacement_vol_min: Volume min en ×SMA20 (float, 0.3-3.0). Défaut live=1.2.
+- bos_sensitivity: Lookback pour swing points BOS (int, 2-30). Défaut live=7.
+- bos_close_confirmation: BOS exige clôture au-delà du swing (bool). Défaut live=true.
+- volume_multiplier_active: Multiplicateur vol sessions actives (float, 0.3-4.0). Défaut live=1.2.
+- volume_multiplier_offpeak: Multiplicateur vol hors session (float, 0.3-4.0). Défaut live=0.9.
+- skip_htf_1h_validation: Ignore validation 1H vs 4H (bool). Défaut live=false.
+- allow_weekend_trading: Autorise trading week-end (bool). Défaut live=false.
+- use_5m_refinement: Affine entrée sur bougies 5m (bool). Défaut live=false.
+
+OBJECTIF D'OPTIMISATION:
+- Win Rate cible: ≥ 50%
+- Profit Factor cible: ≥ 1.5
+- Drawdown cible: ≤ 15%
+- Signaux cible: ≥ 30 (pas trop restrictif)
+
+RÈGLES:
+- Un WR < 40% ou PF < 1 indique des filtres trop laxistes → renforcer la sélectivité.
+- Un signal_count < 20 indique des filtres trop stricts → assouplir.
+- Le displacement_threshold et bos_sensitivity ont le plus grand impact sur le WR.
+- Les multiplicateurs de volume ont le plus grand impact sur la qualité des signaux.
+
+Génère des suggestions précises et actionnables.
+Format attendu (JSON strict, UNIQUEMENT le JSON):
+{{
+  "score": <note globale 0-100 basée sur WR/PF/DD>,
+  "verdict": "<une phrase de verdict en français>",
+  "suggested_overrides": {{
+    "enabled": true,
+    "wyckoff_lookback": <int 5-96>,
+    "displacement_threshold": <float 0.1-1.0>,
+    "displacement_atr_min": <float 0.1-3.0>,
+    "displacement_vol_min": <float 0.3-3.0>,
+    "bos_sensitivity": <int 2-30>,
+    "bos_close_confirmation": <bool>,
+    "volume_multiplier_active": <float 0.3-4.0>,
+    "volume_multiplier_offpeak": <float 0.3-4.0>,
+    "skip_htf_1h_validation": <bool>,
+    "allow_weekend_trading": <bool>,
+    "use_5m_refinement": <bool>
+  }},
+  "suggestions": [
+    {{
+      "titre": "<paramètre ou groupe ciblé>",
+      "probleme": "<ce qui ne va pas avec la valeur actuelle>",
+      "action": "<changement précis avec valeurs chiffrées avant/après>",
+      "impact": "haut|moyen|faible"
+    }}
+  ]
+}}"""
+
+    from openai import OpenAI
+    client = OpenAI(base_url=base_url, api_key=api_key)
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            max_completion_tokens=1500,
+            messages=[
+                {"role": "system", "content": "Tu es un expert en trading algorithmique. Réponds uniquement en JSON valide, sans markdown."},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        content = (response.choices[0].message.content or "{}").strip()
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+            content = content.strip()
+        analysis = json.loads(content)
+        return {"ok": True, "backtest_id": backtest_id, "analysis": analysis}
     except json.JSONDecodeError as e:
         return {"ok": False, "reason": f"ai_parse_error: {e}"}
     except Exception as e:
