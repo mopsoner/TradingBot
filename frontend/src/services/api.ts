@@ -98,7 +98,18 @@ export type Dashboard = {
   recent_trades: Trade[]; mode: string;
 };
 
+export type ProcessStatus = {
+  id: string;
+  type: 'scanner' | 'pipeline' | 'backtest' | 'live';
+  label: string;
+  status: 'running' | 'stopped' | 'idle';
+  detail: string;
+  seconds_to_next: number | null;
+  run_count: number;
+};
+
 export const api = {
+  systemProcesses: ()                         => get<{ processes: ProcessStatus[]; total_running: number; mode: string; timestamp: string }>('/api/system/processes'),
   dashboard:  ()                              => get<Dashboard>('/api/dashboard'),
   signals:    (params = '')                   => get<{ total: number; rows: Signal[] }>(`/api/signals${params}`),
   signalsForBacktest: (pipeline_run_id: string | null | undefined, symbol: string) =>

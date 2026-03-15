@@ -1160,8 +1160,15 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
     if not symbols:
         return {"ok": False, "reason": "Aucun symbole sélectionné"}
 
-    run_id = str(uuid.uuid4())
-    _run_live_scan(symbols, "MTF", profile_params, run_id, profile_name)
+    global _active_backtests
+    with _active_backtests_lock:
+        _active_backtests += 1
+    try:
+        run_id = str(uuid.uuid4())
+        _run_live_scan(symbols, "MTF", profile_params, run_id, profile_name)
+    finally:
+        with _active_backtests_lock:
+            _active_backtests = max(0, _active_backtests - 1)
 
     symbols_label = ", ".join(symbols)
 
@@ -1369,6 +1376,10 @@ _pipeline: dict[str, dict] = {}
 _pipeline_runs_state: dict[str, dict[str, dict]] = {}
 _pipeline_current_run_id: str | None = None
 _pipeline_lock = threading.Lock()
+
+# ── Active backtest counter ────────────────────────────────────────────────────
+_active_backtests     = 0
+_active_backtests_lock = threading.Lock()
 
 # ── Autonomous scanner state ───────────────────────────────────────────────────
 _auto_lock  = threading.Lock()
@@ -1608,6 +1619,104 @@ def autonomous_status() -> dict:
         except Exception:
             pass
     return {**state, "seconds_to_next": seconds_to_next}
+
+
+@router.get("/system/processes")
+def system_processes() -> dict:
+    """Snapshot en temps réel de tous les processus actifs."""
+    with _auto_lock:
+        scanner = dict(_auto_state)
+    now = datetime.now(timezone.utc)
+
+    seconds_to_next: int | None = None
+    if scanner["next_run_at"] and scanner["running"]:
+        try:
+            diff = (datetime.fromisoformat(scanner["next_run_at"]) - now).total_seconds()
+            seconds_to_next = max(0, int(diff))
+        except Exception:
+            pass
+
+    # Pipeline symbols en cours (statut non terminé)
+    with _pipeline_lock:
+        in_progress = [
+            sym for sym, data in _pipeline.items()
+            if not data.get("completed_at")
+        ]
+
+    with _active_backtests_lock:
+        active_bt = _active_backtests
+
+    # Mode live / paper
+    mode = config.system.mode
+
+    processes = []
+
+    # ── Scanner autonome (paper/live)
+    if scanner["running"]:
+        processes.append({
+            "id":     "scanner",
+            "type":   "scanner",
+            "label":  f"Scanner {mode.upper()}",
+            "status": "running",
+            "detail": f"{', '.join(scanner['symbols'][:3])} · {scanner['timeframe']} · toutes les {scanner['interval_minutes']}min",
+            "seconds_to_next": seconds_to_next,
+            "run_count": scanner.get("run_count", 0),
+        })
+    else:
+        processes.append({
+            "id":     "scanner",
+            "type":   "scanner",
+            "label":  "Scanner",
+            "status": "stopped",
+            "detail": "Aucun scanner actif",
+            "seconds_to_next": None,
+            "run_count": 0,
+        })
+
+    # ── Pipeline live (symboles en cours)
+    if in_progress:
+        processes.append({
+            "id":     "pipeline",
+            "type":   "pipeline",
+            "label":  "Pipeline Live",
+            "status": "running",
+            "detail": f"Analyse en cours: {', '.join(in_progress[:5])}",
+            "seconds_to_next": None,
+            "run_count": len(in_progress),
+        })
+
+    # ── Backtests actifs
+    if active_bt > 0:
+        processes.append({
+            "id":     "backtest",
+            "type":   "backtest",
+            "label":  "Backtest",
+            "status": "running",
+            "detail": f"{active_bt} backtest(s) en cours",
+            "seconds_to_next": None,
+            "run_count": active_bt,
+        })
+
+    # ── Live trading
+    if mode == "live":
+        processes.append({
+            "id":     "live",
+            "type":   "live",
+            "label":  "Trading Live",
+            "status": "running",
+            "detail": f"Mode LIVE actif",
+            "seconds_to_next": None,
+            "run_count": 0,
+        })
+
+    total_running = sum(1 for p in processes if p["status"] == "running")
+
+    return {
+        "processes":     processes,
+        "total_running": total_running,
+        "mode":          mode,
+        "timestamp":     now.isoformat(),
+    }
 
 
 class PipelineRunRequest(BaseModel):
