@@ -1264,7 +1264,7 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
         _active_backtests += 1
     try:
         run_id = str(uuid.uuid4())
-        _run_live_scan(symbols, "MTF", profile_params, run_id, profile_name)
+        _run_live_scan(symbols, "MTF", profile_params, run_id, profile_name, is_backtest=True)
     finally:
         with _active_backtests_lock:
             _active_backtests = max(0, _active_backtests - 1)
@@ -1902,7 +1902,7 @@ def _get_last_price(symbol: str) -> float:
     return round(rng_fallback.uniform(80, 120), 4)
 
 
-def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pipeline_run_id: str | None = None, profile_name: str = "SMC/Wyckoff") -> None:
+def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pipeline_run_id: str | None = None, profile_name: str = "SMC/Wyckoff", is_backtest: bool = False) -> None:
     """
     Pipeline live SMC/Wyckoff conforme au cahier des charges.
     - Séquence en 7 étapes strictes et obligatoires
@@ -1928,12 +1928,19 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
     bos_close_conf  = bool(profile_params.get("bos_close_confirmation", config.strategy.bos_close_confirmation))
     fib_split       = bool(profile_params.get("fib_entry_split", config.strategy.fib_entry_split))
 
+    if is_backtest:
+        allow_weekend = True
+
     rng = random.Random()
     now = datetime.now(timezone.utc)
 
     # ── Session / Weekend filter (filtre, pas signal) ────────────────────────
-    tradeable, session_reason = session_filter.is_tradeable(now, config.session, allow_weekend=allow_weekend)
-    current_session = session_filter.session_name(now, config.session)
+    if is_backtest:
+        tradeable, session_reason = True, "Backtest — filtre session/weekend désactivé"
+        current_session = session_filter.session_name(now, config.session)
+    else:
+        tradeable, session_reason = session_filter.is_tradeable(now, config.session, allow_weekend=allow_weekend)
+        current_session = session_filter.session_name(now, config.session)
 
     run_state: dict[str, dict] = {}
     if pipeline_run_id:
