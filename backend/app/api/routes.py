@@ -1418,11 +1418,17 @@ def _auto_start_for_paper(interval_minutes: int = 5, timeframe: str = "15m") -> 
     if not symbols:
         return False
 
+    profile_id: int | None = None
+    with Session(engine) as s:
+        first_profile = s.exec(select(StrategyProfile)).first()
+        if first_profile:
+            profile_id = first_profile.id
+
     with _auto_lock:
         _auto_state["running"]          = True
         _auto_state["symbols"]          = symbols
         _auto_state["timeframe"]        = timeframe
-        _auto_state["profile_id"]       = None
+        _auto_state["profile_id"]       = profile_id
         _auto_state["interval_minutes"] = interval_minutes
         _auto_state["run_count"]        = 0
         _auto_state["last_signals"]     = 0
