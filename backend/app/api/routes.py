@@ -2255,18 +2255,18 @@ def _run_live_scan(
                 _pipeline[symbol]["steps"][3]["status"] = "checking"
                 time.sleep(rng.uniform(0.05, 0.10))
             atr_min_param = float(profile_params.get("displacement_atr_min", config.strategy.displacement_atr_min))
+            vol_min_param = float(profile_params.get("displacement_vol_min", 1.2))
             disp_ok, disp_val, atr_ratio, disp_vol = ta.detect_displacement(
                 candles_15m, direction or "LONG",
                 disp_threshold=disp_threshold,
                 atr_min=atr_min_param,
-                vol_min=1.8,
+                vol_min=vol_min_param,
             )
             atr_ok      = atr_ratio >= atr_min_param
-            close_ok    = True  # Encoded inside detect_displacement
-            disp_vol_ok = disp_vol >= 1.8
+            disp_vol_ok = disp_vol >= vol_min_param
             atr_detail  = (
-                f"ATR ratio {atr_ratio:.2f}× {'✓' if atr_ok else '✗<1.2'}, "
-                f"vol {disp_vol:.2f}×{'✓' if disp_vol_ok else '✗<1.8'}"
+                f"ATR ratio {atr_ratio:.2f}× {'✓' if atr_ok else f'✗<{atr_min_param}'}, "
+                f"vol {disp_vol:.2f}×{'✓' if disp_vol_ok else f'✗<{vol_min_param}'}"
             )
             if not silent:
                 _set_step(symbol, 3, "passed" if disp_ok else "failed",

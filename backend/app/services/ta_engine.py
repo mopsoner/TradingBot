@@ -144,18 +144,17 @@ def detect_sweep(candles_15m: list, zone_price: float, is_high_zone: bool) -> tu
     """
     True if a recent candle swept the zone (wick beyond zone, close back inside).
     Returns (sweep_ok, actual_sweep_price).
+    Looks back up to 12 candles (3 h on 15m TF) for a sweep event.
     """
     if not candles_15m:
         return False, zone_price
 
-    for c in reversed(candles_15m[-6:]):
+    for c in reversed(candles_15m[-12:]):
         if is_high_zone:
-            # Wick above zone, close below zone
-            if c.high >= zone_price * 0.998 and c.close < zone_price:
+            if c.high >= zone_price * 0.995 and c.close < zone_price:
                 return True, round(c.high, 6)
         else:
-            # Wick below zone, close above zone
-            if c.low <= zone_price * 1.002 and c.close > zone_price:
+            if c.low <= zone_price * 1.005 and c.close > zone_price:
                 return True, round(c.low, 6)
 
     return False, zone_price
@@ -172,26 +171,26 @@ def detect_wyckoff(
     """
     Returns (spring, utad, direction, wyckoff_event).
     Spring → bullish (LONG), UTAD → bearish (SHORT).
+    Scans the last 5 candles so a Spring/UTAD a few bars ago still qualifies.
     """
     if len(candles_15m) < 6:
         return False, False, None, "Aucun"
 
-    recent = candles_15m[-12:]
-    highs, lows = swing_highs_lows(recent, n=2) if len(recent) >= 7 else ([], [])
+    # Use a wider window for swing detection (n=1 = more sensitive)
+    reference = candles_15m[-20:]
+    highs, lows = swing_highs_lows(reference, n=1) if len(reference) >= 5 else ([], [])
 
-    last = candles_15m[-1]
+    # Check the last 5 candles for a Spring or UTAD event
+    for last in reversed(candles_15m[-5:]):
+        if enable_spring and structure_4h in ("Bullish", "Neutre / Range") and lows:
+            ref_low = lows[-1].low
+            if last.low < ref_low and last.close > ref_low:
+                return True, False, "LONG", "Spring bullish"
 
-    # Spring: price dips below recent swing low then closes back above it
-    if enable_spring and structure_4h in ("Bullish", "Neutre / Range") and lows:
-        ref_low = lows[-1].low
-        if last.low < ref_low and last.close > ref_low:
-            return True, False, "LONG", "Spring bullish"
-
-    # UTAD: price breaks above recent swing high then closes back below it
-    if enable_utad and structure_4h in ("Bearish", "Neutre / Range") and highs:
-        ref_high = highs[-1].high
-        if last.high > ref_high and last.close < ref_high:
-            return False, True, "SHORT", "UTAD bearish"
+        if enable_utad and structure_4h in ("Bearish", "Neutre / Range") and highs:
+            ref_high = highs[-1].high
+            if last.high > ref_high and last.close < ref_high:
+                return False, True, "SHORT", "UTAD bearish"
 
     return False, False, None, "Aucun"
 
@@ -201,41 +200,40 @@ def detect_wyckoff(
 def detect_displacement(
     candles_15m: list,
     direction: str,
-    disp_threshold: float = 0.55,
-    atr_min: float = 1.2,
-    vol_min: float = 1.8,
+    disp_threshold: float = 0.40,
+    atr_min: float = 0.75,
+    vol_min: float = 1.3,
 ) -> tuple[bool, float, float, float]:
     """
     Returns (ok, disp_val, atr_ratio, vol_ratio).
-    disp_val   = candle range / ATR capped at 1.0
-    atr_ratio  = candle range / ATR(14)
-    vol_ratio  = candle volume / SMA20(volume)
+    Scans the last 3 candles — displacement may lead by 1-2 bars.
+    disp_val  = candle range / ATR capped at 1.0
+    atr_ratio = candle range / ATR(14)
+    vol_ratio = candle volume / SMA20(volume)
     """
     if len(candles_15m) < 5:
         return False, 0.0, 0.0, 1.0
 
-    atr_val      = atr(candles_15m, 14)
-    last         = candles_15m[-1]
-    candle_range = last.high - last.low
-    atr_ratio    = round(candle_range / atr_val, 2)
+    atr_val = atr(candles_15m, 14)
+    vols    = [c.volume for c in candles_15m]
+    vol_sma = sma(vols[:-1], 20) if len(vols) > 1 else vols[0]
 
-    # Close position within the candle body
-    close_pct = (last.close - last.low) / max(candle_range, 1e-9)
-    close_ok  = close_pct >= 0.70 if direction == "LONG" else close_pct <= 0.30
+    best: tuple[bool, float, float, float] | None = None
 
-    # Volume vs SMA20
-    vols      = [c.volume for c in candles_15m]
-    vol_sma   = sma(vols[:-1], 20) if len(vols) > 1 else vols[0]
-    vol_ratio = round(last.volume / max(vol_sma, 1e-9), 2)
+    for last in reversed(candles_15m[-3:]):
+        candle_range = last.high - last.low
+        atr_ratio    = round(candle_range / max(atr_val, 1e-9), 2)
+        vol_ratio    = round(last.volume / max(vol_sma, 1e-9), 2)
+        disp_val     = round(min(atr_ratio / 2.0, 1.0), 2)
+        atr_ok       = atr_ratio >= atr_min
+        vol_ok       = vol_ratio >= vol_min
+        ok           = disp_val >= disp_threshold and atr_ok and vol_ok
+        if ok:
+            return True, disp_val, atr_ratio, vol_ratio
+        if best is None:
+            best = (False, disp_val, atr_ratio, vol_ratio)
 
-    # Normalised displacement score (capped at 1)
-    disp_val  = round(min(atr_ratio / 2.0, 1.0), 2)
-
-    atr_ok  = atr_ratio >= atr_min
-    vol_ok  = vol_ratio >= vol_min
-    ok      = disp_val >= disp_threshold and atr_ok and close_ok and vol_ok
-
-    return ok, disp_val, atr_ratio, vol_ratio
+    return best if best is not None else (False, 0.0, 0.0, 1.0)
 
 
 # ── Step 4: BOS (Break of Structure) ─────────────────────────────────────────
@@ -250,26 +248,40 @@ def detect_bos(
     Returns (bos_ok, bos_level).
     Higher sensitivity → shorter lookback (easier to trigger BOS).
     bos_level is the swing level that was broken.
+    Scans the last 5 candles: BOS may have occurred a few bars before the current candle.
     """
     if len(candles_15m) < 5:
         return False, candles_15m[-1].close if candles_15m else 0.0
 
     # Sensitivity 3 → lookback 22, sensitivity 10 → lookback 8
     lookback = max(8, 25 - int(bos_sens * 1.7))
-    lookback = min(lookback, len(candles_15m) - 1)
-    recent   = candles_15m[-lookback - 1:]  # include current candle
+    lookback = min(lookback, len(candles_15m) - 4)
 
-    prev     = recent[:-1]
-    current  = recent[-1]
+    # Scan last 5 candles — BOS could have been confirmed a few bars ago
+    for offset in range(5):
+        idx     = len(candles_15m) - 1 - offset        # current candidate
+        end_idx = idx + 1
+        start   = max(0, end_idx - lookback - 1)
+        prev    = candles_15m[start:idx]
+        if not prev:
+            continue
+        current = candles_15m[idx]
+        if direction == "LONG":
+            level  = max(c.high for c in prev)
+            bos_ok = (current.close > level) if close_confirmation else (current.high > level)
+        else:
+            level  = min(c.low for c in prev)
+            bos_ok = (current.close < level) if close_confirmation else (current.low < level)
+        if bos_ok:
+            return True, round(level, 6)
 
+    # Return reference level from latest context
+    ref = candles_15m[-lookback - 1:-1] if len(candles_15m) > lookback + 1 else candles_15m[:-1]
     if direction == "LONG":
-        level  = max(c.high for c in prev)
-        bos_ok = (current.close > level) if close_confirmation else (current.high > level)
+        level = max(c.high for c in ref) if ref else candles_15m[-1].close
     else:
-        level  = min(c.low for c in prev)
-        bos_ok = (current.close < level) if close_confirmation else (current.low < level)
-
-    return bos_ok, round(level, 6)
+        level = min(c.low  for c in ref) if ref else candles_15m[-1].close
+    return False, round(level, 6)
 
 
 # ── Step 5 (pre): Volume ─────────────────────────────────────────────────────

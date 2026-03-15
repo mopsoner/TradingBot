@@ -5,13 +5,13 @@ class StrategySettings(BaseModel):
     enable_spring: bool = True
     enable_utad: bool = True
     fib_levels: list[float] = Field(default_factory=lambda: [0.5, 0.618, 0.786])
-    displacement_threshold: float = 0.55
-    displacement_atr_min: float = 1.2
+    displacement_threshold: float = 0.40
+    displacement_atr_min: float = 0.75
     bos_sensitivity: int = 7
     htf_alignment_required: bool = True
     volume_adaptive: bool = True
-    volume_multiplier_active: float = 1.8
-    volume_multiplier_offpeak: float = 1.25
+    volume_multiplier_active: float = 1.2
+    volume_multiplier_offpeak: float = 0.9
     fib_entry_split: bool = True
     rsi_divergence_only: bool = True
     stop_logic: str = "structure"
