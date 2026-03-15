@@ -219,7 +219,7 @@ export function PipelinePage() {
     stopPolling();
     try {
       await api.runPipeline({ symbols: selected, timeframe, profile_id: profileId, mode });
-      pollRef.current = setInterval(poll, 500);
+      pollRef.current = setInterval(poll, 2000);
     } catch {
       setRunning(false);
     }
@@ -611,7 +611,7 @@ export function PipelinePage() {
                       const dur = r.completed_at
                         ? Math.round((new Date(r.completed_at).getTime() - new Date(r.started_at).getTime()) / 1000)
                         : null;
-                      const shortId = `#${r.run_id.slice(0, 6)}`;
+                      const shortId = `#${r.run_id.slice(0, 4)}`;
                       return (
                         <tr
                           key={r.run_id}

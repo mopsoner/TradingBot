@@ -406,7 +406,7 @@ export function SignalsPage() {
                                 }}
                                 title="Voir le run pipeline"
                               >
-                                #{s.pipeline_run_id.slice(0, 6)}
+                                #{s.pipeline_run_id.slice(0, 4)}
                               </span>
                             ) : pActive ? (
                               <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>

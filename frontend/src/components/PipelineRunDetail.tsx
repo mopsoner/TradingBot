@@ -13,6 +13,7 @@ function stepColor(status: string): string {
 }
 
 type StepData = { name: string; status: string; detail?: string };
+type SymbolResult = { final_status: string; final_direction: string | null; final_reason: string | null; steps: StepData[]; tf_4h_structure?: string | null; tf_1h_validation?: string | null };
 
 export function PipelineRunDetailModal({
   runId,
@@ -88,13 +89,15 @@ export function PipelineRunDetailModal({
               {isComplete ? '✅' : '⟳'}
             </div>
             <div>
-              <div style={{ fontWeight: 800, fontSize: 16 }}>
-                Pipeline Run · {run.timeframe}
+              <div style={{ fontWeight: 800, fontSize: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span>Pipeline Run</span>
+                <span style={{ fontFamily: 'monospace', color: 'var(--accent)', fontSize: 13 }}>#{run.run_id.slice(0, 4)}</span>
+                <span className="tag" style={{ fontSize: 10 }}>{run.timeframe}</span>
               </div>
               <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>
                 {fmtDateTime(run.started_at)}
                 {duration !== null && ` · ${duration}s`}
-                {' · '}{run.mode}
+                {' · '}{run.mode} · {run.source}
               </div>
             </div>
           </div>
@@ -175,6 +178,20 @@ export function PipelineRunDetailModal({
                       )}
                     </div>
                   </div>
+                  {((r as SymbolResult).tf_4h_structure || (r as SymbolResult).tf_1h_validation) && (
+                    <div style={{ marginTop: 6, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                      {(r as SymbolResult).tf_4h_structure && (
+                        <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                          <strong style={{ color: 'var(--accent)' }}>4H:</strong> {(r as SymbolResult).tf_4h_structure}
+                        </span>
+                      )}
+                      {(r as SymbolResult).tf_1h_validation && (
+                        <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                          <strong style={{ color: 'var(--accent)' }}>1H:</strong> {(r as SymbolResult).tf_1h_validation}
+                        </span>
+                      )}
+                    </div>
+                  )}
                   {isRejected && r.final_reason && (
                     <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-muted)' }}>
                       {r.final_reason}
