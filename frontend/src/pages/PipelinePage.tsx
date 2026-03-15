@@ -174,7 +174,9 @@ export function PipelinePage() {
   const [history, setHistory]           = useState<PipelineRunRecord[]>([]);
   const [historyTotal, setHistoryTotal] = useState(0);
   const [historyOpen, setHistoryOpen]   = useState(false);
+  const [historyPage, setHistoryPage]   = useState(0);
   const [detailRunId, setDetailRunId]   = useState<string | null>(null);
+  const HISTORY_PAGE_SIZE = 20;
 
   const profileRows = (profiles?.rows as Array<Record<string, unknown>> | undefined) ?? [];
 
@@ -216,7 +218,7 @@ export function PipelinePage() {
     setLiveStatus(null);
     stopPolling();
     try {
-      await api.runPipeline({ symbols: selected, timeframe, profile_id: profileId });
+      await api.runPipeline({ symbols: selected, timeframe, profile_id: profileId, mode });
       pollRef.current = setInterval(poll, 500);
     } catch {
       setRunning(false);
@@ -248,14 +250,15 @@ export function PipelinePage() {
     }
   };
 
-  const fetchHistory = () => {
-    api.pipelineRuns('?limit=20').then(data => {
+  const fetchHistory = (page = historyPage) => {
+    const offset = page * HISTORY_PAGE_SIZE;
+    api.pipelineRuns(`?limit=${HISTORY_PAGE_SIZE}&offset=${offset}`).then(data => {
       setHistory(data.rows);
       setHistoryTotal(data.total);
     }).catch(() => {});
   };
 
-  useEffect(() => { fetchHistory(); }, []);
+  useEffect(() => { fetchHistory(0); }, []);
 
   useEffect(() => () => stopPolling(), []);
 
@@ -586,58 +589,96 @@ export function PipelinePage() {
           <span style={{ fontSize: 12, color: 'var(--text-muted)', transition: 'transform 0.2s', transform: historyOpen ? 'rotate(180deg)' : 'none' }}>▼</span>
         </div>
         {historyOpen && (
-          <div style={{ maxHeight: 350, overflowY: 'auto' }}>
-            {history.length === 0 ? (
-              <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>
-                Aucun run enregistré
+          <div>
+            <div style={{ maxHeight: 350, overflowY: 'auto' }}>
+              {history.length === 0 ? (
+                <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>
+                  Aucun run enregistré
+                </div>
+              ) : (
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--border-mid)' }}>
+                      {['RUN', 'DATE', 'MODE', 'TF', 'SYMBOLES', 'OK', 'KO', 'DURÉE'].map(h => (
+                        <th key={h} style={{ padding: '7px 10px', fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textAlign: 'left', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {history.map(r => {
+                      let syms: string[] = [];
+                      try { syms = JSON.parse(r.symbols_json); } catch { /**/ }
+                      const dur = r.completed_at
+                        ? Math.round((new Date(r.completed_at).getTime() - new Date(r.started_at).getTime()) / 1000)
+                        : null;
+                      const shortId = `#${r.run_id.slice(0, 6)}`;
+                      return (
+                        <tr
+                          key={r.run_id}
+                          onClick={() => setDetailRunId(r.run_id)}
+                          style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', transition: 'background 0.12s' }}
+                          onMouseEnter={e => (e.currentTarget.style.background = 'rgba(59,130,246,0.04)')}
+                          onMouseLeave={e => (e.currentTarget.style.background = '')}
+                        >
+                          <td style={{ padding: '8px 10px' }}>
+                            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)', fontFamily: 'monospace' }}>{shortId}</span>
+                          </td>
+                          <td style={{ padding: '8px 10px', fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{fmtDateTime(r.started_at)}</td>
+                          <td style={{ padding: '8px 10px' }}>
+                            <span style={{
+                              fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 4,
+                              background: r.mode === 'live' ? 'rgba(248,81,73,0.15)' : 'rgba(59,130,246,0.12)',
+                              color: r.mode === 'live' ? 'var(--accent-red)' : 'var(--accent)',
+                            }}>{r.mode}</span>
+                          </td>
+                          <td style={{ padding: '8px 10px' }}><span className="tag" style={{ fontSize: 10 }}>{r.timeframe}</span></td>
+                          <td style={{ padding: '8px 10px', fontSize: 12, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {syms.map(s => fmtSym(s)).join(', ')}
+                          </td>
+                          <td style={{ padding: '8px 10px' }}>
+                            <span style={{ fontWeight: 700, color: r.accepted_count > 0 ? 'var(--accent-green)' : 'var(--text-muted)' }}>
+                              {r.accepted_count}
+                            </span>
+                          </td>
+                          <td style={{ padding: '8px 10px' }}>
+                            <span style={{ fontWeight: 700, color: r.rejected_count > 0 ? 'var(--accent-red)' : 'var(--text-muted)' }}>
+                              {r.rejected_count}
+                            </span>
+                          </td>
+                          <td style={{ padding: '8px 10px', fontSize: 12, color: 'var(--text-muted)' }}>
+                            {dur !== null ? `${dur}s` : '—'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            {historyTotal > HISTORY_PAGE_SIZE && (
+              <div style={{ padding: '8px 16px', borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                  Page {historyPage + 1} / {Math.ceil(historyTotal / HISTORY_PAGE_SIZE)} ({historyTotal} runs)
+                </span>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    className="btn btn-secondary"
+                    style={{ fontSize: 11, padding: '3px 10px' }}
+                    disabled={historyPage === 0}
+                    onClick={() => { const p = historyPage - 1; setHistoryPage(p); fetchHistory(p); }}
+                  >
+                    ← Préc.
+                  </button>
+                  <button
+                    className="btn btn-secondary"
+                    style={{ fontSize: 11, padding: '3px 10px' }}
+                    disabled={(historyPage + 1) * HISTORY_PAGE_SIZE >= historyTotal}
+                    onClick={() => { const p = historyPage + 1; setHistoryPage(p); fetchHistory(p); }}
+                  >
+                    Suiv. →
+                  </button>
+                </div>
               </div>
-            ) : (
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ borderBottom: '1px solid var(--border-mid)' }}>
-                    {['DATE', 'TF', 'SYMBOLES', 'ACCEPTÉS', 'REJETÉS', 'DURÉE'].map(h => (
-                      <th key={h} style={{ padding: '7px 12px', fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textAlign: 'left', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {history.map(r => {
-                    let syms: string[] = [];
-                    try { syms = JSON.parse(r.symbols_json); } catch { /**/ }
-                    const dur = r.completed_at
-                      ? Math.round((new Date(r.completed_at).getTime() - new Date(r.started_at).getTime()) / 1000)
-                      : null;
-                    return (
-                      <tr
-                        key={r.run_id}
-                        onClick={() => setDetailRunId(r.run_id)}
-                        style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', transition: 'background 0.12s' }}
-                        onMouseEnter={e => (e.currentTarget.style.background = 'rgba(59,130,246,0.04)')}
-                        onMouseLeave={e => (e.currentTarget.style.background = '')}
-                      >
-                        <td style={{ padding: '8px 12px', fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{fmtDateTime(r.started_at)}</td>
-                        <td style={{ padding: '8px 12px' }}><span className="tag" style={{ fontSize: 10 }}>{r.timeframe}</span></td>
-                        <td style={{ padding: '8px 12px', fontSize: 12, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {syms.map(s => fmtSym(s)).join(', ')}
-                        </td>
-                        <td style={{ padding: '8px 12px' }}>
-                          <span style={{ fontWeight: 700, color: r.accepted_count > 0 ? 'var(--accent-green)' : 'var(--text-muted)' }}>
-                            {r.accepted_count}
-                          </span>
-                        </td>
-                        <td style={{ padding: '8px 12px' }}>
-                          <span style={{ fontWeight: 700, color: r.rejected_count > 0 ? 'var(--accent-red)' : 'var(--text-muted)' }}>
-                            {r.rejected_count}
-                          </span>
-                        </td>
-                        <td style={{ padding: '8px 12px', fontSize: 12, color: 'var(--text-muted)' }}>
-                          {dur !== null ? `${dur}s` : '—'}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
             )}
           </div>
         )}

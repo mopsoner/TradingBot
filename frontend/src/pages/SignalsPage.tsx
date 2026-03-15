@@ -395,7 +395,20 @@ export function SignalsPage() {
                           <td style={{ padding: '10px 14px' }} onClick={e => {
                             if (s.pipeline_run_id) { e.stopPropagation(); setDetailRunId(s.pipeline_run_id); }
                           }}>
-                            {pActive && (
+                            {s.pipeline_run_id ? (
+                              <span
+                                style={{
+                                  fontSize: 11, fontWeight: 700, fontFamily: 'monospace',
+                                  color: 'var(--accent)', cursor: 'pointer',
+                                  padding: '2px 8px', borderRadius: 5,
+                                  background: 'rgba(59,130,246,0.1)',
+                                  border: '1px solid rgba(59,130,246,0.2)',
+                                }}
+                                title="Voir le run pipeline"
+                              >
+                                #{s.pipeline_run_id.slice(0, 6)}
+                              </span>
+                            ) : pActive ? (
                               <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                                 <div style={{
                                   width: 6, height: 6, borderRadius: '50%',
@@ -405,27 +418,7 @@ export function SignalsPage() {
                                   En cours
                                 </span>
                               </div>
-                            )}
-                            {pAccepted && !pActive && (
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                                {pEntry.steps.map((step, i) => (
-                                  <div key={i} style={{
-                                    width: 7, height: 7, borderRadius: 2,
-                                    background: stepDotColor(step.status),
-                                    opacity: step.status === 'pending' ? 0.2 : 1,
-                                  }} />
-                                ))}
-                              </div>
-                            )}
-                            {!pEntry && s.pipeline_run_id && (
-                              <span
-                                style={{ fontSize: 10, color: 'var(--accent)', cursor: 'pointer', textDecoration: 'underline', fontWeight: 600 }}
-                                title="Voir le run pipeline"
-                              >
-                                Run
-                              </span>
-                            )}
-                            {!pEntry && !s.pipeline_run_id && (
+                            ) : (
                               <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>—</span>
                             )}
                           </td>

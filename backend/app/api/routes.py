@@ -1342,8 +1342,25 @@ def _autonomous_worker() -> None:
         run_now = datetime.now(timezone.utc)
 
         # ── Full 7-step SMC/Wyckoff pipeline with 4H→1H→15m hierarchy ────────
+        auto_run_id: str | None = None
         try:
-            _run_live_scan(symbols, tf, profile_params)
+            with Session(engine) as s:
+                auto_run = PipelineRun(
+                    mode="paper",
+                    source="autonomous",
+                    symbols_json=json.dumps(symbols),
+                    timeframe=tf,
+                    profile_id=pid,
+                    total_count=len(symbols),
+                )
+                s.add(auto_run)
+                s.commit()
+                s.refresh(auto_run)
+                auto_run_id = auto_run.run_id
+        except Exception:
+            pass
+        try:
+            _run_live_scan(symbols, tf, profile_params, auto_run_id)
         except Exception as exc:
             results = [{"symbol": sym, "status": "ERROR", "signal": "—",
                         "session": "?", "details": str(exc), "ts": run_now.isoformat()}
@@ -1504,6 +1521,7 @@ class PipelineRunRequest(BaseModel):
     symbols: list[str] = Field(min_length=1)
     timeframe: str = "1h"
     profile_id: int | None = None
+    mode: str = "paper"
 
 
 def _set_step(symbol: str, idx: int, status: str, detail: str = "") -> None:
@@ -1590,6 +1608,7 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
                         sweep_level=0, bos_level=0, fib_zone="N/A",
                         accepted=False, reject_reason=session_reason,
                         session_name=current_session,
+                        pipeline_run_id=pipeline_run_id,
                     ))
                     s.add(Log(level="INFO", message=f"[Pipeline] {symbol} rejeté — {session_reason}"))
                     s.commit()
@@ -1624,6 +1643,7 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
                         reject_reason=f"1H diverge du 4H ({tf4h})",
                         tf_4h_structure=tf4h, tf_1h_validation=tf1h,
                         session_name=current_session,
+                        pipeline_run_id=pipeline_run_id,
                     ))
                     s.commit()
                 continue
@@ -2024,7 +2044,7 @@ def run_pipeline(req: PipelineRunRequest) -> dict:
 
     with Session(engine) as s:
         run = PipelineRun(
-            mode="paper",
+            mode=req.mode,
             source="manual",
             symbols_json=json.dumps(req.symbols),
             timeframe=req.timeframe,
