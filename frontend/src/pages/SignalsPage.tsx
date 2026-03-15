@@ -450,6 +450,7 @@ export function SignalsPage() {
                       <Th col="bos_level"   style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>BOS</Th>
                       <th style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Fib</th>
                       <Th col="accepted"    style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Statut</Th>
+                      <th style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Raison rejet</th>
                       <th style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Pipeline</th>
                     </tr>
                   </thead>
@@ -485,6 +486,29 @@ export function SignalsPage() {
                             <span className={`badge ${s.accepted ? 'badge-green' : 'badge-gray'}`}>
                               {s.accepted ? 'Accepté' : 'Rejeté'}
                             </span>
+                          </td>
+                          <td style={{ padding: '10px 14px', maxWidth: 200 }}>
+                            {!s.accepted && s.reject_reason ? (
+                              <span
+                                title={s.reject_reason}
+                                style={{
+                                  fontSize: 11,
+                                  display: 'block', overflow: 'hidden',
+                                  textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                  maxWidth: 190, cursor: 'help',
+                                  padding: '2px 6px', borderRadius: 4,
+                                  background: 'rgba(248,81,73,0.07)',
+                                  border: '1px solid rgba(248,81,73,0.18)',
+                                  color: 'var(--accent-red)',
+                                }}
+                              >
+                                {s.reject_reason}
+                              </span>
+                            ) : s.accepted ? (
+                              <span style={{ fontSize: 11, color: 'var(--accent-green)' }}>—</span>
+                            ) : (
+                              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>—</span>
+                            )}
                           </td>
                           <td style={{ padding: '10px 14px' }} onClick={e => {
                             if (s.pipeline_run_id) { e.stopPropagation(); setDetailRunId(s.pipeline_run_id); }

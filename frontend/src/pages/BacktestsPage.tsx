@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
 import type { AdminPage } from '../types';
-import type { BacktestResult, Signal } from '../services/api';
+import type { BacktestResult, ProcessStatus, Signal } from '../services/api';
 
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
 function pct(n: number) { return (n * 100).toFixed(1) + '%'; }
@@ -267,6 +267,111 @@ function OptimizePanel({ result, onClose }: { result: BacktestResult; onClose: (
   );
 }
 
+/* ── BacktestProcessCard ─────────────────────────────────────────────────── */
+function BacktestProcessCard({ onDone }: { onDone?: () => void }) {
+  const [processes, setProcesses] = useState<ProcessStatus[]>([]);
+  const [stopping, setStopping] = useState(false);
+
+  const load = () => {
+    api.systemProcesses().then(d => {
+      const prev = processes;
+      const bt = d.processes.filter(p => p.type === 'backtest' || p.type === 'import');
+      setProcesses(bt);
+      const wasRunning = prev.some(p => p.status === 'running');
+      const nowDone    = bt.every(p => p.status !== 'running');
+      if (wasRunning && nowDone && onDone) onDone();
+    }).catch(() => {});
+  };
+
+  useEffect(() => {
+    load();
+    const poll = setInterval(load, 3000);
+    return () => clearInterval(poll);
+  }, []);
+
+  const handleStop = async () => {
+    setStopping(true);
+    try { await api.autonomousStop(); } catch { /**/ }
+    setTimeout(() => { load(); setStopping(false); }, 1000);
+  };
+
+  const running = processes.filter(p => p.status === 'running');
+  if (processes.length === 0) return null;
+
+  return (
+    <div style={{
+      marginBottom: 20, padding: '14px 18px', borderRadius: 10,
+      background: 'rgba(168,85,247,0.06)', border: '1px solid rgba(168,85,247,0.3)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: running.length > 0 ? 12 : 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{
+            width: 10, height: 10, borderRadius: '50%', flexShrink: 0,
+            background: running.length > 0 ? '#a855f7' : 'var(--text-muted)',
+            boxShadow: running.length > 0 ? '0 0 8px #a855f7' : 'none',
+            animation: running.length > 0 ? 'pulse 2s infinite' : 'none',
+          }} />
+          <span style={{ fontWeight: 700, fontSize: 14, color: running.length > 0 ? 'var(--text)' : 'var(--text-muted)' }}>
+            {running.length > 0 ? `Backtest en cours (${running.length})` : 'Processus terminé'}
+          </span>
+        </div>
+        {running.length > 0 && (
+          <button
+            onClick={handleStop}
+            disabled={stopping}
+            style={{
+              padding: '5px 14px', borderRadius: 6, fontSize: 12, fontWeight: 700,
+              border: '1px solid rgba(239,68,68,0.45)',
+              background: stopping ? 'rgba(239,68,68,0.06)' : 'rgba(239,68,68,0.13)',
+              color: 'var(--accent-red)', cursor: stopping ? 'default' : 'pointer',
+              opacity: stopping ? 0.6 : 1,
+            }}
+          >
+            {stopping ? 'Arrêt…' : '⏹ Arrêter'}
+          </button>
+        )}
+      </div>
+
+      {processes.map(p => {
+        const isRunning = p.status === 'running';
+        return (
+          <div key={p.id} style={{
+            display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0',
+            borderTop: '1px solid rgba(168,85,247,0.12)',
+          }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600, fontSize: 12, color: isRunning ? 'var(--text)' : 'var(--text-muted)' }}>
+                {p.label}
+              </div>
+              {p.detail && (
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {p.detail}
+                </div>
+              )}
+              {p.pct_done !== undefined && (
+                <div style={{ marginTop: 5, height: 4, borderRadius: 2, background: 'rgba(168,85,247,0.15)', overflow: 'hidden' }}>
+                  <div style={{
+                    height: '100%', borderRadius: 2, transition: 'width 0.4s ease',
+                    width: `${p.pct_done ?? 0}%`,
+                    background: p.status === 'error' ? 'var(--accent-red)' : '#a855f7',
+                  }} />
+                </div>
+              )}
+            </div>
+            <span style={{
+              fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4, flexShrink: 0,
+              background: isRunning ? 'rgba(168,85,247,0.15)' : 'rgba(100,116,139,0.12)',
+              color: isRunning ? '#a855f7' : 'var(--text-muted)',
+            }}>
+              {isRunning ? 'En cours' : p.status === 'error' ? 'Erreur' : 'Terminé'}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ── LaunchForm ──────────────────────────────────────────────────────────── */
 const DURATIONS = ['1m', '3m', '6m', '1y', '2y'];
 
@@ -405,6 +510,8 @@ export function BacktestsPage({ onNavigate: _onNavigate }: { onNavigate?: (page:
       </div>
 
       <LaunchForm onLaunched={reload} />
+
+      <BacktestProcessCard onDone={reload} />
 
       {compareQueue.length === 1 && (
         <div style={{ padding: '8px 14px', marginBottom: 12, background: 'rgba(234,179,8,0.1)', border: '1px solid rgba(234,179,8,0.3)', borderRadius: 6, color: '#eab308', fontSize: 12 }}>
