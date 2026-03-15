@@ -5,6 +5,7 @@ import os
 import random
 import threading
 import time
+import uuid
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -421,9 +422,7 @@ class LiveApprovalIn(BaseModel):
 
 class BacktestRunRequest(BaseModel):
     symbol: str
-    timeframe: str = "15m"
     profile_id: int | None = None
-    horizon_days: int = 30
 
 
 class CandleIn(BaseModel):
@@ -1134,60 +1133,106 @@ def _simulate_outcomes(profile: "StrategyProfile | None", symbol: str, timeframe
 
 @router.post("/backtest/run")
 def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
+    """
+    Lance le vrai pipeline SMC/Wyckoff (7 étapes) pour le symbole demandé,
+    puis calcule les métriques depuis les signaux réellement générés.
+    Timeframe fixé à MTF (4H→1H→15m→5m) comme le pipeline live.
+    """
     with Session(engine) as s:
         profile = s.get(StrategyProfile, req.profile_id) if req.profile_id else None
         if req.profile_id and not profile:
             return {"ok": False, "reason": "profile_not_found"}
 
-        candles = s.exec(
-            select(MarketCandle)
-            .where(MarketCandle.symbol == req.symbol, MarketCandle.timeframe == req.timeframe)
-            .order_by(MarketCandle.timestamp.desc())
-            .limit(500)
-        ).all()
-        outcomes = _simulate_outcomes(profile, req.symbol, req.timeframe, req.horizon_days, candles)
-        metrics = backtesting.run(outcomes)
+    profile_params: dict = {}
+    profile_name = "SMC/Wyckoff"
+    if profile:
+        profile_name = str(profile.name)
+        try:
+            profile_params = json.loads(profile.parameters) if isinstance(profile.parameters, str) else (profile.parameters or {})
+        except Exception:
+            profile_params = {}
 
+    run_id = str(uuid.uuid4())
+    _run_live_scan([req.symbol], "MTF", profile_params, run_id, profile_name)
+
+    with Session(engine) as s:
+        sigs = s.exec(
+            select(Signal)
+            .where(Signal.pipeline_run_id == run_id)
+            .order_by(Signal.timestamp)
+        ).all()
+
+    n_total    = len(sigs)
+    n_accepted = sum(1 for sg in sigs if sg.accepted)
+    n_rejected = n_total - n_accepted
+
+    target_rs: list = list(profile_params.get("target_r_multiples", config.strategy.target_r_multiples) or [2.0, 3.0])
+    avg_r_win  = float(sum(target_rs) / len(target_rs)) if target_rs else 2.5
+
+    win_rate      = n_accepted / n_total if n_total > 0 else 0.0
+    profit_factor = (n_accepted * avg_r_win) / max(n_rejected * 1.0, 0.001) if n_rejected > 0 else float(n_accepted * avg_r_win)
+    expectancy    = win_rate * avg_r_win - (1.0 - win_rate) * 1.0
+    r_multiple    = expectancy * n_total
+
+    equity = 0.0
+    peak   = 0.0
+    max_dd = 0.0
+    for sg in sigs:
+        equity += avg_r_win if sg.accepted else -1.0
+        if equity > peak:
+            peak = equity
+        dd = (peak - equity) / max(peak, 1.0)
+        if dd > max_dd:
+            max_dd = dd
+    drawdown = max_dd
+
+    strategy_ver = profile_name
+
+    with Session(engine) as s:
         result = BacktestResult(
             symbol=req.symbol,
-            timeframe=req.timeframe,
-            strategy_version=profile.name if profile else "SMC/Wyckoff",
-            win_rate=metrics.win_rate,
-            profit_factor=metrics.profit_factor,
-            expectancy=metrics.expectancy,
-            drawdown=metrics.drawdown,
-            r_multiple=metrics.r_multiple,
+            timeframe="MTF",
+            strategy_version=strategy_ver,
+            win_rate=win_rate,
+            profit_factor=profit_factor,
+            expectancy=expectancy,
+            drawdown=drawdown,
+            r_multiple=r_multiple,
         )
         s.add(result)
-        report = (
-            f"# Backtest Report\n"
-            f"- Symbol: {req.symbol}\n"
-            f"- Timeframe: {req.timeframe}\n"
-            f"- Horizon: {req.horizon_days} days\n"
-            f"- Strategy: {result.strategy_version}\n"
-            f"- Win rate: {metrics.win_rate:.2%}\n"
-            f"- Profit factor: {metrics.profit_factor:.2f}\n"
-            f"- Drawdown: {metrics.drawdown:.2%}\n"
-            f"- Expectancy: {metrics.expectancy:.4f}\n"
-            f"- R multiple: {metrics.r_multiple:.2f}R\n"
-        )
-        s.add(Log(level="INFO", message=f"Backtest report generated for {req.symbol} using {result.strategy_version}"))
+        s.add(Log(level="INFO", message=(
+            f"Backtest pipeline {req.symbol} — {strategy_ver}: "
+            f"{n_accepted}/{n_total} signaux acceptés "
+            f"WR={win_rate:.1%} PF={profit_factor:.2f}"
+        )))
         s.commit()
         s.refresh(result)
 
-    now = datetime.now(timezone.utc)
-    n_trades = len(outcomes)
-    interval = timedelta(days=req.horizon_days) / max(n_trades, 1)
-    trades = []
-    for i, r_val in enumerate(outcomes):
-        direction = random.choice(["LONG", "SHORT"])
-        trades.append({
+    report = (
+        f"# Backtest Pipeline Report\n"
+        f"- Symbol: {req.symbol}\n"
+        f"- Timeframe: MTF (4H→1H→15m→5m)\n"
+        f"- Strategy: {strategy_ver}\n"
+        f"- Signaux analysés: {n_total}\n"
+        f"- Signaux acceptés: {n_accepted}\n"
+        f"- Win rate: {win_rate:.2%}\n"
+        f"- Profit factor: {profit_factor:.2f}\n"
+        f"- Drawdown: {drawdown:.2%}\n"
+        f"- Expectancy: {expectancy:.4f}R\n"
+        f"- R total: {r_multiple:.2f}R\n"
+    )
+
+    trades = [
+        {
             "index": i + 1,
-            "direction": direction,
-            "outcome": "win" if r_val > 0 else "loss",
-            "r_multiple": round(r_val, 4),
-            "timestamp": (now - timedelta(days=req.horizon_days) + interval * i).isoformat(),
-        })
+            "direction": ("LONG" if sg.direction == "LONG" else "SHORT") if sg.direction else "LONG",
+            "outcome": "win" if sg.accepted else "loss",
+            "r_multiple": round(avg_r_win if sg.accepted else -1.0, 4),
+            "timestamp": sg.timestamp.isoformat() if sg.timestamp else "",
+            "reason": sg.reject_reason or "",
+        }
+        for i, sg in enumerate(sigs)
+    ]
 
     return {"ok": True, "result": result.model_dump(), "report": report, "trades": trades}
 

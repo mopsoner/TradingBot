@@ -1290,7 +1290,6 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
   const hasData = loadedEntries.length > 0;
 
   const [symbol, setSymbol]       = useState('');
-  const [timeframe, setTimeframe] = useState('1h');
   const [profileId, setProfileId] = useState<number | null>(null);
   const [report, setReport]       = useState<Record<string, unknown> | null>(null);
   const [lastResult, setLastResult] = useState<BacktestResult | null>(null);
@@ -1367,24 +1366,12 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
   // ── Derived from DB-loaded candle data ────────────────────────────────────
   const availableSymbols = useMemo(() => loadedEntries.map(e => e.symbol), [loadedEntries]);
 
-  const availableTimeframes = useMemo(() => {
-    const entry = loadedEntries.find(e => e.symbol === symbol);
-    return entry ? Object.keys(entry.timeframes).sort() : ['1h'];
-  }, [loadedEntries, symbol]);
-
   // Auto-select first symbol when data arrives
   useEffect(() => {
     if (!symbol && loadedEntries.length > 0) {
       setSymbol(loadedEntries[0].symbol);
     }
   }, [loadedEntries, symbol]);
-
-  // Auto-adjust timeframe if current one isn't available for selected symbol
-  useEffect(() => {
-    if (availableTimeframes.length > 0 && !availableTimeframes.includes(timeframe)) {
-      setTimeframe(availableTimeframes[0]);
-    }
-  }, [availableTimeframes, timeframe]);
 
   // ── History filters (client-side) ─────────────────────────────────────────
   const [filterSymbol, setFilterSymbol] = useState('');
@@ -1416,7 +1403,7 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
     setStatus('');
     setOptimizeTarget(null);
     try {
-      const res = await api.runBacktest({ symbol, timeframe, profile_id: profileId, horizon_days: 45 });
+      const res = await api.runBacktest({ symbol, profile_id: profileId });
       if (res.ok) {
         setStatus('✅ Backtest terminé — rapport généré.');
         setReport(res.result as Record<string, unknown>);
@@ -1583,22 +1570,6 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
                           <option key={e.symbol} value={e.symbol}>
                             {fmtSym(e.symbol)} — {totalCandles.toLocaleString()} bougies ({tfs})
                           </option>
-                        );
-                      })}
-                    </select>
-                  </div>
-                  <div className="form-group">
-                    <label>
-                      <Tooltip text="Seuls les timeframes pour lesquels des données sont chargées sont affichés.">
-                        Timeframe
-                      </Tooltip>
-                    </label>
-                    <select value={timeframe} onChange={e => setTimeframe(e.target.value)}>
-                      {availableTimeframes.map(tf => {
-                        const entry = loadedEntries.find(e => e.symbol === symbol);
-                        const count = entry?.timeframes[tf] ?? 0;
-                        return (
-                          <option key={tf} value={tf}>{tf} — {count.toLocaleString()} bougies</option>
                         );
                       })}
                     </select>
