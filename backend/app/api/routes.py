@@ -1163,19 +1163,27 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
     run_id = str(uuid.uuid4())
     _run_live_scan(symbols, "MTF", profile_params, run_id, profile_name)
 
+    symbols_label = ", ".join(symbols)
+
     with Session(engine) as s:
-        sigs = s.exec(
+        # Signaux du run courant → affichés dans le détail
+        current_sigs = s.exec(
             select(Signal)
             .where(Signal.pipeline_run_id == run_id)
             .order_by(Signal.timestamp)
         ).all()
 
-    n_total    = len(sigs)
-    n_accepted = sum(1 for sg in sigs if sg.accepted)
-    n_rejected = n_total - n_accepted
+        # Tous les signaux historiques pour ces symboles → métriques statistiques
+        hist_q = select(Signal).where(Signal.symbol.in_(symbols)).order_by(Signal.timestamp)
+        all_sigs = s.exec(hist_q).all()
 
     target_rs: list = list(profile_params.get("target_r_multiples", config.strategy.target_r_multiples) or [2.0, 3.0])
     avg_r_win  = float(sum(target_rs) / len(target_rs)) if target_rs else 2.5
+
+    # Métriques sur l'ensemble des signaux historiques
+    n_total    = len(all_sigs)
+    n_accepted = sum(1 for sg in all_sigs if sg.accepted)
+    n_rejected = n_total - n_accepted
 
     win_rate      = n_accepted / n_total if n_total > 0 else 0.0
     profit_factor = (n_accepted * avg_r_win) / max(n_rejected * 1.0, 0.001) if n_rejected > 0 else float(n_accepted * avg_r_win)
@@ -1185,7 +1193,7 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
     equity = 0.0
     peak   = 0.0
     max_dd = 0.0
-    for sg in sigs:
+    for sg in all_sigs:
         equity += avg_r_win if sg.accepted else -1.0
         if equity > peak:
             peak = equity
@@ -1195,7 +1203,13 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
                 max_dd = dd
     drawdown = max_dd
 
-    symbols_label = ", ".join(symbols)
+    # Breakdown des rejets par étape
+    reject_counts: dict[str, int] = {}
+    for sg in all_sigs:
+        if not sg.accepted and sg.reject_reason:
+            key = sg.reject_reason.split("(")[0].strip()
+            reject_counts[key] = reject_counts.get(key, 0) + 1
+    top_rejects = sorted(reject_counts.items(), key=lambda x: -x[1])[:5]
 
     with Session(engine) as s:
         result = BacktestResult(
@@ -1211,25 +1225,29 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
         )
         s.add(result)
         s.add(Log(level="INFO", message=(
-            f"Backtest pipeline [{symbols_label}] — {profile_name}: "
-            f"{n_accepted}/{n_total} signaux acceptés "
+            f"Backtest [{symbols_label}] — {profile_name}: "
+            f"{n_accepted}/{n_total} signaux historiques acceptés "
             f"WR={win_rate:.1%} PF={profit_factor:.2f}"
         )))
         s.commit()
         s.refresh(result)
 
+    reject_lines = "\n".join(f"  - {cnt}x {r}" for r, cnt in top_rejects)
     report = (
         f"# Backtest Pipeline Report\n"
         f"- Symboles: {symbols_label}\n"
         f"- Timeframe: MTF (4H→1H→15m→5m)\n"
         f"- Strategy: {profile_name}\n"
-        f"- Signaux analysés (ce run): {n_total}\n"
+        f"- Signaux historiques totaux: {n_total}\n"
         f"- Signaux acceptés: {n_accepted} / {n_total}\n"
         f"- Win rate: {win_rate:.2%}\n"
         f"- Profit factor: {profit_factor:.2f}\n"
         f"- Drawdown max: {drawdown:.2%}\n"
         f"- Expectancy: {expectancy:.4f}R\n"
         f"- R total: {r_multiple:.2f}R\n"
+        f"\n## Top rejections:\n{reject_lines or '  Aucun'}\n"
+        f"\n## Run courant ({len(current_sigs)} signaux):\n"
+        + "\n".join(f"  - {sg.symbol}: {'✅ Accepté' if sg.accepted else '❌ ' + (sg.reject_reason or 'rejeté')}" for sg in current_sigs)
     )
 
     trades = [
@@ -1242,7 +1260,7 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
             "timestamp": sg.timestamp.isoformat() if sg.timestamp else "",
             "reason": sg.reject_reason or "",
         }
-        for i, sg in enumerate(sigs)
+        for i, sg in enumerate(current_sigs)
     ]
 
     return {"ok": True, "result": result.model_dump(), "report": report, "trades": trades}
