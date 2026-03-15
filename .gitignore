@@ -2,6 +2,8 @@
 *.log
 *.tmp
 .env
+trading_platform.db
+frontend/dist/
 
 # Backtest and research outputs
 data/raw/
