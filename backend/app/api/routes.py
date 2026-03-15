@@ -1927,6 +1927,8 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
                     displacement_force=disp_val,
                     wyckoff_event=wyckoff_event,
                     pipeline_run_id=pipeline_run_id,
+                    zone_low=round(sweep_price * 0.997, 4) if sweep_price > 0 else None,
+                    zone_high=round(sweep_price * 1.003, 4) if sweep_price > 0 else None,
                 )
                 s.add(sig)
                 s.add(Log(level="INFO", message=(
@@ -2011,6 +2013,8 @@ def _persist_reject(
     sweep_level: float = 0.0,
 ) -> None:
     """Persiste les setups rejetés en DB avec tous les détails structurels."""
+    z_low  = round(sweep_level * 0.997, 4) if sweep_level > 0 else None
+    z_high = round(sweep_level * 1.003, 4) if sweep_level > 0 else None
     try:
         with Session(engine) as s:
             s.add(Signal(
@@ -2027,6 +2031,8 @@ def _persist_reject(
                 displacement_force=displacement_force,
                 wyckoff_event=wyckoff_event,
                 pipeline_run_id=pipeline_run_id,
+                zone_low=z_low,
+                zone_high=z_high,
             ))
             s.commit()
         journal.log(SetupJournalEntry(

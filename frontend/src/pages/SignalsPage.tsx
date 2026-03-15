@@ -6,6 +6,21 @@ import { fmtDateTime, fmtSym } from '../utils/dateUtils';
 import { useSortable } from '../hooks/useSortable';
 import { PipelineRunDetailModal } from '../components/PipelineRunDetail';
 
+function fmtZonePrice(n: number): string {
+  if (n >= 10000) return n.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  if (n >= 100)   return n.toFixed(2);
+  if (n >= 1)     return n.toFixed(4);
+  return n.toFixed(6);
+}
+
+function fmtZone(name: string, low?: number | null, high?: number | null): string {
+  if (!name || name === 'N/A') return '—';
+  if (low != null && high != null && low > 0) {
+    return `${name} [${fmtZonePrice(low)} – ${fmtZonePrice(high)}]`;
+  }
+  return name;
+}
+
 const STEPS = [
   { id: 1, label: 'Liquidité',     desc: 'Zone de liquidité identifiée' },
   { id: 2, label: 'Sweep',         desc: 'Balayage de la liquidité' },
@@ -95,7 +110,7 @@ function SignalDetailModal({ signal, onClose }: { signal: Signal; onClose: () =>
             <div className="field-group">
               <div className="field-label">Zone de liquidité</div>
               <div className="field-value">
-                {signal.liquidity_zone && signal.liquidity_zone !== 'N/A' ? signal.liquidity_zone : '—'}
+                {fmtZone(signal.liquidity_zone, signal.zone_low, signal.zone_high)}
               </div>
             </div>
             <div className="field-group">
@@ -359,7 +374,7 @@ export function SignalsPage() {
                       <Th col="timestamp" style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left', whiteSpace: 'nowrap' }}>Date</Th>
                       <Th col="symbol"    style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Symbole</Th>
                       <Th col="timeframe" style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>TF</Th>
-                      <th style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Setup</th>
+                      <th style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Zone [range]</th>
                       <Th col="sweep_level" style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Sweep</Th>
                       <Th col="bos_level"   style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>BOS</Th>
                       <th style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Fib</th>
@@ -391,7 +406,7 @@ export function SignalsPage() {
                           <td style={{ padding: '10px 14px' }}>
                             <span className="tag" style={{ fontSize: 11 }}>{s.timeframe}</span>
                           </td>
-                          <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text-soft)' }}>{s.setup_type || '—'}</td>
+                          <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text-soft)', whiteSpace: 'nowrap' }}>{fmtZone(s.liquidity_zone, s.zone_low, s.zone_high)}</td>
                           <td style={{ padding: '10px 14px', fontWeight: 600, fontSize: 13 }}>{s.sweep_level > 0 ? s.sweep_level.toFixed(4) : '—'}</td>
                           <td style={{ padding: '10px 14px', fontWeight: 600, fontSize: 13 }}>{s.bos_level > 0 ? s.bos_level.toFixed(4) : '—'}</td>
                           <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text-soft)' }}>{s.fib_zone && s.fib_zone !== 'N/A' ? s.fib_zone : '—'}</td>

@@ -52,6 +52,8 @@ class Signal(SQLModel, table=True):
     displacement_force: Optional[float] = None
     wyckoff_event: Optional[str] = None
     pipeline_run_id: Optional[str] = None
+    zone_low: Optional[float] = None
+    zone_high: Optional[float] = None
 
 
 class Trade(SQLModel, table=True):

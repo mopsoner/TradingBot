@@ -40,6 +40,8 @@ export type Signal = {
   session_name?: string | null;
   displacement_force?: number | null;
   pipeline_run_id?: string | null;
+  zone_low?: number | null;
+  zone_high?: number | null;
 };
 
 export type PipelineRunRecord = {

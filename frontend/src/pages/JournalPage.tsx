@@ -4,6 +4,21 @@ import { api } from '../services/api';
 import type { Signal } from '../services/api';
 import { fmtDateTime, fmtSym } from '../utils/dateUtils';
 
+function fmtZonePrice(n: number): string {
+  if (n >= 10000) return n.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  if (n >= 100)   return n.toFixed(2);
+  if (n >= 1)     return n.toFixed(4);
+  return n.toFixed(6);
+}
+
+function fmtZone(name: string, low?: number | null, high?: number | null): string {
+  if (!name || name === 'N/A') return '—';
+  if (low != null && high != null && low > 0) {
+    return `${name} [${fmtZonePrice(low)} – ${fmtZonePrice(high)}]`;
+  }
+  return name;
+}
+
 type FilterMode = 'all' | 'accepted' | 'rejected';
 
 function DirectionBadge({ dir }: { dir?: string | null }) {
@@ -97,7 +112,7 @@ function JournalRow({ row }: { row: Signal }) {
           marginTop: 10,
         }}>
           {[
-            ['Zone liquidité', row.liquidity_zone && row.liquidity_zone !== 'N/A' ? row.liquidity_zone : null],
+            ['Zone liquidité', row.liquidity_zone && row.liquidity_zone !== 'N/A' ? fmtZone(row.liquidity_zone, row.zone_low, row.zone_high) : null],
             ['Sweep level', row.sweep_level != null && row.sweep_level > 0 ? row.sweep_level.toFixed(4) : null],
             ['BOS level', row.bos_level != null && row.bos_level > 0 ? row.bos_level.toFixed(4) : null],
             ['Displacement', row.displacement_force != null && row.displacement_force > 0 ? row.displacement_force.toFixed(3) : null],
