@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
+import type { PipelineEntry, PipelineState } from '../services/api';
 import { fmtSym } from '../utils/dateUtils';
 
 type StrategyProfile = {
@@ -36,6 +37,8 @@ const INTERVALS = [
   { value: 60,  label: '1h',     desc: 'Long terme' },
 ];
 
+const STEP_LABELS = ['Liquidité', 'Sweep', 'Spring/UTAD', 'Displacement', 'BOS', 'Expansion', 'Fib'];
+
 function fmtCountdown(sec: number | null): string {
   if (sec === null || sec < 0) return '—';
   if (sec === 0) return 'En cours…';
@@ -50,6 +53,116 @@ function fmtAgo(iso: string | null): string {
   if (diff < 60) return `il y a ${diff}s`;
   if (diff < 3600) return `il y a ${Math.floor(diff / 60)}min`;
   return `il y a ${Math.floor(diff / 3600)}h`;
+}
+
+function stepColor(status: string): string {
+  if (status === 'passed') return 'var(--accent-green)';
+  if (status === 'failed') return 'var(--accent-red)';
+  if (status === 'checking') return 'var(--accent)';
+  return 'rgba(78,98,128,0.4)';
+}
+
+function PipelineRow({ sym, entry }: { sym: string; entry: PipelineEntry }) {
+  const isRunning = entry.final_status === null;
+  const isAccepted = entry.final_status === 'accepted';
+  const isRejected = entry.final_status === 'rejected';
+
+  const activeStep = entry.steps.findIndex(s => s.status === 'checking');
+  const passedCount = entry.steps.filter(s => s.status === 'passed').length;
+
+  return (
+    <div style={{
+      padding: '10px 14px',
+      borderRadius: 10,
+      background: isAccepted ? 'rgba(34,197,94,0.06)' : isRejected ? 'rgba(239,68,68,0.04)' : 'var(--surface2)',
+      border: `1px solid ${isAccepted ? 'rgba(34,197,94,0.3)' : isRejected ? 'rgba(239,68,68,0.2)' : 'var(--border)'}`,
+      marginBottom: 6,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+
+        {/* Symbol + timeframe */}
+        <div style={{ minWidth: 90 }}>
+          <div style={{ fontWeight: 800, fontSize: 13 }}>{fmtSym(sym)}</div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{entry.timeframe}</div>
+        </div>
+
+        {/* 7 step dots */}
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center', flex: 1, flexWrap: 'wrap' }}>
+          {entry.steps.map((step, i) => (
+            <div key={i} title={`Étape ${i + 1} — ${STEP_LABELS[i]}: ${step.status}`}
+              style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+              <div style={{
+                width: 24, height: 24, borderRadius: 6,
+                background: stepColor(step.status),
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 9, fontWeight: 800, color: '#fff',
+                animation: step.status === 'checking' ? 'pulse 1.2s infinite' : 'none',
+                opacity: step.status === 'pending' ? 0.35 : 1,
+                flexShrink: 0,
+              }}>
+                {step.status === 'passed' ? '✓'
+                  : step.status === 'failed' ? '✕'
+                  : step.status === 'checking' ? '…'
+                  : i + 1}
+              </div>
+              <div style={{ fontSize: 8, color: 'var(--text-muted)', whiteSpace: 'nowrap', maxWidth: 30, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {STEP_LABELS[i]}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* MTF info */}
+        {(entry.tf_4h_structure || entry.tf_1h_validation) && (
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', textAlign: 'right', minWidth: 100 }}>
+            {entry.tf_4h_structure && <div>{entry.tf_4h_structure}</div>}
+            {entry.tf_1h_validation && <div style={{ color: entry.tf_1h_validation?.includes('Aligné') ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+              {entry.tf_1h_validation}
+            </div>}
+          </div>
+        )}
+
+        {/* Status badge */}
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          {entry.final_direction && (
+            <span style={{
+              fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 8,
+              background: entry.final_direction === 'LONG' ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)',
+              color: entry.final_direction === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)',
+            }}>
+              {entry.final_direction}
+            </span>
+          )}
+          {isRunning && (
+            <span style={{
+              fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 8,
+              background: 'rgba(59,130,246,0.15)', color: 'var(--accent)',
+              border: '1px solid rgba(59,130,246,0.3)',
+            }}>
+              ⟳ Étape {activeStep >= 0 ? activeStep + 1 : passedCount + 1}/7
+            </span>
+          )}
+          {isAccepted && (
+            <span style={{
+              fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 8,
+              background: 'rgba(34,197,94,0.2)', color: 'var(--accent-green)',
+            }}>
+              ✅ Signal accepté
+            </span>
+          )}
+          {isRejected && (
+            <span style={{
+              fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 8,
+              background: 'rgba(78,98,128,0.15)', color: 'var(--text-muted)',
+              maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }} title={entry.final_reason ?? ''}>
+              ✕ {(entry.final_reason ?? 'Rejeté').slice(0, 30)}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function BotControlPage() {
@@ -67,8 +180,8 @@ export function BotControlPage() {
   const [timeframe, setTimeframe]     = useState('1h');
 
   const [autoStatus, setAutoStatus]   = useState<AutoStatus | null>(null);
+  const [pipelineData, setPipelineData] = useState<PipelineState | null>(null);
   const [autoError, setAutoError]     = useState('');
-  const [ticker, setTicker]           = useState(0);
 
   const [manualResult, setManualResult] = useState<Record<string, unknown> | null>(null);
   const { data: botStatus, reload: refreshBot } = useApi(() => api.botStatus());
@@ -88,12 +201,20 @@ export function BotControlPage() {
     } catch { /* ignore */ }
   };
 
+  const refreshPipeline = async () => {
+    try {
+      const p = await api.getPipeline();
+      setPipelineData(p);
+    } catch { /* ignore */ }
+  };
+
   useEffect(() => {
     refreshAuto();
+    refreshPipeline();
     pollRef.current = window.setInterval(() => {
       refreshAuto();
+      refreshPipeline();
       refreshBot();
-      setTicker(t => t + 1);
     }, 2000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, []);
@@ -144,6 +265,15 @@ export function BotControlPage() {
 
   const recentEvents = (botStatus?.recent_events as Array<Record<string, unknown>> | undefined) ?? [];
   const lastRunResults = autoStatus?.last_run_results ?? [];
+
+  const pipelineEntries = pipelineData
+    ? Object.entries(pipelineData.pipeline).sort((a, b) => {
+        const order = (e: PipelineEntry) =>
+          e.final_status === null ? 0 : e.final_status === 'accepted' ? 1 : 2;
+        return order(a[1]) - order(b[1]);
+      })
+    : [];
+  const hasActivePipeline = pipelineData && pipelineData.total > 0;
 
   return (
     <section>
@@ -349,7 +479,6 @@ export function BotControlPage() {
                 ⏹ Arrêter
               </button>
             )}
-            {/* Manual trigger while running */}
             {isRunning && (
               <button
                 onClick={startManual}
@@ -382,6 +511,65 @@ export function BotControlPage() {
           </div>
         )}
       </div>
+
+      {/* ── Pipeline scanner en cours ──────────────────────────────────── */}
+      {hasActivePipeline && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+            <h3 style={{ margin: 0 }}>Pipeline Scanner</h3>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {pipelineData!.in_progress > 0 && (
+                <span style={{
+                  fontSize: 11, padding: '2px 10px', borderRadius: 10, fontWeight: 700,
+                  background: 'rgba(59,130,246,0.15)', color: 'var(--accent)',
+                  border: '1px solid rgba(59,130,246,0.3)',
+                  animation: 'pulse 1.5s infinite',
+                }}>
+                  ⟳ {pipelineData!.in_progress} en cours
+                </span>
+              )}
+              {pipelineData!.accepted > 0 && (
+                <span style={{
+                  fontSize: 11, padding: '2px 10px', borderRadius: 10, fontWeight: 700,
+                  background: 'rgba(34,197,94,0.15)', color: 'var(--accent-green)',
+                }}>
+                  ✅ {pipelineData!.accepted} signal{pipelineData!.accepted > 1 ? 's' : ''}
+                </span>
+              )}
+              {pipelineData!.rejected > 0 && (
+                <span style={{
+                  fontSize: 11, padding: '2px 10px', borderRadius: 10, fontWeight: 600,
+                  background: 'rgba(78,98,128,0.12)', color: 'var(--text-muted)',
+                }}>
+                  {pipelineData!.rejected} rejeté{pipelineData!.rejected > 1 ? 's' : ''}
+                </span>
+              )}
+            </div>
+            <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 'auto' }}>
+              7 étapes SMC/Wyckoff · multi-TF 4H/1H
+            </span>
+          </div>
+
+          {/* Step legend */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
+            {STEP_LABELS.map((label, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                <div style={{
+                  width: 14, height: 14, borderRadius: 4, fontSize: 7, fontWeight: 800,
+                  background: 'var(--surface2)', border: '1px solid var(--border)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)',
+                }}>{i + 1}</div>
+                <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>{label}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Rows */}
+          {pipelineEntries.map(([sym, entry]) => (
+            <PipelineRow key={sym} sym={sym} entry={entry} />
+          ))}
+        </div>
+      )}
 
       {/* ── Last scan results ───────────────────────────────────────────── */}
       {lastRunResults.length > 0 && (
@@ -436,6 +624,7 @@ export function BotControlPage() {
         <div style={{ maxHeight: 420, overflowY: 'auto' }}>
           {recentEvents.slice(0, 30).map((ev, i) => {
             const isSignal = String(ev.status) === 'SIGNAL_DETECTED';
+            const hasPipeline = pipelineData?.pipeline[String(ev.symbol)];
             return (
               <div key={i} style={{
                 display: 'flex', alignItems: 'center', gap: 10,
@@ -454,6 +643,14 @@ export function BotControlPage() {
                     background: String(ev.signal) === 'LONG' ? 'rgba(63,185,80,0.2)' : 'rgba(248,81,73,0.2)',
                     color: String(ev.signal) === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)',
                   }}>{String(ev.signal)}</span>
+                )}
+                {hasPipeline && hasPipeline.final_status === null && (
+                  <span style={{
+                    fontSize: 9, padding: '1px 5px', borderRadius: 6,
+                    background: 'rgba(59,130,246,0.1)', color: 'var(--accent)',
+                    border: '1px solid rgba(59,130,246,0.2)',
+                    animation: 'pulse 1.5s infinite',
+                  }}>pipeline actif</span>
                 )}
                 <span style={{ fontSize: 11, color: 'var(--text-muted)', flex: 1 }}>
                   {String(ev.details ?? '').slice(0, 70)}
