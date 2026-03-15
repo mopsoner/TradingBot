@@ -67,8 +67,8 @@ class ReplaySession:
     total_candles: int = 0
     backtest_result_id: int | None = None
 
-    equity: float = field(default=0.0, repr=False)
-    peak: float = field(default=0.0, repr=False)
+    equity: float = field(default=10.0, repr=False)
+    peak: float = field(default=10.0, repr=False)
     max_dd: float = field(default=0.0, repr=False)
     open_positions: list[dict] = field(default_factory=list, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
