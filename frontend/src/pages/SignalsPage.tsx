@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
-import type { Signal } from '../services/api';
-import { fmtDate, fmtDateTime } from '../utils/dateUtils';
+import type { PipelineState, Signal } from '../services/api';
+import { fmtDateTime, fmtSym } from '../utils/dateUtils';
 import { useSortable } from '../hooks/useSortable';
 
 const STEPS = [
@@ -14,6 +14,13 @@ const STEPS = [
   { id: 6, label: 'Expansion',     desc: 'Expansion vers la liquidité' },
   { id: 7, label: 'Fib 0.618',     desc: 'Retracement Fibonacci' },
 ];
+
+function stepDotColor(status: string): string {
+  if (status === 'passed') return 'var(--accent-green)';
+  if (status === 'failed') return 'var(--accent-red)';
+  if (status === 'checking') return 'var(--accent)';
+  return 'rgba(78,98,128,0.35)';
+}
 
 function SignalDetailModal({ signal, onClose }: { signal: Signal; onClose: () => void }) {
   useEffect(() => {
@@ -154,6 +161,8 @@ const FILTER_OPTIONS = [
 export function SignalsPage() {
   const [filter, setFilter] = useState<'all' | 'accepted' | 'rejected'>('all');
   const [selected, setSelected] = useState<Signal | null>(null);
+  const [pipelineData, setPipelineData] = useState<PipelineState | null>(null);
+  const pollRef = useRef<number | null>(null);
 
   const params =
     filter === 'accepted' ? '?accepted=true' :
@@ -161,6 +170,22 @@ export function SignalsPage() {
 
   const { data, loading, error } = useApi(() => api.signals(params), [filter]);
   const { sorted: sortedRows, Th } = useSortable<Signal>(data?.rows ?? [], 'timestamp', 'desc');
+
+  useEffect(() => {
+    const fetchPipeline = () => {
+      api.getPipeline().then(setPipelineData).catch(() => {});
+    };
+    fetchPipeline();
+    pollRef.current = window.setInterval(fetchPipeline, 3000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, []);
+
+  const activePipeline = pipelineData
+    ? Object.entries(pipelineData.pipeline).filter(([, e]) => e.final_status === null)
+    : [];
+  const completedAccepted = pipelineData
+    ? Object.entries(pipelineData.pipeline).filter(([, e]) => e.final_status === 'accepted')
+    : [];
 
   return (
     <section>
@@ -197,6 +222,93 @@ export function SignalsPage() {
           ))}
         </div>
       </div>
+
+      {/* ── Pipeline actif ────────────────────────────────── */}
+      {pipelineData && pipelineData.total > 0 && (
+        <div className="card" style={{ marginBottom: 16, padding: '12px 16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: activePipeline.length > 0 || completedAccepted.length > 0 ? 10 : 0, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-soft)' }}>
+              Scanner
+            </span>
+            {activePipeline.length > 0 && (
+              <span style={{
+                fontSize: 11, padding: '2px 10px', borderRadius: 10, fontWeight: 700,
+                background: 'rgba(59,130,246,0.15)', color: 'var(--accent)',
+                border: '1px solid rgba(59,130,246,0.25)',
+                animation: 'pulse-sig 1.5s infinite',
+              }}>
+                ⟳ {activePipeline.length} en cours
+              </span>
+            )}
+            {completedAccepted.length > 0 && (
+              <span style={{
+                fontSize: 11, padding: '2px 10px', borderRadius: 10, fontWeight: 700,
+                background: 'rgba(34,197,94,0.12)', color: 'var(--accent-green)',
+              }}>
+                ✅ {completedAccepted.length} accepté{completedAccepted.length > 1 ? 's' : ''} ce cycle
+              </span>
+            )}
+            {pipelineData.rejected > 0 && (
+              <span style={{
+                fontSize: 11, padding: '2px 10px', borderRadius: 10,
+                background: 'rgba(78,98,128,0.1)', color: 'var(--text-muted)',
+              }}>
+                {pipelineData.rejected} rejeté{pipelineData.rejected > 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
+
+          {/* Active pipeline symbols with mini step bars */}
+          {(activePipeline.length > 0 || completedAccepted.length > 0) && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {[...activePipeline, ...completedAccepted].map(([sym, entry]) => {
+                const isActive = entry.final_status === null;
+                const activeIdx = entry.steps.findIndex(s => s.status === 'checking');
+                const passedCount = entry.steps.filter(s => s.status === 'passed').length;
+                return (
+                  <div key={sym} style={{
+                    padding: '6px 10px', borderRadius: 8,
+                    background: isActive ? 'rgba(59,130,246,0.08)' : 'rgba(34,197,94,0.08)',
+                    border: `1px solid ${isActive ? 'rgba(59,130,246,0.2)' : 'rgba(34,197,94,0.2)'}`,
+                    display: 'flex', flexDirection: 'column', gap: 4, minWidth: 120,
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <span style={{ fontSize: 11, fontWeight: 800 }}>{fmtSym(sym)}</span>
+                      {entry.final_direction && (
+                        <span style={{
+                          fontSize: 9, fontWeight: 800, padding: '1px 5px', borderRadius: 5,
+                          background: entry.final_direction === 'LONG' ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)',
+                          color: entry.final_direction === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)',
+                        }}>{entry.final_direction}</span>
+                      )}
+                      {isActive && (
+                        <span style={{ fontSize: 9, color: 'var(--accent)' }}>
+                          {activeIdx >= 0 ? activeIdx + 1 : passedCount + 1}/7
+                        </span>
+                      )}
+                    </div>
+                    {/* Mini step bar */}
+                    <div style={{ display: 'flex', gap: 2 }}>
+                      {entry.steps.map((step, i) => (
+                        <div key={i} title={`${i + 1}. ${STEPS[i]?.label ?? ''}: ${step.status}`} style={{
+                          width: 10, height: 10, borderRadius: 3,
+                          background: stepDotColor(step.status),
+                          opacity: step.status === 'pending' ? 0.25 : 1,
+                          animation: step.status === 'checking' ? 'pulse-sig 1s infinite' : 'none',
+                          flexShrink: 0,
+                        }} />
+                      ))}
+                    </div>
+                    {entry.tf_4h_structure && (
+                      <div style={{ fontSize: 9, color: 'var(--text-muted)' }}>{entry.tf_4h_structure}</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {loading && (
         <div className="card" style={{ padding: '24px', textAlign: 'center' }}>
@@ -241,39 +353,72 @@ export function SignalsPage() {
                       <Th col="bos_level"   style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>BOS</Th>
                       <th style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Fib</th>
                       <Th col="accepted"    style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Statut</Th>
+                      <th style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Pipeline</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedRows.map(s => (
-                      <tr
-                        key={s.id}
-                        onClick={() => setSelected(s)}
-                        style={{
-                          cursor: 'pointer',
-                          borderBottom: '1px solid var(--border)',
-                          transition: 'background 0.12s',
-                        }}
-                        onMouseEnter={e => (e.currentTarget.style.background = 'rgba(59,130,246,0.04)')}
-                        onMouseLeave={e => (e.currentTarget.style.background = '')}
-                      >
-                        <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                          {fmtDateTime(s.timestamp)}
-                        </td>
-                        <td style={{ padding: '10px 14px', fontWeight: 700, fontSize: 13 }}>{s.symbol}</td>
-                        <td style={{ padding: '10px 14px' }}>
-                          <span className="tag" style={{ fontSize: 11 }}>{s.timeframe}</span>
-                        </td>
-                        <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text-soft)' }}>{s.setup_type || '—'}</td>
-                        <td style={{ padding: '10px 14px', fontWeight: 600, fontSize: 13 }}>{s.sweep_level.toFixed(2)}</td>
-                        <td style={{ padding: '10px 14px', fontWeight: 600, fontSize: 13 }}>{s.bos_level.toFixed(2)}</td>
-                        <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text-soft)' }}>{s.fib_zone || '—'}</td>
-                        <td style={{ padding: '10px 14px' }}>
-                          <span className={`badge ${s.accepted ? 'badge-green' : 'badge-gray'}`}>
-                            {s.accepted ? 'Accepté' : 'Rejeté'}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
+                    {sortedRows.map(s => {
+                      const pEntry = pipelineData?.pipeline[s.symbol];
+                      const pActive = pEntry && pEntry.final_status === null;
+                      const pAccepted = pEntry && pEntry.final_status === 'accepted';
+                      return (
+                        <tr
+                          key={s.id}
+                          onClick={() => setSelected(s)}
+                          style={{
+                            cursor: 'pointer',
+                            borderBottom: '1px solid var(--border)',
+                            transition: 'background 0.12s',
+                          }}
+                          onMouseEnter={e => (e.currentTarget.style.background = 'rgba(59,130,246,0.04)')}
+                          onMouseLeave={e => (e.currentTarget.style.background = '')}
+                        >
+                          <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                            {fmtDateTime(s.timestamp)}
+                          </td>
+                          <td style={{ padding: '10px 14px', fontWeight: 700, fontSize: 13 }}>{fmtSym(s.symbol)}</td>
+                          <td style={{ padding: '10px 14px' }}>
+                            <span className="tag" style={{ fontSize: 11 }}>{s.timeframe}</span>
+                          </td>
+                          <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text-soft)' }}>{s.setup_type || '—'}</td>
+                          <td style={{ padding: '10px 14px', fontWeight: 600, fontSize: 13 }}>{s.sweep_level.toFixed(2)}</td>
+                          <td style={{ padding: '10px 14px', fontWeight: 600, fontSize: 13 }}>{s.bos_level.toFixed(2)}</td>
+                          <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text-soft)' }}>{s.fib_zone || '—'}</td>
+                          <td style={{ padding: '10px 14px' }}>
+                            <span className={`badge ${s.accepted ? 'badge-green' : 'badge-gray'}`}>
+                              {s.accepted ? 'Accepté' : 'Rejeté'}
+                            </span>
+                          </td>
+                          <td style={{ padding: '10px 14px' }}>
+                            {pActive && (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                <div style={{
+                                  width: 6, height: 6, borderRadius: '50%',
+                                  background: 'var(--accent)', animation: 'pulse-sig 1.2s infinite',
+                                }} />
+                                <span style={{ fontSize: 10, color: 'var(--accent)' }}>
+                                  En cours
+                                </span>
+                              </div>
+                            )}
+                            {pAccepted && !pActive && (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                {pEntry.steps.map((step, i) => (
+                                  <div key={i} style={{
+                                    width: 7, height: 7, borderRadius: 2,
+                                    background: stepDotColor(step.status),
+                                    opacity: step.status === 'pending' ? 0.2 : 1,
+                                  }} />
+                                ))}
+                              </div>
+                            )}
+                            {!pEntry && (
+                              <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>—</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -281,6 +426,13 @@ export function SignalsPage() {
           )}
         </>
       )}
+
+      <style>{`
+        @keyframes pulse-sig {
+          0%, 100% { opacity: 1; }
+          50%       { opacity: 0.3; }
+        }
+      `}</style>
     </section>
   );
 }
