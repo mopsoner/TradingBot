@@ -1324,6 +1324,13 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
   const { data, reload } = useApi(() => api.backtests());
   const { data: profiles, reload: reloadProfiles } = useApi(() => api.strategyProfiles());
   const { data: loadedData } = useApi(() => api.loadedSymbols());
+  const { data: procs, reload: refreshProcs } = useApi(() => api.systemProcesses());
+
+  // Poll bot status every 8 s
+  useEffect(() => {
+    const id = setInterval(refreshProcs, 8000);
+    return () => clearInterval(id);
+  }, []);
 
   const loadedEntries = loadedData ?? [];
   const hasData = loadedEntries.length > 0;
@@ -1332,6 +1339,14 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
   const [btQuote, setBtQuote]     = useState('USDT');
   const [btDuration, setBtDuration] = useState('all');
   const [profileId, setProfileId] = useState<number | null>(null);
+  const [stopping, setStopping]   = useState(false);
+
+  const stopBot = async () => {
+    setStopping(true);
+    await api.autonomousStop();
+    await refreshProcs();
+    setStopping(false);
+  };
   const [report, setReport]       = useState<Record<string, unknown> | null>(null);
   const [lastResult, setLastResult] = useState<BacktestResult | null>(null);
   const [status, setStatus]       = useState('');
@@ -1555,6 +1570,50 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
 
       <div className="grid-2">
         <div className="card">
+          {/* ── Bot status banner ─────────────────────────────────── */}
+          {procs && procs.total_running > 0 && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14,
+              padding: '9px 12px', borderRadius: 7,
+              background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.3)',
+            }}>
+              <span style={{ width: 9, height: 9, borderRadius: '50%', background: 'var(--accent-green)', flexShrink: 0, boxShadow: '0 0 6px var(--accent-green)' }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--accent-green)' }}>
+                  Bot {(procs.mode as string).toUpperCase()} actif
+                </div>
+                {(procs.processes as Array<Record<string,unknown>>).map((p, i) => (
+                  <div key={i} style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>
+                    {String(p.detail ?? '')}
+                  </div>
+                ))}
+              </div>
+              <button
+                onClick={stopBot}
+                disabled={stopping}
+                style={{
+                  padding: '5px 12px', borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: stopping ? 'default' : 'pointer',
+                  background: stopping ? 'rgba(239,68,68,0.1)' : 'rgba(239,68,68,0.18)',
+                  border: '1px solid rgba(239,68,68,0.5)',
+                  color: 'var(--accent-red)', flexShrink: 0,
+                  opacity: stopping ? 0.6 : 1,
+                }}
+              >
+                {stopping ? 'Arrêt…' : '⏹ Arrêter'}
+              </button>
+            </div>
+          )}
+          {procs && procs.total_running === 0 && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14,
+              padding: '7px 12px', borderRadius: 7,
+              background: 'rgba(100,116,139,0.08)', border: '1px solid rgba(100,116,139,0.2)',
+            }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--text-muted)', flexShrink: 0 }} />
+              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Bot inactif</span>
+            </div>
+          )}
+
           <div style={{ display: 'flex', gap: 0, marginBottom: 16, borderBottom: '1px solid var(--border)' }}>
             {([
               ['sim', 'Backtest simulé'],
