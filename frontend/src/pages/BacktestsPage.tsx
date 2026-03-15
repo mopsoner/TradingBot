@@ -48,7 +48,7 @@ function BacktestDetailPanel({ r, simulatedTrades }: { r: BacktestResult; simula
     setSigError('');
     setSignals([]);
     setExpandedSigId(null);
-    api.signalsForBacktest(r.symbol, r.timeframe)
+    api.signalsForBacktest(r.symbol)
       .then(res => { if (!cancelled) setSignals(res.rows); })
       .catch(err => { if (!cancelled) setSigError(String(err)); })
       .finally(() => { if (!cancelled) setLoadingSigs(false); });
@@ -92,8 +92,8 @@ function BacktestDetailPanel({ r, simulatedTrades }: { r: BacktestResult; simula
         </span>
       </div>
 
-      {/* ── 2-column body ───────────────────────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '260px 1fr', gap: 20, alignItems: 'start' }}>
+      {/* ── single-column body ──────────────────────────────────────────── */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
 
         {/* LEFT — Résultats */}
         <div>
