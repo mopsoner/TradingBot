@@ -66,4 +66,3 @@ timeoutMs = 120000
 build = ["sh", "-c", "bash -c \"cd frontend && npm install && npm run build\""]
 run = ["sh", "-c", "bash start.sh"]
 deploymentTarget = "gce"
-ignorePorts = true
