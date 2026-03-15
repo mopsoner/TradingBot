@@ -1158,7 +1158,7 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
     with Session(engine) as s:
         sigs = s.exec(
             select(Signal)
-            .where(Signal.pipeline_run_id == run_id)
+            .where(Signal.symbol == req.symbol)
             .order_by(Signal.timestamp)
         ).all()
 
@@ -1213,13 +1213,13 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
         f"- Symbol: {req.symbol}\n"
         f"- Timeframe: MTF (4H→1H→15m→5m)\n"
         f"- Strategy: {strategy_ver}\n"
-        f"- Signaux analysés: {n_total}\n"
-        f"- Signaux acceptés: {n_accepted}\n"
+        f"- Signaux historiques analysés: {n_total}\n"
+        f"- Signaux acceptés: {n_accepted} / {n_total}\n"
         f"- Win rate: {win_rate:.2%}\n"
         f"- Profit factor: {profit_factor:.2f}\n"
-        f"- Drawdown: {drawdown:.2%}\n"
+        f"- Drawdown max: {drawdown:.2%}\n"
         f"- Expectancy: {expectancy:.4f}R\n"
-        f"- R total: {r_multiple:.2f}R\n"
+        f"- R total accumulé: {r_multiple:.2f}R\n"
     )
 
     trades = [
