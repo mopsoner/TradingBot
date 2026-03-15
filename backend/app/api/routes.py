@@ -384,6 +384,7 @@ class ScanRequest(BaseModel):
     fake_breakout: bool = False
     equal_highs_lows: bool = False
     fib_retracement: float
+    profile_id: int | None = None
 
 
 class MultiScanRequest(BaseModel):
@@ -391,6 +392,7 @@ class MultiScanRequest(BaseModel):
     fib_retracement: float = 0.618
     require_displacement: bool = True
     require_bos: bool = True
+    profile_id: int | None = None
 
 
 class StartBotRequest(BaseModel):
@@ -449,6 +451,13 @@ def resolve_session(ts: datetime) -> str:
 
 @router.post("/scan")
 def scan(req: ScanRequest) -> dict:
+    profile_name = "SMC/Wyckoff"
+    if req.profile_id:
+        with Session(engine) as s:
+            prof = s.get(StrategyProfile, req.profile_id)
+            if prof:
+                profile_name = prof.name
+
     payload = SetupInput(
         symbol=req.symbol,
         liquidity_zone=req.liquidity_zone,
@@ -470,7 +479,7 @@ def scan(req: ScanRequest) -> dict:
         sig = Signal(
             symbol=req.symbol,
             timeframe="1H",
-            setup_type=f"SMC/Wyckoff {direction}" if direction else "SMC/Wyckoff",
+            setup_type=f"{profile_name} — {direction}" if direction else profile_name,
             liquidity_zone="Active" if req.liquidity_zone else "None",
             sweep_level=round(req.fib_retracement * 100, 2),
             bos_level=round(req.fib_retracement * 100 + 0.5, 2),
@@ -509,6 +518,13 @@ def scan(req: ScanRequest) -> dict:
 
 @router.post("/scan/market")
 def market_scan(req: MultiScanRequest) -> dict:
+    profile_name = "SMC/Wyckoff"
+    if req.profile_id:
+        with Session(engine) as s:
+            prof = s.get(StrategyProfile, req.profile_id)
+            if prof:
+                profile_name = prof.name
+
     accepted: list[dict] = []
     rejected: list[dict] = []
     for idx, symbol in enumerate(req.symbols):
@@ -557,7 +573,7 @@ def market_scan(req: MultiScanRequest) -> dict:
             db_sig = Signal(
                 symbol=symbol,
                 timeframe="1H",
-                setup_type=f"SMC/Wyckoff {signal}" if signal else "SMC/Wyckoff",
+                setup_type=f"{profile_name} — {signal}" if signal else profile_name,
                 liquidity_zone="Active",
                 sweep_level=round(req.fib_retracement * 100, 2),
                 bos_level=round(req.fib_retracement * 100 + 0.5, 2),
@@ -1135,7 +1151,7 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
         result = BacktestResult(
             symbol=req.symbol,
             timeframe=req.timeframe,
-            strategy_version=profile.name if profile else "default-smc",
+            strategy_version=profile.name if profile else "SMC/Wyckoff",
             win_rate=metrics.win_rate,
             profit_factor=metrics.profit_factor,
             expectancy=metrics.expectancy,
@@ -2373,7 +2389,7 @@ def _workshop_worker(job_id: str, req: AiWorkshopRequest) -> None:
             # ① Run backtest for this symbol
             with Session(engine) as s:
                 profile = s.get(StrategyProfile, req.profile_id) if req.profile_id else s.exec(
-                    select(StrategyProfile).where(StrategyProfile.name == "SMC-Wyckoff-Optimisé-v1")
+                    select(StrategyProfile).order_by(StrategyProfile.id.asc())
                 ).first()
                 candles = s.exec(
                     select(MarketCandle)
@@ -2402,7 +2418,7 @@ def _workshop_worker(job_id: str, req: AiWorkshopRequest) -> None:
             with Session(engine) as s:
                 bt_obj = BacktestResult(
                     symbol=sym, timeframe=req.timeframe,
-                    strategy_version=profile.name if profile else "SMC-Wyckoff-Optimisé-v1",
+                    strategy_version=profile.name if profile else "SMC/Wyckoff",
                     win_rate=round(wr, 4), profit_factor=round(pf, 4),
                     drawdown=round(dd, 4), expectancy=round(exp, 4),
                     r_multiple=round(rmult, 4),
