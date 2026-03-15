@@ -79,7 +79,7 @@ function StepDot({ step, index }: { step: PipelineStep; index: number }) {
   );
 }
 
-function SymbolRow({ entry }: { entry: PipelineEntry }) {
+function SymbolRow({ entry, passedCount = 0 }: { entry: PipelineEntry; passedCount?: number }) {
   const sym = fmtSym(entry.symbol);
   const isRunning  = entry.final_status === null;
   const isAccepted = entry.final_status === 'accepted';
@@ -98,7 +98,24 @@ function SymbolRow({ entry }: { entry: PipelineEntry }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ minWidth: 90 }}>
           <div style={{ fontWeight: 700, fontSize: 15 }}>{sym}</div>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{entry.timeframe}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
+            <span style={{
+              fontSize: 10, fontWeight: 800, fontFamily: 'monospace',
+              color: passedCount >= 7 ? 'var(--accent-green)' : passedCount >= 4 ? 'var(--accent)' : passedCount >= 1 ? 'var(--accent-yellow,#f0b429)' : 'var(--text-muted)',
+            }}>
+              {passedCount}/7
+            </span>
+            <div style={{ display: 'flex', gap: 2 }}>
+              {Array.from({ length: 7 }).map((_, i) => (
+                <div key={i} style={{
+                  width: 5, height: 5, borderRadius: 1,
+                  background: i < passedCount
+                    ? passedCount >= 7 ? 'var(--accent-green)' : passedCount >= 4 ? 'var(--accent)' : 'var(--accent-yellow,#f0b429)'
+                    : 'var(--border)',
+                }} />
+              ))}
+            </div>
+          </div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flex: 1, flexWrap: 'wrap' }}>
           {entry.steps.map((step, i) => <StepDot key={i} step={step} index={i} />)}
@@ -264,9 +281,33 @@ export function PipelinePage() {
     setSelected(prev => prev.includes(sym) ? prev.filter(s => s !== sym) : [...prev, sym]);
   };
 
+  const [sortBy, setSortBy] = useState<'steps' | 'status' | 'alpha'>('steps');
+
   const entries = Object.values(state);
   const allDone = stats.total > 0 && stats.in_progress === 0;
   const acceptedEntries = entries.filter(e => e.final_status === 'accepted');
+
+  const passedCount = (e: PipelineEntry) => e.steps.filter(s => s.status === 'passed').length;
+  const statusOrder = (e: PipelineEntry) => {
+    if (e.final_status === 'accepted') return 0;
+    if (e.final_status === null)       return 1;
+    if (e.final_status === 'rejected') return 2;
+    return 3;
+  };
+
+  const sortedEntries = [...entries].sort((a, b) => {
+    if (sortBy === 'steps') {
+      const diff = passedCount(b) - passedCount(a);
+      if (diff !== 0) return diff;
+      return statusOrder(a) - statusOrder(b);
+    }
+    if (sortBy === 'status') {
+      const diff = statusOrder(a) - statusOrder(b);
+      if (diff !== 0) return diff;
+      return passedCount(b) - passedCount(a);
+    }
+    return fmtSym(a.symbol).localeCompare(fmtSym(b.symbol));
+  });
 
   return (
     <section>
@@ -543,21 +584,38 @@ export function PipelinePage() {
       {/* Résultats */}
       {entries.length > 0 && (
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, padding: '4px 16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, padding: '4px 16px', flexWrap: 'wrap' }}>
             <div style={{ minWidth: 90, fontSize: 11, color: 'var(--text-muted)', fontWeight: 600 }}>CRYPTO</div>
             <div style={{ flex: 1, display: 'flex', gap: 8, paddingLeft: 4 }}>
               {STEP_LABELS_SHORT.map((s, i) => (
                 <div key={i} style={{ width: 28, textAlign: 'center', fontSize: 9, color: 'var(--text-muted)', fontWeight: 700 }}>{s}</div>
               ))}
             </div>
-            <div style={{ minWidth: 120, textAlign: 'right', fontSize: 11, color: 'var(--text-muted)', fontWeight: 600 }}>STATUT</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600 }}>TRIER :</span>
+              {([
+                ['steps',  '✓ Étapes'],
+                ['status', '◎ Statut'],
+                ['alpha',  'A–Z'],
+              ] as [typeof sortBy, string][]).map(([val, label]) => (
+                <button
+                  key={val}
+                  onClick={() => setSortBy(val)}
+                  style={{
+                    fontSize: 10, fontWeight: 700, padding: '3px 9px', borderRadius: 5, cursor: 'pointer',
+                    border: `1px solid ${sortBy === val ? 'var(--accent)' : 'var(--border)'}`,
+                    background: sortBy === val ? 'rgba(59,130,246,0.12)' : 'transparent',
+                    color: sortBy === val ? 'var(--accent)' : 'var(--text-muted)',
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
-          {entries
-            .sort((a, b) => {
-              const order = { accepted: 0, rejected: 2, null: 1, error: 3 };
-              return (order[String(a.final_status) as keyof typeof order] ?? 1) - (order[String(b.final_status) as keyof typeof order] ?? 1);
-            })
-            .map(entry => <SymbolRow key={entry.symbol} entry={entry} />)}
+          {sortedEntries.map(entry => (
+            <SymbolRow key={entry.symbol} entry={entry} passedCount={passedCount(entry)} />
+          ))}
         </div>
       )}
 
