@@ -38,6 +38,66 @@ function stepDotColor(status: string): string {
   return 'rgba(78,98,128,0.35)';
 }
 
+type StepState = 'passed' | 'failed' | 'pending';
+
+function inferStepStates(signal: Signal): StepState[] {
+  if (signal.accepted) return Array(7).fill('passed');
+  const r = (signal.reject_reason ?? '').toLowerCase();
+
+  // Map reject reason → which step index (0-based) FAILED
+  let failedAt = 7; // default: all passed but somehow rejected
+
+  if (r.includes('session') || r.includes('pas de marché') || r.includes('hors session')) {
+    failedAt = 0; // failed before step 1
+  } else if (r.includes('4h neutre') || r.includes('range') || r.includes('multi-tf') || r.includes('pas de biais')) {
+    failedAt = 0;
+  } else if (r.includes('pas de zone') || r.includes('liquidité identifiable') || r.includes('aucune zone')) {
+    failedAt = 0; // step 1
+  } else if (r.includes('sweep') || r.includes('sweep liquidity')) {
+    failedAt = 1; // step 2
+  } else if (r.includes('wyckoff') || r.includes('spring') || r.includes('utad') || r.includes('aucun événement')) {
+    failedAt = 2; // step 3
+  } else if (r.includes('htf') || r.includes('multi-tf') || r.includes('1h diverge') || r.includes('conflit')) {
+    failedAt = 3; // step 4 (HTF alignment, treated as displacement step)
+  } else if (r.includes('displacement') || r.includes('atr')) {
+    failedAt = 3; // step 4
+  } else if (r.includes('bos') || r.includes('volume')) {
+    failedAt = 4; // step 5
+  } else if (r.includes('expansion')) {
+    failedAt = 5; // step 6
+  } else if (r.includes('fib') || r.includes('retracement') || r.includes('5m') || r.includes('refinement')) {
+    failedAt = 6; // step 7
+  } else if (r.includes('risk')) {
+    // Risk rejection happens after all 7 steps — treat as passed all
+    return Array(7).fill('passed');
+  }
+
+  return Array.from({ length: 7 }, (_, i) =>
+    i < failedAt ? 'passed' : i === failedAt ? 'failed' : 'pending'
+  );
+}
+
+/* ── MiniStepBar ─────────────────────────────────────────────────────────── */
+function MiniStepBar({ signal }: { signal: Signal }) {
+  const states = inferStepStates(signal);
+  return (
+    <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
+      {states.map((st, i) => (
+        <div
+          key={i}
+          title={`${i + 1}. ${STEPS[i].label}: ${st === 'passed' ? '✓' : st === 'failed' ? '✗' : '—'}`}
+          style={{
+            width: 10, height: 10, borderRadius: 3,
+            background: stepDotColor(st),
+            opacity: st === 'pending' ? 0.22 : 1,
+            flexShrink: 0,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
 function SignalDetailModal({ signal, onClose }: { signal: Signal; onClose: () => void }) {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -46,7 +106,7 @@ function SignalDetailModal({ signal, onClose }: { signal: Signal; onClose: () =>
   }, [onClose]);
 
   const accepted = signal.accepted;
-  const passedCount = accepted ? 7 : 4;
+  const stepStates = inferStepStates(signal);
 
   const dir = (signal as Record<string, unknown>)['direction'] as string | undefined;
   const dirLabel = dir ?? (accepted ? 'LONG' : null);
@@ -137,25 +197,31 @@ function SignalDetailModal({ signal, onClose }: { signal: Signal; onClose: () =>
           <div className="section-title">Séquence SMC / Wyckoff</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 8 }}>
             {STEPS.map((step, i) => {
-              const passed = i < passedCount;
+              const st = stepStates[i];
+              const passed = st === 'passed';
+              const failed = st === 'failed';
+              const bgColor = passed ? 'rgba(34,197,94,0.08)' : failed ? 'rgba(239,68,68,0.07)' : 'rgba(255,255,255,0.02)';
+              const borderColor = passed ? 'rgba(34,197,94,0.25)' : failed ? 'rgba(239,68,68,0.25)' : 'var(--border)';
+              const iconBg = passed ? 'var(--accent-green)' : failed ? 'var(--accent-red)' : 'rgba(255,255,255,0.06)';
+              const labelColor = passed ? 'var(--accent-green)' : failed ? 'var(--accent-red)' : 'var(--text-muted)';
               return (
                 <div key={step.id} style={{
                   display: 'flex', alignItems: 'flex-start', gap: 10,
                   padding: '10px 12px', borderRadius: 10,
-                  background: passed ? 'rgba(34,197,94,0.08)' : 'rgba(255,255,255,0.02)',
-                  border: `1px solid ${passed ? 'rgba(34,197,94,0.25)' : 'var(--border)'}`,
+                  background: bgColor, border: `1px solid ${borderColor}`,
+                  opacity: st === 'pending' ? 0.45 : 1,
                 }}>
                   <div style={{
                     width: 22, height: 22, borderRadius: 6, flexShrink: 0,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     fontSize: 11, fontWeight: 800,
-                    background: passed ? 'var(--accent-green)' : 'rgba(255,255,255,0.06)',
-                    color: passed ? '#fff' : 'var(--text-muted)',
+                    background: iconBg,
+                    color: (passed || failed) ? '#fff' : 'var(--text-muted)',
                   }}>
-                    {passed ? '✓' : step.id}
+                    {passed ? '✓' : failed ? '✗' : step.id}
                   </div>
                   <div>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: passed ? 'var(--accent-green)' : 'var(--text-soft)', lineHeight: 1.2 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: labelColor, lineHeight: 1.2 }}>
                       {step.label}
                     </div>
                     <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2, lineHeight: 1.3 }}>
@@ -450,6 +516,7 @@ export function SignalsPage() {
                       <Th col="bos_level"   style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>BOS</Th>
                       <th style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Fib</th>
                       <Th col="accepted"    style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Statut</Th>
+                      <th style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Steps</th>
                       <th style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Raison rejet</th>
                       <th style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Pipeline</th>
                     </tr>
@@ -486,6 +553,9 @@ export function SignalsPage() {
                             <span className={`badge ${s.accepted ? 'badge-green' : 'badge-gray'}`}>
                               {s.accepted ? 'Accepté' : 'Rejeté'}
                             </span>
+                          </td>
+                          <td style={{ padding: '10px 14px' }}>
+                            <MiniStepBar signal={s} />
                           </td>
                           <td style={{ padding: '10px 14px', maxWidth: 200 }}>
                             {!s.accepted && s.reject_reason ? (
