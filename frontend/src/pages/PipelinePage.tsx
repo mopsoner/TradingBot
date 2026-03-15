@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
 import type { PipelineEntry, PipelineStep, PipelineRunRecord } from '../services/api';
-import { TIMEFRAMES } from '../constants';
 import { nowTime, fmtSym, fmtDateTime } from '../utils/dateUtils';
 import { PipelineRunDetailModal } from '../components/PipelineRunDetail';
 
@@ -157,7 +156,6 @@ export function PipelinePage() {
   const universe            = (byQuote ?? {})[quote] ?? [];
 
   const [selected, setSelected]   = useState<string[]>([]);
-  const [timeframe, setTimeframe] = useState('1h');
   const [profileId, setProfileId] = useState<number | null>(null);
   const [mode, setMode]           = useState<Mode>('paper');
 
@@ -218,7 +216,7 @@ export function PipelinePage() {
     setLiveStatus(null);
     stopPolling();
     try {
-      await api.runPipeline({ symbols: selected, timeframe, profile_id: profileId, mode });
+      await api.runPipeline({ symbols: selected, profile_id: profileId, mode });
       pollRef.current = setInterval(poll, 2000);
     } catch {
       setRunning(false);
@@ -230,7 +228,7 @@ export function PipelinePage() {
     try {
       const res = await api.startBot({
         symbols: selected,
-        timeframe,
+        timeframe: '1h',
         strategy_profile_id: profileId,
         mode: 'live',
         execute_orders: true,
@@ -334,13 +332,6 @@ export function PipelinePage() {
                 Mode LIVE — ordres réels sur Binance après confirmation explicite.
               </p>
             )}
-          </div>
-
-          <div className="form-group">
-            <label>Timeframe</label>
-            <select value={timeframe} onChange={e => setTimeframe(e.target.value)}>
-              {TIMEFRAMES.map(tf => <option key={tf.value} value={tf.value}>{tf.label} — {tf.desc}</option>)}
-            </select>
           </div>
 
           <div className="form-group" style={{ marginBottom: 0 }}>

@@ -1519,7 +1519,7 @@ def autonomous_status() -> dict:
 
 class PipelineRunRequest(BaseModel):
     symbols: list[str] = Field(min_length=1)
-    timeframe: str = "1h"
+    timeframe: str = "MTF"
     profile_id: int | None = None
     mode: str = "paper"
 

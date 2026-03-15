@@ -145,7 +145,7 @@ export const api = {
   createOptimizedProfile: (profileId: number, body: { source_profile_id: number; suggested_params: Record<string, unknown>; new_name?: string }) =>
     post<Record<string, unknown>>(`/api/strategy/profiles/${profileId}/create-optimized`, body),
   getPipeline: () => get<PipelineState>('/api/pipeline'),
-  runPipeline: (body: { symbols: string[]; timeframe: string; profile_id?: number | null; mode?: string }) =>
+  runPipeline: (body: { symbols: string[]; timeframe?: string; profile_id?: number | null; mode?: string }) =>
     post<Record<string, unknown>>('/api/pipeline/run', body),
   pipelineRuns: (params = '') => get<{ total: number; rows: PipelineRunRecord[] }>(`/api/pipeline/runs${params}`),
   pipelineRun: (runId: string) => get<{ run: PipelineRunRecord; signals: Signal[] }>(`/api/pipeline/runs/${runId}`),
