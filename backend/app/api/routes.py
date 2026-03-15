@@ -1515,7 +1515,6 @@ def run_backtest(outcomes_r: list[float]) -> dict:
 
 class ReplayStartRequest(BaseModel):
     symbol: str = Field(min_length=2, max_length=20)
-    timeframe: str = Field("1h", pattern=r"^(15m|1h|4h|1d)$")
     date_start: str
     date_end: str
 
@@ -1540,7 +1539,6 @@ def replay_start(req: ReplayStartRequest) -> dict:
 
     session_id = replay_manager.start(
         symbol=req.symbol.strip().upper(),
-        timeframe=req.timeframe,
         date_start=ds,
         date_end=de,
     )

@@ -34,16 +34,25 @@ function MetricCard({ label, value, color }: { label: string; value: string; col
   );
 }
 
+function biasBadge(bias: string | undefined) {
+  if (!bias || bias === 'neutral') return <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>—</span>;
+  const c = bias === 'LONG' ? '#22c55e' : '#ef4444';
+  return <span style={{ color: c, fontWeight: 700, fontSize: 10 }}>{bias}</span>;
+}
+
 function TradesTable({ trades }: { trades: ReplayTrade[] }) {
   if (trades.length === 0) return (
     <div style={{ padding: 16, color: 'var(--text-muted)', fontSize: 12, textAlign: 'center' }}>Aucun trade.</div>
   );
+  const hasMultiTf = trades.some(t => t.htf_bias !== undefined);
+  const headers = ['#', 'Date', 'Dir', 'Entry', 'SL', 'TP', 'Res', 'R',
+    ...(hasMultiTf ? ['4H Biais', '1H Struct'] : [])];
   return (
     <div style={{ overflowX: 'auto' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
         <thead>
           <tr style={{ color: 'var(--text-muted)', fontSize: 11 }}>
-            {['#', 'Date', 'Direction', 'Entry', 'SL', 'TP', 'Resultat', 'R'].map(h => (
+            {headers.map(h => (
               <th key={h} style={{ padding: '8px', textAlign: 'left', fontWeight: 500 }}>{h}</th>
             ))}
           </tr>
@@ -67,6 +76,8 @@ function TradesTable({ trades }: { trades: ReplayTrade[] }) {
                 <td style={{ padding: '6px 8px', color: rColor, fontWeight: 700, fontFamily: 'monospace' }}>
                   {t.r_multiple > 0 ? '+' : ''}{t.r_multiple.toFixed(2)}R
                 </td>
+                {hasMultiTf && <td style={{ padding: '6px 8px' }}>{biasBadge(t.htf_bias)}</td>}
+                {hasMultiTf && <td style={{ padding: '6px 8px' }}>{biasBadge(t.tf_1h_structure)}</td>}
               </tr>
             );
           })}
@@ -82,7 +93,6 @@ function ReplayLauncher({ onCompleted }: { onCompleted: () => void }) {
   const availableSymbols = loaded.map(s => s.symbol);
 
   const [symbol, setSymbol] = useState('');
-  const [timeframe, setTimeframe] = useState('1h');
   const [dateStart, setDateStart] = useState('');
   const [dateEnd, setDateEnd] = useState('');
   const [running, setRunning] = useState(false);
@@ -149,7 +159,7 @@ function ReplayLauncher({ onCompleted }: { onCompleted: () => void }) {
     setStatus(null);
     setSessionId(null);
     try {
-      const res = await api.replayStart({ symbol, timeframe, date_start: dateStart, date_end: dateEnd });
+      const res = await api.replayStart({ symbol, date_start: dateStart, date_end: dateEnd });
       if (!res.ok || !res.session_id) {
         setError(res.reason || 'Erreur au lancement.');
         setRunning(false);
@@ -180,8 +190,13 @@ function ReplayLauncher({ onCompleted }: { onCompleted: () => void }) {
 
   return (
     <div style={{ background: 'var(--bg-card)', border: '1px solid rgba(59,130,246,0.2)', borderRadius: 10, padding: 20, marginBottom: 24 }}>
-      <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: 16, fontSize: 14 }}>
-        Nouveau backtest (replay)
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+        <span style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: 14 }}>Nouveau backtest (replay)</span>
+        <span style={{
+          fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 4,
+          background: 'rgba(139,92,246,0.15)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.3)',
+          letterSpacing: '0.04em',
+        }}>4H / 1H / 15m</span>
       </div>
 
       {!sessionId && (
@@ -195,15 +210,6 @@ function ReplayLauncher({ onCompleted }: { onCompleted: () => void }) {
               }}>
                 {availableSymbols.length === 0 && <option value=''>Aucune donnée</option>}
                 {availableSymbols.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-            <div style={{ flex: '0 0 120px' }}>
-              <div style={{ color: 'var(--text-muted)', fontSize: 11, marginBottom: 4 }}>Timeframe</div>
-              <select value={timeframe} onChange={e => setTimeframe(e.target.value)} style={{
-                width: '100%', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.15)',
-                borderRadius: 4, color: 'var(--text-primary)', fontSize: 12, padding: '6px 10px',
-              }}>
-                {['15m', '1h', '4h', '1d'].map(tf => <option key={tf} value={tf}>{tf}</option>)}
               </select>
             </div>
             <div style={{ flex: '1 1 140px' }}>

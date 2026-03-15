@@ -4,8 +4,9 @@ import logging
 import threading
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from enum import Enum
+from bisect import bisect_right
 
 from sqlmodel import Session, select
 
@@ -16,11 +17,18 @@ from backend.app.services.walkforward import (
     CandleData,
     analyze_window,
     _compute_atr,
+    _find_swing_points,
+    _detect_equal_levels,
 )
 
 logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 500
+
+# Windows used per timeframe
+WINDOW_4H = 20    # 20 × 4H = 80H of HTF context
+WINDOW_1H = 50    # 50 × 1H for intermediate structure
+WINDOW_15M = 50   # 50 × 15m for entry
 
 
 class ReplayStatus(str, Enum):
@@ -38,6 +46,8 @@ class ReplayTrade:
     tp_price: float
     result: str
     r_multiple: float
+    htf_bias: str = ""
+    tf_1h_structure: str = ""
 
 
 @dataclass
@@ -56,7 +66,6 @@ class ReplayMetrics:
 class ReplaySession:
     session_id: str
     symbol: str
-    timeframe: str
     date_start: datetime
     date_end: datetime
     status: ReplayStatus = ReplayStatus.RUNNING
@@ -72,6 +81,10 @@ class ReplaySession:
     max_dd: float = field(default=0.0, repr=False)
     open_positions: list[dict] = field(default_factory=list, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    @property
+    def timeframe(self) -> str:
+        return "4h/1h/15m"
 
     def _check_open_positions(self, candle: CandleData) -> None:
         closed = []
@@ -90,19 +103,14 @@ class ReplaySession:
                 hit_tp = candle.low <= tp
 
             if hit_sl and hit_tp:
-                if direction == "LONG":
-                    hit_sl = abs(candle.open - sl) <= abs(candle.open - tp)
-                else:
-                    hit_sl = abs(candle.open - sl) <= abs(candle.open - tp)
+                hit_sl = abs(candle.open - sl) <= abs(candle.open - tp)
                 hit_tp = not hit_sl
 
             if hit_sl:
-                r = -1.0
-                self._record_trade_close(pos, "SL", r)
+                self._record_trade_close(pos, "SL", -1.0)
                 closed.append(pos)
             elif hit_tp:
-                r = pos["rr_ratio"]
-                self._record_trade_close(pos, "TP", r)
+                self._record_trade_close(pos, "TP", pos["rr_ratio"])
                 closed.append(pos)
 
         for c in closed:
@@ -123,7 +131,8 @@ class ReplaySession:
             self.max_dd = dd
 
     def _open_position(
-        self, candle: CandleData, direction: str, atr: float, rr_ratio: float = 2.0
+        self, candle: CandleData, direction: str, atr: float,
+        htf_bias: str, tf_1h: str, rr_ratio: float = 2.0
     ) -> None:
         entry = candle.close
         if direction == "LONG":
@@ -151,6 +160,8 @@ class ReplaySession:
             tp_price=round(tp, 6),
             result="OPEN",
             r_multiple=0.0,
+            htf_bias=htf_bias,
+            tf_1h_structure=tf_1h,
         ))
 
     def compute_final_metrics(self) -> None:
@@ -170,10 +181,12 @@ class ReplaySession:
         gross_profit = sum(r for r in r_values if r > 0)
         gross_loss = abs(sum(r for r in r_values if r < 0)) or 1e-9
 
-        if self.peak > 0:
+        if self.peak > 10.0:
             dd_pct = min(self.max_dd / self.peak, 1.0)
+        elif self.max_dd > 0:
+            dd_pct = min(self.max_dd / 10.0, 1.0)
         else:
-            dd_pct = min(self.max_dd, 1.0) if self.max_dd > 0 else 0.0
+            dd_pct = 0.0
 
         self.metrics = ReplayMetrics(
             total_trades=total,
@@ -210,8 +223,8 @@ def _load_candles_from_db(
             break
         for r in rows:
             ts = r.timestamp
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
+            if ts.tzinfo is not None:
+                ts = ts.replace(tzinfo=None)
             candles.append(CandleData(
                 timestamp=ts,
                 open=r.open, high=r.high, low=r.low, close=r.close, volume=r.volume,
@@ -222,6 +235,113 @@ def _load_candles_from_db(
     return candles
 
 
+def _get_4h_bias(candles_4h: list[CandleData]) -> str | None:
+    """
+    Determine HTF 4H bias using structural swing analysis.
+    Returns 'LONG' (higher highs + higher lows), 'SHORT' (lower highs + lower lows), or None.
+    """
+    if len(candles_4h) < 10:
+        return None
+
+    window = candles_4h[-WINDOW_4H:] if len(candles_4h) >= WINDOW_4H else candles_4h
+    if len(window) < 6:
+        return None
+
+    mid = len(window) // 2
+    first_half = window[:mid]
+    second_half = window[mid:]
+
+    first_high = max(c.high for c in first_half)
+    first_low = min(c.low for c in first_half)
+    second_high = max(c.high for c in second_half)
+    second_low = min(c.low for c in second_half)
+
+    atr_4h = _compute_atr(window)
+    threshold = atr_4h * 0.5
+
+    higher_highs = second_high > first_high + threshold
+    higher_lows = second_low > first_low + threshold
+    lower_highs = second_high < first_high - threshold
+    lower_lows = second_low < first_low - threshold
+
+    if higher_highs and higher_lows:
+        return "LONG"
+    elif lower_highs and lower_lows:
+        return "SHORT"
+
+    closes = [c.close for c in window]
+    first_avg = sum(closes[:mid]) / max(mid, 1)
+    second_avg = sum(closes[mid:]) / max(len(closes) - mid, 1)
+
+    if second_avg > first_avg * 1.008:
+        return "LONG"
+    elif second_avg < first_avg * 0.992:
+        return "SHORT"
+
+    return None
+
+
+def _get_1h_structure(candles_1h: list[CandleData]) -> str | None:
+    """
+    Determine 1H intermediate structure: BOS + displacement direction.
+    Returns 'LONG', 'SHORT', or None.
+    """
+    if len(candles_1h) < 20:
+        return None
+
+    window = candles_1h[-WINDOW_1H:] if len(candles_1h) >= WINDOW_1H else candles_1h
+
+    atr = _compute_atr(window)
+    if atr <= 0:
+        return None
+
+    swing_highs, swing_lows = _find_swing_points(window, lookback=3)
+
+    if not swing_highs or not swing_lows:
+        mid = len(window) // 2
+        prev_highs = [c.high for c in window[:mid]]
+        prev_lows = [c.low for c in window[:mid]]
+        rec_highs = [c.high for c in window[mid:]]
+        rec_lows = [c.low for c in window[mid:]]
+        if not prev_highs:
+            return None
+        prev_h = max(prev_highs)
+        prev_l = min(prev_lows)
+        rec_h = max(rec_highs)
+        rec_l = min(rec_lows)
+        if rec_h > prev_h and rec_l > prev_l:
+            return "LONG"
+        if rec_h < prev_h and rec_l < prev_l:
+            return "SHORT"
+        return None
+
+    last_swing_high = swing_highs[-1]
+    last_swing_low = swing_lows[-1]
+    last_3 = window[-3:]
+
+    bos_long = any(c.close > last_swing_high for c in last_3)
+    bos_short = any(c.close < last_swing_low for c in last_3)
+    has_displacement = any(abs(c.close - c.open) > atr * 0.7 for c in last_3)
+
+    if bos_long and has_displacement:
+        return "LONG"
+    if bos_short and has_displacement:
+        return "SHORT"
+
+    if len(swing_highs) >= 2 and len(swing_lows) >= 2:
+        if swing_highs[-1] > swing_highs[-2] and swing_lows[-1] > swing_lows[-2]:
+            return "LONG"
+        if swing_highs[-1] < swing_highs[-2] and swing_lows[-1] < swing_lows[-2]:
+            return "SHORT"
+
+    return None
+
+
+def _build_ts_index(candles: list[CandleData]) -> list[datetime]:
+    """Build a sorted list of timestamps for bisect lookups."""
+    return [c.timestamp for c in candles]
+
+
 MAX_CONCURRENT_REPLAYS = 3
 
 
@@ -229,15 +349,16 @@ def _persist_running(session: ReplaySession) -> None:
     import json
     config_json = json.dumps({
         "symbol": session.symbol,
-        "timeframe": session.timeframe,
+        "timeframe": "4h/1h/15m",
         "date_start": session.date_start.isoformat(),
         "date_end": session.date_end.isoformat(),
+        "mode": "multi-tf",
     })
     with Session(db_engine) as s:
         bt = BacktestResult(
             symbol=session.symbol,
-            timeframe=session.timeframe,
-            strategy_version="SMC/Wyckoff Replay",
+            timeframe="4h/1h/15m",
+            strategy_version="SMC/Wyckoff Multi-TF",
             win_rate=0.0, profit_factor=0.0, expectancy=0.0, drawdown=0.0, r_multiple=0.0,
             pipeline_run_id=session.session_id,
             signal_count=0,
@@ -253,45 +374,108 @@ def _persist_running(session: ReplaySession) -> None:
         session.backtest_result_id = bt.id
 
 
+def _naive(dt: datetime) -> datetime:
+    return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
+
+
 def _run_replay(session: ReplaySession, fib_levels: list[float], rr_ratio: float) -> None:
     _persist_running(session)
     try:
         engine_inst = SignalEngine(fib_levels)
-        candles = _load_candles_from_db(
-            session.symbol, session.timeframe, session.date_start, session.date_end
-        )
-        with session._lock:
-            session.total_candles = len(candles)
 
-        if not candles:
+        date_start_naive = _naive(session.date_start)
+        date_end_naive = _naive(session.date_end)
+        buffer_start = date_start_naive - timedelta(days=90)
+
+        candles_4h = _load_candles_from_db(session.symbol, "4h", buffer_start, date_end_naive)
+        candles_1h = _load_candles_from_db(session.symbol, "1h", buffer_start, date_end_naive)
+        candles_15m = _load_candles_from_db(session.symbol, "15m", buffer_start, date_end_naive)
+
+        logger.info(
+            "Replay %s — loaded: 4H=%d 1H=%d 15m=%d",
+            session.session_id[:8], len(candles_4h), len(candles_1h), len(candles_15m)
+        )
+
+        if not candles_15m:
             with session._lock:
                 session.status = ReplayStatus.FAILED
-                session.error = "Aucune bougie trouvée pour cette configuration."
+                session.error = "Aucune bougie 15m trouvée. Importez d'abord les données 15m."
             _persist_result(session)
             return
 
-        window_size = 50
-
-        for i in range(len(candles)):
+        if not candles_1h:
             with session._lock:
-                session.candles_processed = i + 1
+                session.status = ReplayStatus.FAILED
+                session.error = "Aucune bougie 1H trouvée. Importez d'abord les données 1H."
+            _persist_result(session)
+            return
 
-            current_candle = candles[i]
+        ts_4h = _build_ts_index(candles_4h)
+        ts_1h = _build_ts_index(candles_1h)
+
+        candles_15m_in_range = [
+            c for c in candles_15m if c.timestamp >= date_start_naive
+        ]
+
+        with session._lock:
+            session.total_candles = len(candles_15m_in_range)
+
+        cooldown_bars = 0
+
+        for idx, current_candle in enumerate(candles_15m_in_range):
+            with session._lock:
+                session.candles_processed = idx + 1
+
             session._check_open_positions(current_candle)
 
-            if i < window_size:
+            if cooldown_bars > 0:
+                cooldown_bars -= 1
                 continue
 
             if len(session.open_positions) >= 1:
                 continue
 
-            window = candles[i - window_size: i]
-            direction, steps = analyze_window(window, engine_inst)
+            pos_in_full = candles_15m.index(current_candle) if current_candle in candles_15m else -1
+            if pos_in_full < WINDOW_15M:
+                continue
 
-            if direction is not None:
-                atr = _compute_atr(window)
-                if atr > 0:
-                    session._open_position(current_candle, direction, atr, rr_ratio)
+            window_15m = candles_15m[pos_in_full - WINDOW_15M: pos_in_full]
+
+            ts_now = current_candle.timestamp
+            idx_4h = bisect_right(ts_4h, ts_now) - 1
+            idx_1h = bisect_right(ts_1h, ts_now) - 1
+
+            if idx_4h < WINDOW_4H:
+                htf_bias = None
+            else:
+                window_4h = candles_4h[max(0, idx_4h - WINDOW_4H): idx_4h]
+                htf_bias = _get_4h_bias(window_4h)
+
+            if idx_1h < WINDOW_1H:
+                tf_1h_struct = None
+            else:
+                window_1h = candles_1h[max(0, idx_1h - WINDOW_1H): idx_1h]
+                tf_1h_struct = _get_1h_structure(window_1h)
+
+            direction_15m, _ = analyze_window(window_15m, engine_inst)
+
+            if direction_15m is None:
+                continue
+
+            if htf_bias is not None and htf_bias != direction_15m:
+                continue
+
+            atr = _compute_atr(window_15m)
+            if atr <= 0:
+                continue
+
+            session._open_position(
+                current_candle, direction_15m, atr,
+                htf_bias=htf_bias or "neutral",
+                tf_1h=tf_1h_struct or "neutral",
+                rr_ratio=rr_ratio,
+            )
+            cooldown_bars = 4
 
         session.compute_final_metrics()
         with session._lock:
@@ -317,6 +501,8 @@ def _persist_result(session: ReplaySession) -> None:
             "tp_price": t.tp_price,
             "result": t.result,
             "r_multiple": t.r_multiple,
+            "htf_bias": t.htf_bias,
+            "tf_1h_structure": t.tf_1h_structure,
         }
         for t in session.trades
     ])
@@ -345,7 +531,6 @@ class ReplayManager:
     def start(
         self,
         symbol: str,
-        timeframe: str,
         date_start: datetime,
         date_end: datetime,
         fib_levels: list[float] | None = None,
@@ -365,7 +550,6 @@ class ReplayManager:
         session = ReplaySession(
             session_id=session_id,
             symbol=symbol,
-            timeframe=timeframe,
             date_start=date_start,
             date_end=date_end,
         )
@@ -397,7 +581,7 @@ class ReplayManager:
                 "session_id": session.session_id,
                 "status": status_val,
                 "symbol": session.symbol,
-                "timeframe": session.timeframe,
+                "timeframe": "4h/1h/15m",
                 "candles_processed": session.candles_processed,
                 "total_candles": session.total_candles,
             }
@@ -425,6 +609,8 @@ class ReplayManager:
                         "tp_price": t.tp_price,
                         "result": t.result,
                         "r_multiple": t.r_multiple,
+                        "htf_bias": t.htf_bias,
+                        "tf_1h_structure": t.tf_1h_structure,
                     }
                     for t in session.trades
                 ]
