@@ -35,18 +35,12 @@ function fmtZone(name: string, low?: number | null, high?: number | null): strin
   return name;
 }
 
-function BacktestDetailPanel({ r, simulatedTrades }: { r: BacktestResult; simulatedTrades?: SimulatedTrade[] }) {
+function BacktestDetailPanel({ r, simulatedTrades, dataWarning }: { r: BacktestResult; simulatedTrades?: SimulatedTrade[]; dataWarning?: string | null }) {
   const [signals, setSignals]           = useState<Signal[]>([]);
   const [loadingSigs, setLoadingSigs]   = useState(true);
   const [sigError, setSigError]         = useState('');
   const [expandedSigId, setExpandedSigId] = useState<number | null>(null);
   const [sigFilter, setSigFilter]       = useState<'all' | 'accepted' | 'rejected'>('all');
-
-  // Estimation du nombre de signaux historiques à partir des métriques stockées
-  // r_multiple = expectancy × n_total  →  n_total = r_multiple / expectancy
-  const nHistorical = (r.expectancy !== 0)
-    ? Math.round(Math.abs(r.r_multiple / r.expectancy))
-    : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -54,10 +48,8 @@ function BacktestDetailPanel({ r, simulatedTrades }: { r: BacktestResult; simula
     setSigError('');
     setSignals([]);
     setExpandedSigId(null);
-    // Charge TOUS les signaux historiques pour les symboles de ce backtest
-    // (le pipeline_run_id sert uniquement à distinguer les signaux "ce run")
     const firstSymbol = r.symbol.split(',')[0].trim();
-    api.signalsForBacktest(null, firstSymbol)
+    api.signalsForBacktest(r.pipeline_run_id, firstSymbol)
       .then(res => { if (!cancelled) setSignals(res.rows); })
       .catch(err => { if (!cancelled) setSigError(String(err)); })
       .finally(() => { if (!cancelled) setLoadingSigs(false); });
@@ -106,22 +98,15 @@ function BacktestDetailPanel({ r, simulatedTrades }: { r: BacktestResult; simula
 
         {/* LEFT — Résultats */}
         <div>
-          {/* Bannière méthodologie */}
-          {nHistorical !== null && (
+          {/* Bannière avertissement données */}
+          {dataWarning && (
             <div style={{
               marginBottom: 12, padding: '8px 12px', borderRadius: 7,
-              background: 'rgba(59,130,246,0.07)', border: '1px solid rgba(59,130,246,0.2)',
-              display: 'flex', alignItems: 'center', gap: 8,
+              background: 'rgba(234,179,8,0.08)', border: '1px solid rgba(234,179,8,0.3)',
+              display: 'flex', alignItems: 'flex-start', gap: 8,
             }}>
-              <span style={{ fontSize: 14 }}>📊</span>
-              <span style={{ fontSize: 11, color: 'var(--text-soft)' }}>
-                Métriques calculées sur <strong style={{ color: 'var(--text)' }}>{nHistorical} signaux historiques</strong> pour {fmtSym(r.symbol.split(',')[0].trim())}.
-                {r.win_rate === 0 && (
-                  <span style={{ color: 'var(--accent-red)', marginLeft: 6 }}>
-                    Aucun signal accepté — conditions HTF actuellement défavorables.
-                  </span>
-                )}
-              </span>
+              <span style={{ fontSize: 14, flexShrink: 0 }}>⚠️</span>
+              <span style={{ fontSize: 11, color: 'var(--accent-yellow)', lineHeight: 1.5 }}>{dataWarning}</span>
             </div>
           )}
 
@@ -164,17 +149,12 @@ function BacktestDetailPanel({ r, simulatedTrades }: { r: BacktestResult; simula
         <div>
           {/* Signals header + filter tabs */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 13, fontWeight: 700 }}>Signaux historiques</span>
+            <span style={{ fontSize: 13, fontWeight: 700 }}>Signaux du run</span>
             {!loadingSigs && (
               <>
                 <span className="muted" style={{ fontSize: 11 }}>
                   {filteredSigs.length}/{signals.length}
                 </span>
-                {r.pipeline_run_id && signals.some(s => s.pipeline_run_id === r.pipeline_run_id) && (
-                  <span style={{ fontSize: 10, padding: '1px 7px', borderRadius: 4, background: 'rgba(59,130,246,0.15)', color: 'var(--accent)', border: '1px solid rgba(59,130,246,0.3)' }}>
-                    ★ = ce run
-                  </span>
-                )}
                 <div style={{ display: 'flex', gap: 3, marginLeft: 6 }}>
                   {(['all', 'accepted', 'rejected'] as const).map(f => (
                     <button key={f} onClick={() => { setSigFilter(f); setExpandedSigId(null); }} style={{
@@ -220,7 +200,6 @@ function BacktestDetailPanel({ r, simulatedTrades }: { r: BacktestResult; simula
                 <tbody>
                   {filteredSigs.map(sig => {
                     const isExp = expandedSigId === sig.id;
-                    const isCurrentRun = r.pipeline_run_id != null && sig.pipeline_run_id === r.pipeline_run_id;
                     const dirColor = sig.direction === 'LONG' ? 'var(--accent-green)' : sig.direction === 'SHORT' ? 'var(--accent-red)' : 'var(--text-muted)';
                     return (
                       <React.Fragment key={sig.id}>
@@ -228,14 +207,12 @@ function BacktestDetailPanel({ r, simulatedTrades }: { r: BacktestResult; simula
                           onClick={() => setExpandedSigId(isExp ? null : sig.id)}
                           style={{
                             cursor: 'pointer',
-                            background: isExp ? 'rgba(59,130,246,0.09)' : isCurrentRun ? 'rgba(59,130,246,0.04)' : 'transparent',
-                            borderLeft: isCurrentRun ? '2px solid var(--accent)' : '2px solid transparent',
+                            background: isExp ? 'rgba(59,130,246,0.09)' : 'transparent',
                           }}
                           onMouseEnter={e => { if (!isExp) e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; }}
-                          onMouseLeave={e => { if (!isExp) e.currentTarget.style.background = isCurrentRun ? 'rgba(59,130,246,0.04)' : 'transparent'; }}
+                          onMouseLeave={e => { if (!isExp) e.currentTarget.style.background = 'transparent'; }}
                         >
                           <td style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                            {isCurrentRun && <span style={{ color: 'var(--accent)', marginRight: 3, fontSize: 10 }}>★</span>}
                             {sig.timestamp.slice(0, 10)}
                           </td>
                           <td>
@@ -1359,6 +1336,7 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
   const [leftTab, setLeftTab] = useState<'sim' | 'real'>('sim');
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
   const [tradesMap, setTradesMap] = useState<Record<number, SimulatedTrade[]>>({});
+  const [dataWarningsMap, setDataWarningsMap] = useState<Record<number, string>>({});
 
   const [wfSymbol, setWfSymbol] = useState('ETHUSDT');
   const [wfYears, setWfYears] = useState(4);
@@ -1469,6 +1447,9 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
         const btResult = res.result as BacktestResult;
         if (Array.isArray(res.trades) && btResult.id) {
           setTradesMap(prev => ({ ...prev, [btResult.id]: res.trades as SimulatedTrade[] }));
+        }
+        if (res.data_warning && btResult.id) {
+          setDataWarningsMap(prev => ({ ...prev, [btResult.id]: res.data_warning as string }));
         }
         reload();
       } else {
@@ -2162,7 +2143,7 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
                         {isExpanded && (
                           <tr>
                             <td colSpan={9} style={{ padding: 0, border: 'none' }}>
-                              <BacktestDetailPanel r={r} simulatedTrades={tradesMap[r.id]} />
+                              <BacktestDetailPanel r={r} simulatedTrades={tradesMap[r.id]} dataWarning={dataWarningsMap[r.id]} />
                             </td>
                           </tr>
                         )}

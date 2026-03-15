@@ -1198,6 +1198,25 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
     if not symbols:
         return {"ok": False, "reason": "Aucun symbole sélectionné"}
 
+    symbols_label = ", ".join(symbols)
+
+    # ── Vérification disponibilité des bougies ────────────────────────────────
+    data_warning: str | None = None
+    with Session(engine) as s:
+        insufficient: list[str] = []
+        for tf in ("4h", "1h", "15m", "5m"):
+            count = s.exec(
+                select(func.count(MarketCandle.id))
+                .where(MarketCandle.symbol.in_(symbols), MarketCandle.timeframe == tf)
+            ).one()
+            if count < 100:
+                insufficient.append(f"{tf} ({count} bougies)")
+        if insufficient:
+            data_warning = (
+                f"Données insuffisantes pour : {', '.join(insufficient)}. "
+                f"Importez des bougies historiques (page Données) pour des métriques fiables."
+            )
+
     global _active_backtests
     with _active_backtests_lock:
         _active_backtests += 1
@@ -1208,35 +1227,20 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
         with _active_backtests_lock:
             _active_backtests = max(0, _active_backtests - 1)
 
-    symbols_label = ", ".join(symbols)
-
-    # Résoudre la durée → date de début
-    duration_key = req.duration if req.duration in DURATION_MAP else "all"
-    days_back = DURATION_MAP[duration_key]
-    since_dt: datetime | None = None
-    if days_back is not None:
-        since_dt = datetime.now(timezone.utc) - timedelta(days=days_back)
-
+    # ── Signaux du run courant uniquement → métriques + détail ───────────────
     with Session(engine) as s:
-        # Signaux du run courant → affichés dans le détail
         current_sigs = s.exec(
             select(Signal)
             .where(Signal.pipeline_run_id == run_id)
             .order_by(Signal.timestamp)
         ).all()
 
-        # Signaux historiques filtrés par durée → métriques statistiques
-        hist_q = select(Signal).where(Signal.symbol.in_(symbols))
-        if since_dt is not None:
-            hist_q = hist_q.where(Signal.timestamp >= since_dt)
-        all_sigs = s.exec(hist_q.order_by(Signal.timestamp)).all()
-
     target_rs: list = list(profile_params.get("target_r_multiples", config.strategy.target_r_multiples) or [2.0, 3.0])
     avg_r_win  = float(sum(target_rs) / len(target_rs)) if target_rs else 2.5
 
-    # Métriques sur l'ensemble des signaux historiques
-    n_total    = len(all_sigs)
-    n_accepted = sum(1 for sg in all_sigs if sg.accepted)
+    # Métriques calculées sur les seuls signaux de CE run
+    n_total    = len(current_sigs)
+    n_accepted = sum(1 for sg in current_sigs if sg.accepted)
     n_rejected = n_total - n_accepted
 
     win_rate      = n_accepted / n_total if n_total > 0 else 0.0
@@ -1247,7 +1251,7 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
     equity = 0.0
     peak   = 0.0
     max_dd = 0.0
-    for sg in all_sigs:
+    for sg in current_sigs:
         equity += avg_r_win if sg.accepted else -1.0
         if equity > peak:
             peak = equity
@@ -1259,7 +1263,7 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
 
     # Breakdown des rejets par étape
     reject_counts: dict[str, int] = {}
-    for sg in all_sigs:
+    for sg in current_sigs:
         if not sg.accepted and sg.reject_reason:
             key = sg.reject_reason.split("(")[0].strip()
             reject_counts[key] = reject_counts.get(key, 0) + 1
@@ -1280,15 +1284,11 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
         s.add(result)
         s.add(Log(level="INFO", message=(
             f"Backtest [{symbols_label}] — {profile_name}: "
-            f"{n_accepted}/{n_total} signaux historiques acceptés "
+            f"{n_accepted}/{n_total} signaux (run courant) acceptés "
             f"WR={win_rate:.1%} PF={profit_factor:.2f}"
         )))
         s.commit()
         s.refresh(result)
-
-    duration_labels = {"1d":"1 jour","1w":"1 semaine","1m":"1 mois","3m":"3 mois","6m":"6 mois","1y":"1 an","2y":"2 ans","4y":"4 ans","all":"Tout l'historique"}
-    duration_label = duration_labels.get(duration_key, duration_key)
-    period_str = f"{since_dt.strftime('%d/%m/%Y')} → aujourd'hui" if since_dt else "Tout l'historique"
 
     reject_lines = "\n".join(f"  - {cnt}x {r}" for r, cnt in top_rejects)
     report = (
@@ -1296,16 +1296,17 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
         f"- Symboles: {symbols_label}\n"
         f"- Timeframe: MTF (4H→1H→15m→5m)\n"
         f"- Strategy: {profile_name}\n"
-        f"- Durée: {duration_label} ({period_str})\n"
-        f"- Signaux historiques totaux: {n_total}\n"
+        f"- Run ID: {run_id[:8]}…\n"
+        f"- Signaux générés ce run: {n_total}\n"
         f"- Signaux acceptés: {n_accepted} / {n_total}\n"
         f"- Win rate: {win_rate:.2%}\n"
         f"- Profit factor: {profit_factor:.2f}\n"
         f"- Drawdown max: {drawdown:.2%}\n"
         f"- Expectancy: {expectancy:.4f}R\n"
         f"- R total: {r_multiple:.2f}R\n"
-        f"\n## Top rejections:\n{reject_lines or '  Aucun'}\n"
-        f"\n## Run courant ({len(current_sigs)} signaux):\n"
+        + (f"\n⚠️ {data_warning}\n" if data_warning else "")
+        + f"\n## Top rejections:\n{reject_lines or '  Aucun'}\n"
+        + f"\n## Signaux ({len(current_sigs)}):\n"
         + "\n".join(f"  - {sg.symbol}: {'✅ Accepté' if sg.accepted else '❌ ' + (sg.reject_reason or 'rejeté')}" for sg in current_sigs)
     )
 
@@ -1322,7 +1323,13 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
         for i, sg in enumerate(current_sigs)
     ]
 
-    return {"ok": True, "result": result.model_dump(), "report": report, "trades": trades}
+    return {
+        "ok": True,
+        "result": result.model_dump(),
+        "report": report,
+        "trades": trades,
+        "data_warning": data_warning,
+    }
 
 
 @router.post("/backtest")

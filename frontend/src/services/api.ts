@@ -77,6 +77,7 @@ export type BacktestResult = {
   expectancy: number; drawdown: number; r_multiple: number;
   pipeline_run_id?: string | null;
   symbols?: string[];
+  data_warning?: string | null;
 };
 
 export type SimulatedTrade = {
