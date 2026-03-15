@@ -14,22 +14,40 @@ function qualityBadge(wr: number, pf: number, dd: number): { label: string; colo
   const score = (wr >= 0.55 ? 2 : wr >= 0.45 ? 1 : 0) +
                 (pf >= 1.5 ? 2 : pf >= 1.1 ? 1 : 0) +
                 (dd <= 0.08 ? 2 : dd <= 0.15 ? 1 : 0);
-  if (score >= 5) return { label: 'Excellent', color: '#22c55e', bg: 'rgba(34,197,94,0.12)' };
-  if (score >= 3) return { label: 'Bon',       color: '#3b82f6', bg: 'rgba(59,130,246,0.12)' };
-  if (score >= 2) return { label: 'Attention',  color: '#eab308', bg: 'rgba(234,179,8,0.12)' };
+  if (score >= 5) return { label: 'Excellent',   color: '#22c55e', bg: 'rgba(34,197,94,0.12)' };
+  if (score >= 3) return { label: 'Bon',         color: '#3b82f6', bg: 'rgba(59,130,246,0.12)' };
+  if (score >= 2) return { label: 'Attention',   color: '#eab308', bg: 'rgba(234,179,8,0.12)' };
   return                  { label: 'Insuffisant', color: '#ef4444', bg: 'rgba(239,68,68,0.12)' };
 }
 
+function fmtZonePrice(n: number): string {
+  if (n >= 10000) return n.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  if (n >= 100)   return n.toFixed(2);
+  if (n >= 1)     return n.toFixed(4);
+  return n.toFixed(6);
+}
+
+function fmtZone(name: string, low?: number | null, high?: number | null): string {
+  if (!name || name === 'N/A') return '—';
+  if (low != null && high != null && low > 0) {
+    return `${name} [${fmtZonePrice(low)} – ${fmtZonePrice(high)}]`;
+  }
+  return name;
+}
+
 function BacktestDetailPanel({ r, simulatedTrades }: { r: BacktestResult; simulatedTrades?: SimulatedTrade[] }) {
-  const [signals, setSignals] = useState<Signal[]>([]);
-  const [loadingSigs, setLoadingSigs] = useState(true);
-  const [sigError, setSigError] = useState('');
+  const [signals, setSignals]           = useState<Signal[]>([]);
+  const [loadingSigs, setLoadingSigs]   = useState(true);
+  const [sigError, setSigError]         = useState('');
+  const [expandedSigId, setExpandedSigId] = useState<number | null>(null);
+  const [sigFilter, setSigFilter]       = useState<'all' | 'accepted' | 'rejected'>('all');
 
   useEffect(() => {
     let cancelled = false;
     setLoadingSigs(true);
     setSigError('');
     setSignals([]);
+    setExpandedSigId(null);
     api.signalsForBacktest(r.symbol, r.timeframe)
       .then(res => { if (!cancelled) setSignals(res.rows); })
       .catch(err => { if (!cancelled) setSigError(String(err)); })
@@ -38,174 +56,270 @@ function BacktestDetailPanel({ r, simulatedTrades }: { r: BacktestResult; simula
   }, [r.symbol, r.timeframe]);
 
   const hasSimulatedTrades = simulatedTrades && simulatedTrades.length > 0;
-  const showSimulated = !loadingSigs && signals.length === 0 && hasSimulatedTrades;
-
   const q = qualityBadge(r.win_rate, r.profit_factor, r.drawdown);
 
+  const filteredSigs = signals.filter(s =>
+    sigFilter === 'all' ? true : sigFilter === 'accepted' ? s.accepted : !s.accepted
+  );
+
   const metrics: [string, string, string][] = [
-    ['Win Rate',      pct(r.win_rate),                        r.win_rate >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)'],
-    ['Profit Factor', num(r.profit_factor),                   r.profit_factor >= 1.2 ? 'var(--accent-green)' : r.profit_factor >= 1.0 ? 'var(--accent-yellow)' : 'var(--accent-red)'],
-    ['Drawdown',      pct(r.drawdown),                        r.drawdown <= 0.1 ? 'var(--accent-green)' : r.drawdown <= 0.2 ? 'var(--accent-yellow)' : 'var(--accent-red)'],
-    ['Expectancy',    num(r.expectancy, 4),                   r.expectancy > 0 ? 'var(--accent-green)' : 'var(--accent-red)'],
-    ['R Multiple',    num(r.r_multiple) + 'R',                r.r_multiple > 0 ? 'var(--accent-green)' : 'var(--accent-red)'],
+    ['Win Rate',      pct(r.win_rate),        r.win_rate >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)'],
+    ['Profit Factor', num(r.profit_factor),   r.profit_factor >= 1.2 ? 'var(--accent-green)' : r.profit_factor >= 1.0 ? 'var(--accent-yellow)' : 'var(--accent-red)'],
+    ['Drawdown',      pct(r.drawdown),        r.drawdown <= 0.1 ? 'var(--accent-green)' : r.drawdown <= 0.2 ? 'var(--accent-yellow)' : 'var(--accent-red)'],
+    ['Expectancy',    num(r.expectancy, 4),   r.expectancy > 0 ? 'var(--accent-green)' : 'var(--accent-red)'],
+    ['R Multiple',    num(r.r_multiple) + 'R', r.r_multiple > 0 ? 'var(--accent-green)' : 'var(--accent-red)'],
   ];
 
   return (
     <div style={{
-      padding: '16px 18px', background: 'rgba(59,130,246,0.04)',
-      borderBottom: '2px solid rgba(59,130,246,0.15)',
+      padding: '18px 20px',
+      background: 'rgba(6,9,15,0.7)',
+      borderTop: '1px solid rgba(59,130,246,0.2)',
+      borderBottom: '2px solid rgba(59,130,246,0.25)',
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+
+      {/* ── Header ──────────────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
         <span style={{
           padding: '3px 10px', borderRadius: 5, fontSize: 11, fontWeight: 700,
           background: q.bg, color: q.color, letterSpacing: 0.3,
         }}>{q.label}</span>
-        <span style={{ fontSize: 13, fontWeight: 700 }}>
-          {fmtSym(r.symbol)} <span className="tag" style={{ marginLeft: 4 }}>{r.timeframe}</span>
-        </span>
+        <span style={{ fontSize: 14, fontWeight: 700 }}>{fmtSym(r.symbol)}</span>
+        <span className="tag" style={{ fontSize: 11 }}>{r.timeframe}</span>
+        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{r.strategy_version || 'default-smc'}</span>
         <span className="muted" style={{ fontSize: 11, marginLeft: 'auto' }}>
-          Stratégie : <strong style={{ color: 'var(--text)' }}>{r.strategy_version || 'default-smc'}</strong>
-          &nbsp;·&nbsp;{new Date(r.timestamp).toLocaleString('fr-FR')}
+          {new Date(r.timestamp).toLocaleString('fr-FR')}
         </span>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-        <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 60, textAlign: 'right' }}>Win Rate</span>
-        <div style={{ flex: 1, height: 10, borderRadius: 5, background: 'var(--surface2)', overflow: 'hidden', position: 'relative' }}>
-          <div style={{
-            height: '100%', width: `${Math.min(r.win_rate * 100, 100)}%`, borderRadius: 5,
-            background: r.win_rate >= 0.5
-              ? `linear-gradient(90deg, #22c55e, #4ade80)`
-              : `linear-gradient(90deg, #ef4444, #f87171)`,
-            transition: 'width 0.4s ease',
-          }} />
-          <div style={{
-            position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1,
-            background: 'rgba(255,255,255,0.2)',
-          }} />
-        </div>
-        <span style={{ fontSize: 12, fontWeight: 700, minWidth: 44, color: r.win_rate >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-          {pct(r.win_rate)}
-        </span>
-      </div>
+      {/* ── 2-column body ───────────────────────────────────────────────── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '260px 1fr', gap: 20, alignItems: 'start' }}>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, marginBottom: 16 }}>
-        {metrics.map(([label, value, color]) => (
-          <div key={label} style={{ padding: '8px 10px', borderRadius: 8, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
-            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 3, textTransform: 'uppercase', letterSpacing: 0.5 }}>{label}</div>
-            <div style={{ fontWeight: 700, fontSize: 15, color }}>{value}</div>
+        {/* LEFT — Résultats */}
+        <div>
+          {/* Win rate bar */}
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+              <span style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.6 }}>Win Rate</span>
+              <span style={{ fontSize: 13, fontWeight: 800, color: r.win_rate >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                {pct(r.win_rate)}
+              </span>
+            </div>
+            <div style={{ height: 8, borderRadius: 4, background: 'var(--surface2)', overflow: 'hidden', position: 'relative' }}>
+              <div style={{
+                height: '100%', borderRadius: 4,
+                width: `${Math.min(r.win_rate * 100, 100)}%`,
+                background: r.win_rate >= 0.5
+                  ? 'linear-gradient(90deg,#22c55e,#4ade80)'
+                  : 'linear-gradient(90deg,#ef4444,#f87171)',
+                transition: 'width 0.4s ease',
+              }} />
+              <div style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, background: 'rgba(255,255,255,0.15)' }} />
+            </div>
           </div>
-        ))}
-      </div>
 
-      <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-          <span style={{ fontSize: 13, fontWeight: 700 }}>
-            {showSimulated ? 'Trades simulés' : 'Signaux liés'}
-          </span>
-          <span className="muted" style={{ fontSize: 11 }}>{fmtSym(r.symbol)} · {r.timeframe}</span>
-          {!loadingSigs && !showSimulated && <span className="muted" style={{ fontSize: 11, marginLeft: 'auto' }}>{signals.length} signal{signals.length !== 1 ? 'x' : ''}</span>}
-          {showSimulated && <span className="muted" style={{ fontSize: 11, marginLeft: 'auto' }}>{simulatedTrades!.length} trade{simulatedTrades!.length !== 1 ? 's' : ''}</span>}
+          {/* Metrics 2×3 grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            {metrics.map(([label, value, color]) => (
+              <div key={label} style={{
+                padding: '10px 12px', borderRadius: 8,
+                background: 'var(--surface2)', border: '1px solid var(--border)',
+              }}>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>{label}</div>
+                <div style={{ fontWeight: 800, fontSize: 17, color }}>{value}</div>
+              </div>
+            ))}
+          </div>
         </div>
 
-        {loadingSigs ? (
-          <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>Chargement des signaux…</div>
-        ) : sigError && !hasSimulatedTrades ? (
-          <div style={{ padding: 14, textAlign: 'center', fontSize: 12, color: 'var(--accent-red)', background: 'rgba(239,68,68,0.08)', borderRadius: 8 }}>
-            Erreur lors du chargement des signaux
-          </div>
-        ) : showSimulated ? (
-          <div style={{ maxHeight: 300, overflowY: 'auto', borderRadius: 8, border: '1px solid var(--border)' }}>
-            <table style={{ marginBottom: 0 }}>
-              <thead>
-                <tr>
-                  <th style={{ fontSize: 10 }}>#</th>
-                  <th style={{ fontSize: 10 }}>Date</th>
-                  <th style={{ fontSize: 10 }}>Direction</th>
-                  <th style={{ fontSize: 10 }}>Résultat</th>
-                  <th style={{ fontSize: 10 }}>R-Multiple</th>
-                </tr>
-              </thead>
-              <tbody>
-                {simulatedTrades!.map(t => (
-                  <tr key={t.index}>
-                    <td className="muted" style={{ fontSize: 11 }}>{t.index}</td>
-                    <td className="muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{new Date(t.timestamp).toLocaleString('fr-FR')}</td>
-                    <td>
-                      <span style={{
-                        fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4,
-                        background: t.direction === 'LONG' ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
-                        color: t.direction === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)',
-                      }}>{t.direction}</span>
-                    </td>
-                    <td>
-                      <span style={{
-                        fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4,
-                        background: t.outcome === 'win' ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
-                        color: t.outcome === 'win' ? 'var(--accent-green)' : 'var(--accent-red)',
-                      }}>
-                        {t.outcome === 'win' ? 'Win' : 'Loss'}
-                      </span>
-                    </td>
-                    <td style={{
-                      fontSize: 11, fontFamily: 'monospace', fontWeight: 600,
-                      color: t.r_multiple > 0 ? 'var(--accent-green)' : 'var(--accent-red)',
+        {/* RIGHT — Signaux */}
+        <div>
+          {/* Signals header + filter tabs */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, fontWeight: 700 }}>Signaux</span>
+            {!loadingSigs && (
+              <>
+                <span className="muted" style={{ fontSize: 11 }}>
+                  {filteredSigs.length}/{signals.length}
+                </span>
+                <div style={{ display: 'flex', gap: 3, marginLeft: 6 }}>
+                  {(['all', 'accepted', 'rejected'] as const).map(f => (
+                    <button key={f} onClick={() => { setSigFilter(f); setExpandedSigId(null); }} style={{
+                      padding: '2px 9px', borderRadius: 4, fontSize: 10, fontWeight: 600, cursor: 'pointer',
+                      background: sigFilter === f ? 'var(--accent)' : 'var(--surface2)',
+                      color: sigFilter === f ? '#fff' : 'var(--text-muted)',
+                      border: `1px solid ${sigFilter === f ? 'var(--accent)' : 'var(--border)'}`,
                     }}>
-                      {t.r_multiple > 0 ? '+' : ''}{t.r_multiple.toFixed(2)}R
-                    </td>
+                      {f === 'all' ? 'Tous' : f === 'accepted' ? 'Acceptés' : 'Rejetés'}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+
+          {loadingSigs ? (
+            <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>
+              Chargement des signaux…
+            </div>
+          ) : sigError ? (
+            <div style={{ padding: 12, borderRadius: 8, background: 'rgba(239,68,68,0.08)', color: 'var(--accent-red)', fontSize: 12 }}>
+              Erreur chargement signaux
+            </div>
+          ) : filteredSigs.length === 0 && !hasSimulatedTrades ? (
+            <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12, background: 'var(--surface2)', borderRadius: 8 }}>
+              Aucun signal pour {fmtSym(r.symbol)} {r.timeframe}
+            </div>
+          ) : filteredSigs.length > 0 ? (
+            <div style={{ maxHeight: 340, overflowY: 'auto', borderRadius: 8, border: '1px solid var(--border)' }}>
+              <table style={{ marginBottom: 0 }}>
+                <thead>
+                  <tr>
+                    <th style={{ fontSize: 10 }}>Date</th>
+                    <th style={{ fontSize: 10 }}>Dir</th>
+                    <th style={{ fontSize: 10 }}>Zone [range]</th>
+                    <th style={{ fontSize: 10 }}>Sweep</th>
+                    <th style={{ fontSize: 10 }}>BOS</th>
+                    <th style={{ fontSize: 10 }}>Wyckoff</th>
+                    <th style={{ fontSize: 10 }}>Statut</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : signals.length === 0 ? (
-          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12, background: 'var(--surface2)', borderRadius: 8 }}>
-            Aucun signal détecté pour {fmtSym(r.symbol)} {r.timeframe}
-          </div>
-        ) : (
-          <div style={{ maxHeight: 240, overflowY: 'auto', borderRadius: 8, border: '1px solid var(--border)' }}>
-            <table style={{ marginBottom: 0 }}>
-              <thead>
-                <tr>
-                  <th style={{ fontSize: 10 }}>Date</th>
-                  <th style={{ fontSize: 10 }}>Type</th>
-                  <th style={{ fontSize: 10 }}>Direction</th>
-                  <th style={{ fontSize: 10 }}>Fib Zone</th>
-                  <th style={{ fontSize: 10 }}>Wyckoff</th>
-                  <th style={{ fontSize: 10 }}>Statut</th>
-                </tr>
-              </thead>
-              <tbody>
-                {signals.map(sig => (
-                  <tr key={sig.id}>
-                    <td className="muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{new Date(sig.timestamp).toLocaleString('fr-FR')}</td>
-                    <td style={{ fontSize: 11 }}>{sig.setup_type}</td>
-                    <td>
-                      {sig.direction ? (
-                        <span style={{
-                          fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4,
-                          background: sig.direction === 'LONG' ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
-                          color: sig.direction === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)',
-                        }}>{sig.direction}</span>
-                      ) : <span className="muted" style={{ fontSize: 10 }}>—</span>}
-                    </td>
-                    <td style={{ fontSize: 11, fontFamily: 'monospace' }}>{sig.fib_zone}</td>
-                    <td style={{ fontSize: 11 }}>{sig.wyckoff_event || '—'}</td>
-                    <td>
-                      <span style={{
-                        fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4,
-                        background: sig.accepted ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
-                        color: sig.accepted ? 'var(--accent-green)' : 'var(--accent-red)',
-                      }}>
-                        {sig.accepted ? 'Accepté' : 'Rejeté'}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                </thead>
+                <tbody>
+                  {filteredSigs.map(sig => {
+                    const isExp = expandedSigId === sig.id;
+                    const dirColor = sig.direction === 'LONG' ? 'var(--accent-green)' : sig.direction === 'SHORT' ? 'var(--accent-red)' : 'var(--text-muted)';
+                    return (
+                      <React.Fragment key={sig.id}>
+                        <tr
+                          onClick={() => setExpandedSigId(isExp ? null : sig.id)}
+                          style={{ cursor: 'pointer', background: isExp ? 'rgba(59,130,246,0.09)' : 'transparent' }}
+                          onMouseEnter={e => { if (!isExp) e.currentTarget.style.background = 'rgba(255,255,255,0.03)'; }}
+                          onMouseLeave={e => { if (!isExp) e.currentTarget.style.background = 'transparent'; }}
+                        >
+                          <td style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                            {sig.timestamp.slice(0, 10)}
+                          </td>
+                          <td>
+                            {sig.direction
+                              ? <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4, background: dirColor + '22', color: dirColor }}>{sig.direction}</span>
+                              : <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>—</span>}
+                          </td>
+                          <td style={{ fontSize: 11, color: 'var(--text-soft)', whiteSpace: 'nowrap' }}>
+                            {fmtZone(sig.liquidity_zone, sig.zone_low, sig.zone_high)}
+                          </td>
+                          <td style={{ fontSize: 11, fontFamily: 'monospace', fontWeight: 600 }}>
+                            {sig.sweep_level > 0 ? fmtZonePrice(sig.sweep_level) : '—'}
+                          </td>
+                          <td style={{ fontSize: 11, fontFamily: 'monospace', fontWeight: 600 }}>
+                            {sig.bos_level > 0 ? fmtZonePrice(sig.bos_level) : '—'}
+                          </td>
+                          <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                            {sig.wyckoff_event && sig.wyckoff_event !== 'Aucun' && sig.wyckoff_event !== 'N/A' ? sig.wyckoff_event : '—'}
+                          </td>
+                          <td>
+                            <span style={{
+                              fontSize: 10, padding: '1px 6px', borderRadius: 4, fontWeight: 600,
+                              background: sig.accepted ? 'rgba(34,197,94,0.15)' : 'rgba(120,120,120,0.12)',
+                              color: sig.accepted ? 'var(--accent-green)' : 'var(--text-muted)',
+                            }}>
+                              {sig.accepted ? '✓ Accepté' : '✗ Rejeté'}
+                            </span>
+                          </td>
+                        </tr>
+
+                        {/* ── Signal detail row ── */}
+                        {isExp && (
+                          <tr style={{ background: 'rgba(59,130,246,0.04)' }}>
+                            <td colSpan={7} style={{ padding: '10px 16px', borderBottom: '1px solid rgba(59,130,246,0.12)' }}>
+                              <div style={{
+                                display: 'grid',
+                                gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
+                                gap: '8px 16px',
+                              }}>
+                                {([
+                                  ['Zone liquidité', fmtZone(sig.liquidity_zone, sig.zone_low, sig.zone_high)],
+                                  ['Sweep',          sig.sweep_level > 0 ? fmtZonePrice(sig.sweep_level) : null],
+                                  ['BOS',            sig.bos_level > 0 ? fmtZonePrice(sig.bos_level) : null],
+                                  ['Displacement',   sig.displacement_force != null && sig.displacement_force > 0 ? sig.displacement_force.toFixed(3) : null],
+                                  ['Wyckoff',        sig.wyckoff_event && sig.wyckoff_event !== 'Aucun' && sig.wyckoff_event !== 'N/A' ? sig.wyckoff_event : null],
+                                  ['Fib zone',       sig.fib_zone && sig.fib_zone !== 'N/A' ? sig.fib_zone : null],
+                                  ['4H structure',   sig.tf_4h_structure],
+                                  ['1H validation',  sig.tf_1h_validation],
+                                  ['Session',        sig.session_name],
+                                  ['Raison rejet',   sig.reject_reason],
+                                ] as [string, string | null | undefined][])
+                                  .filter(([, v]) => v)
+                                  .map(([label, val]) => (
+                                    <div key={label}>
+                                      <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
+                                      <div style={{ fontSize: 12, fontWeight: 500, marginTop: 2 }}>{String(val)}</div>
+                                    </div>
+                                  ))}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+
+          {/* Simulated trades fallback */}
+          {!loadingSigs && signals.length === 0 && hasSimulatedTrades && (
+            <div style={{ marginTop: filteredSigs.length > 0 ? 14 : 0 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8, color: 'var(--text-muted)' }}>
+                Trades simulés
+                <span style={{ fontWeight: 400, marginLeft: 6, fontSize: 11 }}>{simulatedTrades!.length} trades</span>
+              </div>
+              <div style={{ maxHeight: 260, overflowY: 'auto', borderRadius: 8, border: '1px solid var(--border)' }}>
+                <table style={{ marginBottom: 0 }}>
+                  <thead>
+                    <tr>
+                      <th style={{ fontSize: 10 }}>#</th>
+                      <th style={{ fontSize: 10 }}>Date</th>
+                      <th style={{ fontSize: 10 }}>Direction</th>
+                      <th style={{ fontSize: 10 }}>Résultat</th>
+                      <th style={{ fontSize: 10 }}>R-Multiple</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {simulatedTrades!.map(t => (
+                      <tr key={t.index}>
+                        <td className="muted" style={{ fontSize: 11 }}>{t.index}</td>
+                        <td className="muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{new Date(t.timestamp).toLocaleString('fr-FR')}</td>
+                        <td>
+                          <span style={{
+                            fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4,
+                            background: t.direction === 'LONG' ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
+                            color: t.direction === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)',
+                          }}>{t.direction}</span>
+                        </td>
+                        <td>
+                          <span style={{
+                            fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4,
+                            background: t.outcome === 'win' ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
+                            color: t.outcome === 'win' ? 'var(--accent-green)' : 'var(--accent-red)',
+                          }}>
+                            {t.outcome === 'win' ? 'Win' : 'Loss'}
+                          </span>
+                        </td>
+                        <td style={{
+                          fontSize: 11, fontFamily: 'monospace', fontWeight: 600,
+                          color: t.r_multiple > 0 ? 'var(--accent-green)' : 'var(--accent-red)',
+                        }}>
+                          {t.r_multiple > 0 ? '+' : ''}{t.r_multiple.toFixed(2)}R
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
