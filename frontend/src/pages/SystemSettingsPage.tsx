@@ -323,7 +323,6 @@ export function SystemSettingsPage() {
   const sys     = grp('system');
   const trading = grp('trading');
   const risk    = grp('risk');
-  const bt      = grp('backtest');
   const sess    = grp('session');
   const dat     = grp('data');
   const activeSessions = (sess.active_sessions as string[]) ?? [];
@@ -401,74 +400,6 @@ export function SystemSettingsPage() {
           </Field>
           <Field label="Limite de perte hebdomadaire" desc="Stop trading pour la semaine si ce seuil est atteint">
             <Pct val={Number(risk.weekly_loss_limit ?? 0.08)} onChange={v => setGroup('risk', 'weekly_loss_limit', v)} />
-          </Field>
-        </div>
-      </SectionCard>
-
-      <SectionCard title="Moteur de simulation backtest" icon="🔬">
-        <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 6, background: 'rgba(88,166,255,0.08)', fontSize: 12 }}>
-          Ces paramètres contrôlent comment les résultats de backtest sont calculés. Ils s'appliquent à tous les profils stratégie.
-        </div>
-        <div className="grid-2">
-          <Field label="Win rate de base" desc="WR avant les bonus/pénalités des paramètres du profil">
-            <Pct val={Number(bt.base_win_rate ?? 0.42)} onChange={v => setGroup('backtest', 'base_win_rate', v)} />
-          </Field>
-          <Field label="Bonus Spring" desc="+WR si Spring est activé dans le profil">
-            <Pct val={Number(bt.spring_bonus ?? 0.06)} onChange={v => setGroup('backtest', 'spring_bonus', v)} />
-          </Field>
-          <Field label="Bonus UTAD" desc="+WR si UTAD est activé dans le profil">
-            <Pct val={Number(bt.utad_bonus ?? 0.05)} onChange={v => setGroup('backtest', 'utad_bonus', v)} />
-          </Field>
-          <Field label="Sensibilité BOS maximale" desc="Valeur max du slider BOS sensitivity dans les profils">
-            <Num val={Number(bt.bos_max_sensitivity ?? 5)} min={1} max={20} step={0.5} onChange={v => setGroup('backtest', 'bos_max_sensitivity', v)} />
-          </Field>
-          <Field label="Pénalité BOS (à sensibilité max)" desc="-WR appliquée quand BOS sensitivity est au maximum">
-            <Pct val={Number(bt.bos_penalty ?? 0.18)} onChange={v => setGroup('backtest', 'bos_penalty', v)} />
-          </Field>
-          <Field label="WR minimum" desc="Win rate plancher possible (protection simulation)">
-            <Pct val={Number(bt.wr_min ?? 0.28)} onChange={v => setGroup('backtest', 'wr_min', v)} />
-          </Field>
-          <Field label="WR maximum" desc="Win rate plafond possible (protection simulation)">
-            <Pct val={Number(bt.wr_max ?? 0.80)} onChange={v => setGroup('backtest', 'wr_max', v)} />
-          </Field>
-          <Field label="R moyen par trade gagnant" desc="Gain moyen en R d'un trade positif">
-            <Num val={Number(bt.avg_win_r ?? 1.4)} min={0.1} max={10} step={0.1} onChange={v => setGroup('backtest', 'avg_win_r', v)} />
-          </Field>
-          <Field label="R moyen par trade perdant" desc="Perte moyenne en R d'un trade négatif">
-            <Num val={Number(bt.avg_loss_r ?? 1.0)} min={0.1} max={10} step={0.1} onChange={v => setGroup('backtest', 'avg_loss_r', v)} />
-          </Field>
-          <Field label="Facteur d'échelle de volatilité" desc="Multiplicateur appliqué à la volatilité des bougies">
-            <Num val={Number(bt.vol_scale ?? 80)} min={1} max={500} step={1} onChange={v => setGroup('backtest', 'vol_scale', v)} />
-          </Field>
-          <Field label="Facteur vol minimum" desc="Facteur de volatilité plancher (protection)">
-            <Num val={Number(bt.vol_min ?? 0.6)} min={0.1} max={2} step={0.1} onChange={v => setGroup('backtest', 'vol_min', v)} />
-          </Field>
-          <Field label="Facteur vol maximum" desc="Facteur de volatilité plafond (protection)">
-            <Num val={Number(bt.vol_max ?? 2.2)} min={1} max={10} step={0.1} onChange={v => setGroup('backtest', 'vol_max', v)} />
-          </Field>
-          <Field label="Trades/30j en 15min" desc="Nombre de trades simulés par 30 jours en timeframe 15m">
-            <Num val={Number(bt.tf_trades_15m ?? 110)} min={1} max={1000} step={1} onChange={v => setGroup('backtest', 'tf_trades_15m', v)} />
-          </Field>
-          <Field label="Trades/30j en 1h" desc="Nombre de trades simulés par 30 jours en timeframe 1h">
-            <Num val={Number(bt.tf_trades_1h ?? 42)} min={1} max={500} step={1} onChange={v => setGroup('backtest', 'tf_trades_1h', v)} />
-          </Field>
-          <Field label="Trades/30j en 4h" desc="Nombre de trades simulés par 30 jours en timeframe 4h">
-            <Num val={Number(bt.tf_trades_4h ?? 18)} min={1} max={200} step={1} onChange={v => setGroup('backtest', 'tf_trades_4h', v)} />
-          </Field>
-          <Field label="Trades minimum simulés" desc="Protection contre les backtests trop courts">
-            <Num val={Number(bt.min_trades ?? 8)} min={1} max={100} step={1} onChange={v => setGroup('backtest', 'min_trades', v)} />
-          </Field>
-          <Field label="Trades maximum simulés" desc="Plafond pour éviter des simulations trop lentes">
-            <Num val={Number(bt.max_trades ?? 300)} min={10} max={10000} step={10} onChange={v => setGroup('backtest', 'max_trades', v)} />
-          </Field>
-          <Field label="Horizon par défaut (jours)" desc="Durée de backtest utilisée quand non spécifiée">
-            <Num val={Number(bt.default_horizon_days ?? 45)} min={1} max={365} step={1} onChange={v => setGroup('backtest', 'default_horizon_days', v)} />
-          </Field>
-          <Field label="Profit factor min pour approbation live" desc="PF minimum pour qu'un profil soit approuvé en live">
-            <Num val={Number(bt.approved_pf_threshold ?? 1.2)} min={0.5} max={5} step={0.1} onChange={v => setGroup('backtest', 'approved_pf_threshold', v)} />
-          </Field>
-          <Field label="Drawdown max pour approbation live" desc="DD maximum pour qu'un profil soit approuvé en live">
-            <Pct val={Number(bt.approved_dd_threshold ?? 0.12)} onChange={v => setGroup('backtest', 'approved_dd_threshold', v)} />
           </Field>
         </div>
       </SectionCard>

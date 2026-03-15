@@ -1338,46 +1338,42 @@ def _autonomous_worker() -> None:
         signals_detected = 0
         run_now = datetime.now(timezone.utc)
 
-        for symbol in symbols:
-            try:
-                pattern_switch = hash(symbol) % 2
-                spring    = pattern_switch == 0
-                direction = signal_engine.detect(
-                    SetupInput(
-                        symbol=symbol,
-                        liquidity_zone=True,
-                        sweep=True,
-                        spring=spring,
-                        utad=not spring,
-                        displacement=True,
-                        bos=True,
-                        expansion_to_next_liquidity=True,
-                        fib_retracement=0.618,
-                    )
-                )
-                sess_name = resolve_session(run_now)
-                status    = "SIGNAL_DETECTED" if direction else "NO_SETUP"
-                details   = f"{direction} setup — fib=0.618" if direction else "Aucun setup SMC/Wyckoff valide"
-                if direction:
+        # ── Full 7-step SMC/Wyckoff pipeline with 4H→1H→15m hierarchy ────────
+        try:
+            _run_live_scan(symbols, tf, profile_params)
+        except Exception as exc:
+            results = [{"symbol": sym, "status": "ERROR", "signal": "—",
+                        "session": "?", "details": str(exc), "ts": run_now.isoformat()}
+                       for sym in symbols]
+
+        if not results:
+            for symbol in symbols:
+                with _pipeline_lock:
+                    state = dict(_pipeline.get(symbol, {}))
+                direction = state.get("final_direction")
+                session   = state.get("session", "off-session")
+                reason    = state.get("final_reason") or ""
+                is_signal = direction is not None
+                if is_signal:
                     signals_detected += 1
+                status_str = "SIGNAL_DETECTED" if is_signal else "NO_SETUP"
+                detail_str = (f"{direction} — {reason}" if is_signal
+                              else reason or "Aucun setup SMC/Wyckoff valide")
 
                 with Session(engine) as s:
                     job = BotJob(
                         symbol=symbol, timeframe=tf,
-                        session_name=sess_name, mode="paper",
-                        status=status, signal=direction, details=details,
+                        session_name=session, mode="paper",
+                        status=status_str, signal=direction, details=detail_str[:200],
                     )
                     s.add(job)
                     s.commit()
 
                 results.append({
-                    "symbol": symbol, "status": status,
-                    "signal": direction or "—", "session": sess_name,
-                    "details": details, "ts": run_now.isoformat(),
+                    "symbol": symbol, "status": status_str,
+                    "signal": direction or "—", "session": session,
+                    "details": detail_str[:80], "ts": run_now.isoformat(),
                 })
-            except Exception as exc:
-                results.append({"symbol": symbol, "status": "ERROR", "signal": "—",
-                                 "session": "?", "details": str(exc), "ts": run_now.isoformat()})
 
         # ── Update state ──────────────────────────────────────────────────────
         next_run = (run_now + timedelta(minutes=interval)).isoformat()
@@ -1395,7 +1391,7 @@ def _autonomous_worker() -> None:
         _auto_state["next_run_at"]  = None
 
 
-def _auto_start_for_paper(interval_minutes: int = 5, timeframe: str = "5m") -> bool:
+def _auto_start_for_paper(interval_minutes: int = 5, timeframe: str = "15m") -> bool:
     """
     Auto-start the autonomous scanner when switching to paper mode.
     Reads all distinct symbols that have candle data in the DB.
