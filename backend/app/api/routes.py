@@ -37,6 +37,7 @@ from backend.app.services.paper_trade import PaperTradeManager
 from backend.app.services.risk_manager import RiskManager, RiskState
 from backend.app.services.session_filter import SessionFilter
 from backend.app.services.signal_engine import SetupInput, SignalEngine
+from backend.app.services import ta_engine as ta
 
 router = APIRouter()
 
@@ -93,12 +94,13 @@ def dashboard() -> dict:
 
 @router.get("/signals")
 def get_signals(
-    limit: int = Query(100, le=500),
+    limit: int = Query(100, le=1000),
     offset: int = 0,
     accepted: Optional[bool] = None,
     symbol: Optional[str] = None,
     timeframe: Optional[str] = None,
     pipeline_run_id: Optional[str] = None,
+    run_prefix: Optional[str] = None,  # walk-forward: match pipeline_run_id LIKE '{prefix}%'
 ) -> dict:
     with Session(engine) as s:
         q = select(Signal).order_by(Signal.timestamp.desc())
@@ -115,6 +117,10 @@ def get_signals(
         if pipeline_run_id is not None:
             q = q.where(Signal.pipeline_run_id == pipeline_run_id)
             count_q = count_q.where(Signal.pipeline_run_id == pipeline_run_id)
+        elif run_prefix is not None:
+            like_pat = f"{run_prefix}%"
+            q = q.where(Signal.pipeline_run_id.like(like_pat))  # type: ignore[union-attr]
+            count_q = count_q.where(Signal.pipeline_run_id.like(like_pat))  # type: ignore[union-attr]
         total = s.exec(count_q).one()
         rows = s.exec(q.offset(offset).limit(limit)).all()
     return {"total": total, "rows": [r.model_dump() for r in rows]}
@@ -1218,9 +1224,11 @@ def _simulate_outcomes(profile: "StrategyProfile | None", symbol: str, timeframe
 @router.post("/backtest/run")
 def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
     """
-    Lance le vrai pipeline SMC/Wyckoff (7 étapes) pour le symbole demandé,
-    puis calcule les métriques depuis les signaux réellement générés.
-    Timeframe fixé à MTF (4H→1H→15m→5m) comme le pipeline live.
+    Walk-forward backtest SMC/Wyckoff.
+    - Itère chaque timestamp 4H de la plage demandée
+    - Appelle le vrai pipeline à cutoff_ts (bougies réelles historiques, mode silencieux)
+    - Résout l'outcome de chaque signal accepté sur les 96 bougies 5m suivantes
+    - Agrège win rate, PF, expectancy, drawdown, R total
     """
     with Session(engine) as s:
         profile = s.get(StrategyProfile, req.profile_id) if req.profile_id else None
@@ -1236,11 +1244,46 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
         except Exception:
             profile_params = {}
 
-    symbols = [s.strip() for s in req.symbols if s.strip()]
+    symbols = [sym.strip() for sym in req.symbols if sym.strip()]
     if not symbols:
         return {"ok": False, "reason": "Aucun symbole sélectionné"}
 
     symbols_label = ", ".join(symbols)
+    target_rs: list = list(profile_params.get("target_r_multiples", config.strategy.target_r_multiples) or [2.0, 3.0])
+    avg_r_win = float(target_rs[0]) if target_rs else 2.0
+
+    # ── Résolution de la plage de dates ──────────────────────────────────────
+    now_dt   = datetime.now(timezone.utc)
+    dur_map  = {
+        "1d": 1, "1w": 7, "1m": 30, "3m": 90,
+        "6m": 180, "1y": 365, "2y": 730, "4y": 1460,
+    }
+    days_back = dur_map.get(req.duration, None)
+    dt_from   = (now_dt - timedelta(days=days_back)) if days_back else None
+
+    # ── Chargement des timestamps 4H pour le walk-forward ────────────────────
+    primary_symbol = symbols[0]
+    with Session(engine) as s:
+        q4h = (
+            select(MarketCandle.timestamp)
+            .where(MarketCandle.symbol == primary_symbol, MarketCandle.timeframe == "4h")
+        )
+        if dt_from:
+            q4h = q4h.where(MarketCandle.timestamp >= dt_from)
+        q4h = q4h.order_by(MarketCandle.timestamp)
+        ts_list: list[datetime] = [row for row in s.exec(q4h).all()]
+
+    if not ts_list:
+        return {"ok": False, "reason": f"Aucune bougie 4H trouvée pour {primary_symbol} sur la période sélectionnée. Importez d'abord les données historiques."}
+
+    # Sous-échantillonnage : max 300 steps pour ne pas bloquer (1 step = 4H)
+    MAX_STEPS = 300
+    step = max(1, len(ts_list) // MAX_STEPS)
+    sampled_ts = ts_list[::step]
+    step_count = len(sampled_ts)
+
+    date_from_str = sampled_ts[0].strftime("%Y-%m-%d") if sampled_ts else ""
+    date_to_str   = sampled_ts[-1].strftime("%Y-%m-%d") if sampled_ts else ""
 
     # ── Vérification disponibilité des bougies ────────────────────────────────
     data_warning: str | None = None
@@ -1262,39 +1305,98 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
     global _active_backtests
     with _active_backtests_lock:
         _active_backtests += 1
+
+    wf_run_id = str(uuid.uuid4())
+    all_sig_ids: list[int] = []
+
     try:
-        run_id = str(uuid.uuid4())
-        _run_live_scan(symbols, "MTF", profile_params, run_id, profile_name, is_backtest=True)
+        for idx, cutoff_ts in enumerate(sampled_ts):
+            step_run_id = f"{wf_run_id}_s{idx}"
+            # Run pipeline silently at this cutoff — stores signals in DB with step_run_id
+            _run_live_scan(
+                symbols, "MTF", profile_params,
+                pipeline_run_id=step_run_id,
+                profile_name=profile_name,
+                is_backtest=True,
+                cutoff_ts=cutoff_ts,
+                silent=True,
+            )
+            # Retrieve accepted signals from this step
+            with Session(engine) as s:
+                step_sigs = s.exec(
+                    select(Signal)
+                    .where(
+                        Signal.pipeline_run_id == step_run_id,
+                        Signal.accepted == True,  # noqa: E712
+                    )
+                ).all()
+
+                for sig in step_sigs:
+                    all_sig_ids.append(sig.id)
+                    if sig.entry_price and sig.sl_price and sig.tp_price:
+                        # Load next 96 × 5m candles after cutoff (= up to 8 hours)
+                        future_5m = s.exec(
+                            select(MarketCandle)
+                            .where(
+                                MarketCandle.symbol == sig.symbol,
+                                MarketCandle.timeframe == "5m",
+                                MarketCandle.timestamp > cutoff_ts,
+                            )
+                            .order_by(MarketCandle.timestamp)
+                            .limit(96)
+                        ).all()
+                        outcome = ta.resolve_outcome(
+                            future_5m,
+                            sig.direction or "LONG",
+                            sig.tp_price,
+                            sig.sl_price,
+                        )
+                        r_mult = avg_r_win if outcome == "win" else (-1.0 if outcome == "loss" else 0.0)
+                        sig.bt_outcome     = outcome
+                        sig.bt_r_multiple  = r_mult
+                        s.add(sig)
+
+                # Also collect rejected signal IDs for the report
+                rej_sigs = s.exec(
+                    select(Signal.id)
+                    .where(
+                        Signal.pipeline_run_id == step_run_id,
+                        Signal.accepted == False,  # noqa: E712
+                    )
+                ).all()
+                all_sig_ids.extend(list(rej_sigs))
+                s.commit()
+
     finally:
         with _active_backtests_lock:
             _active_backtests = max(0, _active_backtests - 1)
 
-    # ── Signaux du run courant uniquement → métriques + détail ───────────────
+    # ── Agrégation des métriques sur tous les signaux walk-forward ────────────
     with Session(engine) as s:
-        current_sigs = s.exec(
+        all_sigs = s.exec(
             select(Signal)
-            .where(Signal.pipeline_run_id == run_id)
+            .where(Signal.id.in_(all_sig_ids))
             .order_by(Signal.timestamp)
-        ).all()
+        ).all() if all_sig_ids else []
 
-    target_rs: list = list(profile_params.get("target_r_multiples", config.strategy.target_r_multiples) or [2.0, 3.0])
-    avg_r_win  = float(sum(target_rs) / len(target_rs)) if target_rs else 2.5
+    accepted_sigs = [sg for sg in all_sigs if sg.accepted]
+    wins     = [sg for sg in accepted_sigs if sg.bt_outcome == "win"]
+    losses   = [sg for sg in accepted_sigs if sg.bt_outcome == "loss"]
+    timeouts = [sg for sg in accepted_sigs if sg.bt_outcome == "timeout"]
+    n_total  = len(accepted_sigs)  # only accepted signals are judged for WR
 
-    # Métriques calculées sur les seuls signaux de CE run
-    n_total    = len(current_sigs)
-    n_accepted = sum(1 for sg in current_sigs if sg.accepted)
-    n_rejected = n_total - n_accepted
-
-    win_rate      = n_accepted / n_total if n_total > 0 else 0.0
-    profit_factor = (n_accepted * avg_r_win) / max(n_rejected * 1.0, 0.001) if n_rejected > 0 else float(n_accepted * avg_r_win)
-    expectancy    = win_rate * avg_r_win - (1.0 - win_rate) * 1.0
-    r_multiple    = expectancy * n_total
+    win_rate      = len(wins) / n_total if n_total > 0 else 0.0
+    gross_profit  = sum(sg.bt_r_multiple or 0.0 for sg in wins)
+    gross_loss    = abs(sum(sg.bt_r_multiple or 0.0 for sg in losses))
+    profit_factor = gross_profit / max(gross_loss, 0.001) if gross_loss > 0 else float(gross_profit)
+    expectancy    = sum(sg.bt_r_multiple or 0.0 for sg in accepted_sigs) / max(n_total, 1)
+    r_multiple    = sum(sg.bt_r_multiple or 0.0 for sg in accepted_sigs)
 
     equity = 0.0
     peak   = 0.0
     max_dd = 0.0
-    for sg in current_sigs:
-        equity += avg_r_win if sg.accepted else -1.0
+    for sg in accepted_sigs:
+        equity += (sg.bt_r_multiple or 0.0)
         if equity > peak:
             peak = equity
         if peak > 0:
@@ -1303,9 +1405,9 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
                 max_dd = dd
     drawdown = max_dd
 
-    # Breakdown des rejets par étape
+    # Breakdown des rejets
     reject_counts: dict[str, int] = {}
-    for sg in current_sigs:
+    for sg in all_sigs:
         if not sg.accepted and sg.reject_reason:
             key = sg.reject_reason.split("(")[0].strip()
             reject_counts[key] = reject_counts.get(key, 0) + 1
@@ -1321,26 +1423,32 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
             expectancy=expectancy,
             drawdown=drawdown,
             r_multiple=r_multiple,
-            pipeline_run_id=run_id,
+            pipeline_run_id=wf_run_id,
+            signal_count=n_total,
+            step_count=step_count,
+            date_from=date_from_str,
+            date_to=date_to_str,
         )
         s.add(result)
         s.add(Log(level="INFO", message=(
-            f"Backtest [{symbols_label}] — {profile_name}: "
-            f"{n_accepted}/{n_total} signaux (run courant) acceptés "
-            f"WR={win_rate:.1%} PF={profit_factor:.2f}"
+            f"Walk-forward [{symbols_label}] — {profile_name}: "
+            f"{len(wins)}/{n_total} wins | WR={win_rate:.1%} | PF={profit_factor:.2f} | "
+            f"R={r_multiple:.2f} | Steps={step_count}"
         )))
         s.commit()
         s.refresh(result)
 
     reject_lines = "\n".join(f"  - {cnt}x {r}" for r, cnt in top_rejects)
     report = (
-        f"# Backtest Pipeline Report\n"
+        f"# Walk-Forward Backtest Report\n"
         f"- Symboles: {symbols_label}\n"
+        f"- Période: {date_from_str} → {date_to_str} ({req.duration})\n"
+        f"- Steps 4H évalués: {step_count}\n"
         f"- Timeframe: MTF (4H→1H→15m→5m)\n"
         f"- Strategy: {profile_name}\n"
-        f"- Run ID: {run_id[:8]}…\n"
-        f"- Signaux générés ce run: {n_total}\n"
-        f"- Signaux acceptés: {n_accepted} / {n_total}\n"
+        f"- Run ID: {wf_run_id[:8]}…\n"
+        f"- Signaux acceptés: {n_total}\n"
+        f"- Wins: {len(wins)} | Losses: {len(losses)} | Timeouts: {len(timeouts)}\n"
         f"- Win rate: {win_rate:.2%}\n"
         f"- Profit factor: {profit_factor:.2f}\n"
         f"- Drawdown max: {drawdown:.2%}\n"
@@ -1348,29 +1456,38 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
         f"- R total: {r_multiple:.2f}R\n"
         + (f"\n⚠️ {data_warning}\n" if data_warning else "")
         + f"\n## Top rejections:\n{reject_lines or '  Aucun'}\n"
-        + f"\n## Signaux ({len(current_sigs)}):\n"
-        + "\n".join(f"  - {sg.symbol}: {'✅ Accepté' if sg.accepted else '❌ ' + (sg.reject_reason or 'rejeté')}" for sg in current_sigs)
+        + f"\n## Signaux acceptés ({n_total}):\n"
+        + "\n".join(
+            f"  - {sg.symbol}: {sg.bt_outcome or '?'} {sg.bt_r_multiple:+.2f}R | {sg.direction} | {sg.wyckoff_event}"
+            for sg in accepted_sigs
+        )
     )
 
     trades = [
         {
-            "index": i + 1,
-            "symbol": sg.symbol,
-            "direction": (sg.direction or "LONG"),
-            "outcome": "win" if sg.accepted else "loss",
-            "r_multiple": round(avg_r_win if sg.accepted else -1.0, 4),
-            "timestamp": sg.timestamp.isoformat() if sg.timestamp else "",
-            "reason": sg.reject_reason or "",
+            "index":      i + 1,
+            "symbol":     sg.symbol,
+            "direction":  sg.direction or "LONG",
+            "outcome":    sg.bt_outcome or "timeout",
+            "r_multiple": round(sg.bt_r_multiple or 0.0, 4),
+            "timestamp":  sg.timestamp.isoformat() if sg.timestamp else "",
+            "reason":     sg.reject_reason or "",
+            "entry":      sg.entry_price,
+            "sl":         sg.sl_price,
+            "tp":         sg.tp_price,
         }
-        for i, sg in enumerate(current_sigs)
+        for i, sg in enumerate(accepted_sigs)
     ]
 
     return {
-        "ok": True,
-        "result": result.model_dump(),
-        "report": report,
-        "trades": trades,
+        "ok":           True,
+        "result":       result.model_dump(),
+        "report":       report,
+        "trades":       trades,
         "data_warning": data_warning,
+        "step_count":   step_count,
+        "date_from":    date_from_str,
+        "date_to":      date_to_str,
     }
 
 
@@ -1902,7 +2019,33 @@ def _get_last_price(symbol: str) -> float:
     return round(rng_fallback.uniform(80, 120), 4)
 
 
-def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pipeline_run_id: str | None = None, profile_name: str = "SMC/Wyckoff", is_backtest: bool = False) -> None:
+def _load_candles(symbol: str, tf: str, n: int, cutoff_ts: Optional[datetime] = None) -> list:
+    """
+    Load the last N candles for symbol/tf from DB (returned in chronological order).
+    If cutoff_ts is given, only candles with timestamp <= cutoff_ts are returned.
+    """
+    with Session(engine) as s:
+        q = (
+            select(MarketCandle)
+            .where(MarketCandle.symbol == symbol, MarketCandle.timeframe == tf)
+        )
+        if cutoff_ts is not None:
+            q = q.where(MarketCandle.timestamp <= cutoff_ts)
+        q = q.order_by(MarketCandle.timestamp.desc()).limit(n)
+        rows = s.exec(q).all()
+    return list(reversed(rows))  # chronological (oldest → newest)
+
+
+def _run_live_scan(
+    symbols: list[str],
+    timeframe: str,
+    profile_params: dict,
+    pipeline_run_id: str | None = None,
+    profile_name: str = "SMC/Wyckoff",
+    is_backtest: bool = False,
+    cutoff_ts: Optional[datetime] = None,
+    silent: bool = False,
+) -> None:
     """
     Pipeline live SMC/Wyckoff conforme au cahier des charges.
     - Séquence en 7 étapes strictes et obligatoires
@@ -1973,8 +2116,19 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
                 _pipeline[sym]["final_reason"] = reason
                 _pipeline[sym]["completed_at"] = datetime.now(timezone.utc).isoformat()
 
-        # Prix de référence réel pour ce symbole (DB → yfinance → fallback)
-        base_price = _get_last_price(symbol)
+        # ── Chargement des bougies réelles depuis la DB ───────────────────────
+        candles_4h  = _load_candles(symbol, "4h",  60, cutoff_ts)
+        candles_1h  = _load_candles(symbol, "1h",  40, cutoff_ts)
+        candles_15m = _load_candles(symbol, "15m", 80, cutoff_ts)
+        candles_5m  = _load_candles(symbol, "5m",  50, cutoff_ts) if use_5m_refine else []
+
+        # Prix de référence réel pour ce symbole (dernière bougie 15m ou 5m si disponible)
+        if candles_15m:
+            base_price = round(candles_15m[-1].close, 6)
+        elif candles_4h:
+            base_price = round(candles_4h[-1].close, 6)
+        else:
+            base_price = _get_last_price(symbol)
         sweep_price: float = 0.0
 
         try:
@@ -1995,15 +2149,15 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
                 continue
 
             # ── Pre-flight: Multi-timeframe (4H structure / 1H validation) ── IA opt ①
-            time.sleep(rng.uniform(0.1, 0.2))
-            tf4h_structures = ["Bullish", "Bearish", "Neutre / Range"]
-            # Distribuer les probabilités : 40% Bullish, 40% Bearish, 20% Neutre
-            tf4h = rng.choices(tf4h_structures, weights=[40, 40, 20])[0]
-            tf1h_valid = rng.random() > 0.25
+            if not silent:
+                time.sleep(rng.uniform(0.1, 0.2))
+            tf4h       = ta.detect_structure(candles_4h)
+            tf1h_valid = ta.validate_htf_1h(candles_1h, tf4h)
             tf1h = "Aligné avec 4H" if tf1h_valid else "Divergent — 4H et 1H en conflit"
-            with _pipeline_lock:
-                _pipeline[symbol]["tf_4h_structure"] = f"4H: {tf4h}"
-                _pipeline[symbol]["tf_1h_validation"] = f"1H: {tf1h}"
+            if not silent:
+                with _pipeline_lock:
+                    _pipeline[symbol]["tf_4h_structure"] = f"4H: {tf4h}"
+                    _pipeline[symbol]["tf_1h_validation"] = f"1H: {tf1h}"
 
             # Filtre HTF obligatoire : bloquer Neutre/Range (pas de structure claire)
             if htf_required and tf4h == "Neutre / Range":
@@ -2028,148 +2182,151 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
                     s.commit()
                 continue
 
-            # ── Step 0 — Zone de liquidité ───────────────────────────────────
-            _pipeline[symbol]["steps"][0]["status"] = "checking"
-            time.sleep(rng.uniform(0.3, 0.6))
-            liq_ok = rng.random() > 0.12
-            zone_type = rng.choice(["HOD", "LOD", "Equal Highs", "Equal Lows", "Weekly High", "Weekly Low"])
-            _set_step(symbol, 0, "passed" if liq_ok else "failed",
-                      f"Zone {zone_type} identifiée ({tf4h})" if liq_ok else "Aucune zone de liquidité notable")
+            # ── Step 0 — Zone de liquidité (analyse bougies réelles 15m) ────────
+            if not silent:
+                _pipeline[symbol]["steps"][0]["status"] = "checking"
+                time.sleep(rng.uniform(0.05, 0.12))
+            zone_type, zone_price_detected, is_high_zone = ta.detect_liquidity_zone(candles_15m)
+            liq_ok = zone_price_detected > 0 and bool(zone_type)
+            if not silent:
+                _set_step(symbol, 0, "passed" if liq_ok else "failed",
+                          f"Zone {zone_type} identifiée @ {zone_price_detected:.2f} ({tf4h})" if liq_ok
+                          else "Aucune zone de liquidité notable")
             if not liq_ok:
                 reject("Pas de zone de liquidité identifiable")
                 _persist_reject(symbol, timeframe, "Pas de zone de liquidité", current_session, tf4h, tf1h, pipeline_run_id=pipeline_run_id, profile_name=profile_name, liquidity_zone=zone_type)
                 continue
 
-            # ── Step 1 — Sweep (avec détection equal highs/lows) ────────────
-            _pipeline[symbol]["steps"][1]["status"] = "checking"
-            time.sleep(rng.uniform(0.3, 0.5))
-            sweep_ok = rng.random() > 0.20
+            # ── Step 1 — Sweep (détection réelle wick/clôture) ──────────────
+            if not silent:
+                _pipeline[symbol]["steps"][1]["status"] = "checking"
+                time.sleep(rng.uniform(0.05, 0.10))
+            sweep_ok, sweep_price = ta.detect_sweep(candles_15m, zone_price_detected, is_high_zone)
             equal_hl = "Equal" in zone_type
             sweep_type = ("Sweep d'equal highs" if zone_type == "Equal Highs"
                          else "Sweep d'equal lows" if zone_type == "Equal Lows"
                          else "Sweep de zone de liquidité")
-            # Prix du sweep : au-dessus de base_price pour zones hautes, en-dessous pour basses
-            is_high_zone = any(k in zone_type for k in ["High", "HOD", "Equal Highs"])
-            sweep_price = round(base_price * (1.012 if is_high_zone else 0.988), 4)
-            _set_step(symbol, 1, "passed" if sweep_ok else "failed",
-                      f"{sweep_type} confirmé @ {sweep_price}" if sweep_ok else "Pas de sweep détecté")
+            if not silent:
+                _set_step(symbol, 1, "passed" if sweep_ok else "failed",
+                          f"{sweep_type} confirmé @ {sweep_price:.4f}" if sweep_ok else "Pas de sweep détecté")
             if not sweep_ok:
                 reject("Sweep liquidity absent")
                 _persist_reject(symbol, timeframe, "Sweep liquidity absent", current_session, tf4h, tf1h, pipeline_run_id=pipeline_run_id, profile_name=profile_name, liquidity_zone=zone_type, sweep_level=sweep_price)
                 continue
 
-            # ── Step 2 — Spring / UTAD + fake breakout + alignement HTF ── IA opt ①
-            _pipeline[symbol]["steps"][2]["status"] = "checking"
-            time.sleep(rng.uniform(0.4, 0.7))
-            spring = rng.random() > 0.35
-            utad = not spring and rng.random() > 0.40
-            wyckoff_ok = spring or utad
-            direction: str | None = "LONG" if spring else ("SHORT" if utad else None)
-            fake_breakout = wyckoff_ok and rng.random() > 0.30
-            wyckoff_event = "Spring bullish" if spring else ("UTAD bearish" if utad else "Aucun")
-            fb_label = " + fake breakout confirmé" if fake_breakout else ""
-            detail_wyk = (
+            # ── Step 2 — Spring / UTAD (Wyckoff — bougies 15m réelles) ── IA opt ①
+            if not silent:
+                _pipeline[symbol]["steps"][2]["status"] = "checking"
+                time.sleep(rng.uniform(0.05, 0.12))
+            enable_spring = bool(profile_params.get("enable_spring", True))
+            enable_utad   = bool(profile_params.get("enable_utad", True))
+            spring, utad, direction, wyckoff_event = ta.detect_wyckoff(
+                candles_15m, tf4h, enable_spring=enable_spring, enable_utad=enable_utad
+            )
+            wyckoff_ok  = spring or utad
+            fake_breakout = wyckoff_ok  # Spring/UTAD IS a fake breakout by definition
+            fb_label    = " + fake breakout confirmé" if fake_breakout else ""
+            detail_wyk  = (
                 f"Spring bullish{fb_label} — faux cassage sous la zone d'accumulation" if spring
                 else f"UTAD bearish{fb_label} — faux cassage au-dessus de la distribution" if utad
-                else "Ni Spring ni UTAD détecté"
+                else "Ni Spring ni UTAD détecté sur les 12 dernières bougies 15m"
             )
-            _set_step(symbol, 2, "passed" if wyckoff_ok else "failed", detail_wyk)
+            if not silent:
+                _set_step(symbol, 2, "passed" if wyckoff_ok else "failed", detail_wyk)
             if not wyckoff_ok:
                 reject("Aucun événement Wyckoff (Spring bullish ou UTAD bearish)")
                 _persist_reject(symbol, timeframe, "Aucun événement Wyckoff", current_session, tf4h, tf1h, pipeline_run_id=pipeline_run_id, profile_name=profile_name, liquidity_zone=zone_type, sweep_level=sweep_price)
                 continue
 
-            # Filtre HTF alignement directionnel : LONG seulement si 4H Bullish, SHORT seulement si 4H Bearish
+            # Filtre HTF alignement directionnel
             if htf_required and direction:
                 htf_conflict = (direction == "LONG" and tf4h == "Bearish") or \
                                (direction == "SHORT" and tf4h == "Bullish")
                 if htf_conflict:
                     reason_align = f"HTF conflit: {direction} contre structure 4H {tf4h}"
-                    _set_step(symbol, 2, "failed", reason_align)
+                    if not silent:
+                        _set_step(symbol, 2, "failed", reason_align)
                     reject(reason_align)
                     _persist_reject(symbol, timeframe, reason_align, current_session, tf4h, tf1h, wyckoff_event=wyckoff_event, pipeline_run_id=pipeline_run_id, profile_name=profile_name, liquidity_zone=zone_type, sweep_level=sweep_price)
                     continue
 
-            # ── Step 3 — Displacement ATR-adaptatif ── IA opt ②③
-            # ATR adaptatif: range bougie ≥ 1.2×ATR(14) + clôture dans les 30% sup/inf
-            _pipeline[symbol]["steps"][3]["status"] = "checking"
-            time.sleep(rng.uniform(0.25, 0.45))
-            disp_val   = round(rng.uniform(0.10, 0.90), 2)
-            atr_ratio  = round(rng.uniform(0.6, 2.5), 2)     # range / ATR(14)
-            close_pct  = round(rng.uniform(0.0, 1.0), 2)     # % de la bougie (0=bas, 1=haut)
-            atr_ok     = atr_ratio >= 1.2
-            close_ok   = (close_pct >= 0.70 if direction == "LONG" else close_pct <= 0.30)
-            disp_ok    = disp_val >= disp_threshold and atr_ok and close_ok
-            # Volume sur displacement ── IA opt ①
-            disp_vol   = round(rng.uniform(0.6, 3.0), 2)
+            # ── Step 3 — Displacement ATR-adaptatif (bougie 15m réelle) ── IA opt ②③
+            if not silent:
+                _pipeline[symbol]["steps"][3]["status"] = "checking"
+                time.sleep(rng.uniform(0.05, 0.10))
+            atr_min_param = float(profile_params.get("displacement_atr_min", config.strategy.displacement_atr_min))
+            disp_ok, disp_val, atr_ratio, disp_vol = ta.detect_displacement(
+                candles_15m, direction or "LONG",
+                disp_threshold=disp_threshold,
+                atr_min=atr_min_param,
+                vol_min=1.8,
+            )
+            atr_ok      = atr_ratio >= atr_min_param
+            close_ok    = True  # Encoded inside detect_displacement
             disp_vol_ok = disp_vol >= 1.8
-            if disp_ok and not disp_vol_ok:
-                disp_ok = False
-            atr_detail = f"ATR ratio {atr_ratio:.2f}× {'✓' if atr_ok else '✗<1.2'}, clôture {close_pct*100:.0f}% {'✓' if close_ok else '✗'}, vol {disp_vol:.2f}×{'✓' if disp_vol_ok else '✗<1.8'}"
-            _set_step(symbol, 3, "passed" if disp_ok else "failed",
-                      f"Force {disp_val:.2f} ≥ {disp_threshold:.2f} | {atr_detail} — impulsion institutionnelle confirmée" if disp_ok
-                      else f"Force {disp_val:.2f} | {atr_detail} — critères ATR non atteints")
+            atr_detail  = (
+                f"ATR ratio {atr_ratio:.2f}× {'✓' if atr_ok else '✗<1.2'}, "
+                f"vol {disp_vol:.2f}×{'✓' if disp_vol_ok else '✗<1.8'}"
+            )
+            if not silent:
+                _set_step(symbol, 3, "passed" if disp_ok else "failed",
+                          f"Force {disp_val:.2f} ≥ {disp_threshold:.2f} | {atr_detail} — impulsion institutionnelle" if disp_ok
+                          else f"Force {disp_val:.2f} | {atr_detail} — critères ATR non atteints")
             if not disp_ok:
                 reason_disp = f"Displacement insuffisant (force={disp_val:.2f}, ATR={atr_ratio:.2f}×, vol={disp_vol:.2f}×)"
                 reject(reason_disp)
                 _persist_reject(symbol, timeframe, reason_disp, current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, pipeline_run_id=pipeline_run_id, profile_name=profile_name, liquidity_zone=zone_type, sweep_level=sweep_price)
                 continue
 
-            # ── Step 4 — BOS (Break Of Structure) — sensibilité {bos_sens}/10 ── IA opt ②
-            _pipeline[symbol]["steps"][4]["status"] = "checking"
-            time.sleep(rng.uniform(0.30, 0.55))
-            # Plus la sensibilité est haute, plus le BOS est difficile à valider
-            # Sensibilité 7/10 → seuil passage 0.42 (base 0.22 + (7-3)*0.05 = 0.42)
-            bos_threshold = min(0.65, 0.22 + (bos_sens - 3) * 0.055)
-            bos_ok = rng.random() > bos_threshold
-            bos_level = round(base_price * rng.uniform(0.98, 1.04), 4)
-            _set_step(symbol, 4, "passed" if bos_ok else "failed",
-                      f"BOS {direction} confirmé @ {bos_level} (sens.{bos_sens}/10, ATR+0.15) — structure cassée" if bos_ok
-                      else f"BOS invalide (sens.{bos_sens}/10) — clôture insuffisante ou swing ambigu")
+            # ── Step 4 — BOS (Break Of Structure — swing réels 15m) ── IA opt ②
+            if not silent:
+                _pipeline[symbol]["steps"][4]["status"] = "checking"
+                time.sleep(rng.uniform(0.05, 0.10))
+            bos_ok, bos_level = ta.detect_bos(candles_15m, direction or "LONG", bos_sens, bos_close_conf)
+            if not silent:
+                _set_step(symbol, 4, "passed" if bos_ok else "failed",
+                          f"BOS {direction} confirmé @ {bos_level:.4f} (sens.{bos_sens}/10) — structure cassée" if bos_ok
+                          else f"BOS invalide (sens.{bos_sens}/10) — clôture insuffisante ou swing ambigu")
             if not bos_ok:
                 reject("BOS non confirmé — structure intacte")
                 _persist_reject(symbol, timeframe, "BOS non confirmé", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, pipeline_run_id=pipeline_run_id, profile_name=profile_name, liquidity_zone=zone_type, sweep_level=sweep_price)
                 continue
 
             # ── Step 5 (pré) — Volume adaptatif à la session ── IA opt ⑤
-            # Volume : 1.4× sur session active (London/NY), 1.25× hors session
             eff_vol_mult = vol_mult_on if tradeable else vol_mult_off
-            vol_ratio = round(rng.uniform(0.7, 3.2), 2)
-            vol_ok = not vol_adaptive or vol_ratio >= eff_vol_mult
+            vol_ok, vol_ratio = ta.detect_volume(candles_15m, eff_vol_mult if vol_adaptive else 0.0)
             if not vol_ok:
-                _persist_reject(symbol, timeframe, f"Volume insuffisant ({vol_ratio:.2f}×SMA50 < {eff_vol_mult:.2f}×)", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, pipeline_run_id=pipeline_run_id, profile_name=profile_name, liquidity_zone=zone_type, sweep_level=sweep_price)
-                reject(f"Volume insuffisant ({vol_ratio:.2f}×SMA50 < {eff_vol_mult:.2f}× requis session {current_session})")
+                _persist_reject(symbol, timeframe, f"Volume insuffisant ({vol_ratio:.2f}×SMA20 < {eff_vol_mult:.2f}×)", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, pipeline_run_id=pipeline_run_id, profile_name=profile_name, liquidity_zone=zone_type, sweep_level=sweep_price)
+                reject(f"Volume insuffisant ({vol_ratio:.2f}×SMA20 < {eff_vol_mult:.2f}× requis session {current_session})")
                 continue
 
             # ── Step 5 — Expansion vers la prochaine zone de liquidité ───────
-            _pipeline[symbol]["steps"][5]["status"] = "checking"
-            time.sleep(rng.uniform(0.25, 0.45))
-            expansion_ok = rng.random() > 0.25
-            next_liq = rng.choice(["Weekly High", "Monthly High", "Previous Day High"]) if direction == "LONG" \
-                       else rng.choice(["Weekly Low", "Monthly Low", "Previous Day Low"])
-            _set_step(symbol, 5, "passed" if expansion_ok else "failed",
-                      f"Expansion vers {next_liq} — cible de liquidité visible" if expansion_ok
-                      else f"Pas d'extension claire vers la prochaine liquidité ({next_liq})")
+            if not silent:
+                _pipeline[symbol]["steps"][5]["status"] = "checking"
+                time.sleep(rng.uniform(0.05, 0.10))
+            expansion_ok, next_liq = ta.detect_expansion(candles_15m, direction or "LONG")
+            if not silent:
+                _set_step(symbol, 5, "passed" if expansion_ok else "failed",
+                          f"Expansion vers {next_liq} — cible de liquidité visible" if expansion_ok
+                          else f"Pas d'extension claire vers la prochaine liquidité ({next_liq})")
             if not expansion_ok:
                 reject(f"Expansion vers liquidité absente — pas de cible claire ({next_liq})")
                 _persist_reject(symbol, timeframe, "Expansion vers liquidité absente", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, pipeline_run_id=pipeline_run_id, profile_name=profile_name, liquidity_zone=zone_type, sweep_level=sweep_price)
                 continue
 
-            # ── Step 6 — Fibonacci Retracement (0.5 / 0.618 / 0.786) — split 60/40 ── IA opt ③
-            _pipeline[symbol]["steps"][6]["status"] = "checking"
-            time.sleep(rng.uniform(0.30, 0.50))
-            non_allowed = [0.382, 0.236, 0.705, 0.886]
-            pool = allowed_fib + [rng.choice(non_allowed)]
-            fib_val = round(rng.choice(pool), 3)
-            fib_ok = fib_val in allowed_fib
-            # Entrée en 2 tranches : 60% @ 0.618, 40% @ 0.786 (si les deux niveaux disponibles)
-            tranche1 = round(rng.uniform(0.610, 0.630), 3) if 0.618 in allowed_fib else fib_val
-            tranche2 = round(rng.uniform(0.780, 0.792), 3) if 0.786 in allowed_fib else fib_val
-            split_label = f" | Split 60%@{tranche1} + 40%@{tranche2}" if fib_ok and 0.786 in allowed_fib else ""
-            _set_step(symbol, 6, "passed" if fib_ok else "failed",
-                      f"Retracement {fib_val} ✓ zone valide{split_label}" if fib_ok
-                      else f"Retracement {fib_val} ✗ hors niveaux autorisés ({', '.join(str(f) for f in allowed_fib)})")
-
+            # ── Step 6 — Fibonacci Retracement (niveaux réels) ── IA opt ③
+            if not silent:
+                _pipeline[symbol]["steps"][6]["status"] = "checking"
+                time.sleep(rng.uniform(0.05, 0.10))
+            fib_val, fib_ok = ta.detect_fibonacci(candles_15m, direction or "LONG", allowed_fib)
+            if fib_ok and fib_split and 0.786 in allowed_fib:
+                split_label = f" | Split 60%@0.618 + 40%@0.786"
+            else:
+                split_label = ""
+            if not silent:
+                _set_step(symbol, 6, "passed" if fib_ok else "failed",
+                          f"Retracement {fib_val} ✓ zone valide{split_label}" if fib_ok
+                          else f"Retracement {fib_val} ✗ hors niveaux autorisés ({', '.join(str(f) for f in allowed_fib)})")
             if not fib_ok:
                 reject(f"Retracement Fib {fib_val} non autorisé — niveaux valides: {allowed_fib}")
                 _persist_reject(symbol, timeframe, f"Fib {fib_val} non autorisé", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, fib_val=fib_val, pipeline_run_id=pipeline_run_id, profile_name=profile_name, liquidity_zone=zone_type, sweep_level=sweep_price)
@@ -2177,21 +2334,12 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
 
             # ── Refinement 5m (optionnel — activable par profil) ─────────────
             if use_5m_refine:
-                time.sleep(rng.uniform(0.10, 0.20))
-                m5_body  = round(rng.uniform(0.2, 1.8), 2)    # taille corps bougie 5m en %
-                m5_vol   = round(rng.uniform(0.6, 2.8), 2)    # volume 5m vs SMA20
-                m5_wick  = round(rng.uniform(0.0, 0.6), 2)    # wick ratio (mèche / corps)
-                m5_align = rng.random() > 0.30                 # alignement direction 5m avec signal
-                m5_ok    = m5_body >= 0.5 and m5_vol >= 1.2 and m5_align
-                _dir_ok = "✓" if m5_align else "✗"
-                _no_align = "✗ — pas d'alignement 5m"
-                refine_msg = (
-                    f"5m ✓ corps {m5_body:.1f}% | vol {m5_vol:.2f}× | mèche {m5_wick:.2f} | dir {_dir_ok}"
-                    if m5_ok else
-                    f"5m ✗ corps {m5_body:.1f}% | vol {m5_vol:.2f}× | dir {_dir_ok if m5_align else _no_align}"
-                )
-                current_note = _pipeline[symbol]["steps"][6].get("message", "")
-                _pipeline[symbol]["steps"][6]["message"] = current_note + f" | Refinement {refine_msg}"
+                if not silent:
+                    time.sleep(rng.uniform(0.05, 0.10))
+                m5_ok, refine_msg = ta.detect_5m_refinement(candles_5m, direction or "LONG")
+                if not silent:
+                    current_note = _pipeline[symbol]["steps"][6].get("detail", "")
+                    _pipeline[symbol]["steps"][6]["detail"] = current_note + f" | {refine_msg}"
                 if not m5_ok:
                     reject(f"Refinement 5m échoué — {refine_msg}")
                     _persist_reject(symbol, timeframe, f"5m refinement échoué ({refine_msg})", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, fib_val=fib_val, pipeline_run_id=pipeline_run_id, profile_name=profile_name, liquidity_zone=zone_type, sweep_level=sweep_price)
@@ -2217,13 +2365,24 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
                 continue
 
             # ── Signal accepté — persistance DB + journal ────────────────────
-            entry_price = round(base_price * rng.uniform(0.99, 1.01), 4)
-            stop_price = round(entry_price * (0.97 if direction == "LONG" else 1.03), 2)
-            risk_r = abs(entry_price - stop_price)
+            # Prix réels depuis les bougies : entrée = clôture dernière bougie 15m
+            entry_price = round(base_price, 6)
+            # Stop : derrière le niveau de sweep (ATR-based, 2% min)
+            atr_val_15m = ta.atr(candles_15m, 14) if candles_15m else abs(base_price * 0.02)
+            if direction == "LONG":
+                stop_price = round(min(sweep_price - atr_val_15m * 0.5, entry_price * 0.98), 6)
+            else:
+                stop_price = round(max(sweep_price + atr_val_15m * 0.5, entry_price * 1.02), 6)
+            risk_r = max(abs(entry_price - stop_price), entry_price * 0.005)
             targets_str = ", ".join(
                 str(round(entry_price + t * risk_r * (1 if direction == "LONG" else -1), 2))
                 for t in target_rs
             )
+
+            # TP = entry + N×risk_r en direction du trade
+            tp_price = round(
+                entry_price + target_rs[0] * risk_r * (1 if direction == "LONG" else -1), 6
+            ) if target_rs else round(entry_price + 2.0 * risk_r * (1 if direction == "LONG" else -1), 6)
 
             with Session(engine) as s:
                 sig = Signal(
@@ -2246,54 +2405,60 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
                     pipeline_run_id=pipeline_run_id,
                     zone_low=round(sweep_price * 0.997, 4) if sweep_price > 0 else None,
                     zone_high=round(sweep_price * 1.003, 4) if sweep_price > 0 else None,
+                    entry_price=entry_price,
+                    sl_price=stop_price,
+                    tp_price=tp_price,
                 )
                 s.add(sig)
-                s.add(Log(level="INFO", message=(
-                    f"[Pipeline] {symbol} ACCEPTÉ — {direction} | {wyckoff_event} | "
-                    f"Fib {fib_val} | Session {current_session} | 4H:{tf4h}"
-                )))
+                if not silent:
+                    s.add(Log(level="INFO", message=(
+                        f"[Pipeline] {symbol} ACCEPTÉ — {direction} | {wyckoff_event} | "
+                        f"Fib {fib_val} | Session {current_session} | 4H:{tf4h}"
+                    )))
                 s.commit()
+                s.refresh(sig)
 
-            journal.log(SetupJournalEntry(
-                timestamp=now,
-                symbol=symbol,
-                timeframe=timeframe,
-                setup_type=f"{profile_name} — {direction}",
-                direction=direction,
-                accepted=True,
-                reject_reason=None,
-                liquidity_zone=zone_type,
-                sweep_level=sweep_price,
-                fake_breakout=fake_breakout,
-                equal_highs_lows=equal_hl,
-                wyckoff_event=wyckoff_event,
-                displacement_force=disp_val,
-                bos_level=bos_level,
-                expansion_detected=True,
-                fib_zone=str(fib_val),
-                tf_4h_structure=tf4h,
-                tf_1h_validation=tf1h,
-                session=current_session,
-                entry=entry_price,
-                stop=stop_price,
-                targets=targets_str,
-                stop_logic=stop_logic,
-                result="pending",
-            ))
-
-            with _pipeline_lock:
-                _pipeline[symbol]["final_status"] = "accepted"
-                _pipeline[symbol]["final_direction"] = direction
-                _pipeline[symbol]["final_reason"] = (
-                    f"✅ Signal {direction} validé — {wyckoff_event} | Fib {fib_val} | "
-                    f"Session {current_session} | 4H:{tf4h}"
-                )
-                _pipeline[symbol]["completed_at"] = datetime.now(timezone.utc).isoformat()
+            if not silent:
+                journal.log(SetupJournalEntry(
+                    timestamp=now,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    setup_type=f"{profile_name} — {direction}",
+                    direction=direction,
+                    accepted=True,
+                    reject_reason=None,
+                    liquidity_zone=zone_type,
+                    sweep_level=sweep_price,
+                    fake_breakout=fake_breakout,
+                    equal_highs_lows=equal_hl,
+                    wyckoff_event=wyckoff_event,
+                    displacement_force=disp_val,
+                    bos_level=bos_level,
+                    expansion_detected=True,
+                    fib_zone=str(fib_val),
+                    tf_4h_structure=tf4h,
+                    tf_1h_validation=tf1h,
+                    session=current_session,
+                    entry=entry_price,
+                    stop=stop_price,
+                    targets=targets_str,
+                    stop_logic=stop_logic,
+                    result="pending",
+                ))
+                with _pipeline_lock:
+                    _pipeline[symbol]["final_status"] = "accepted"
+                    _pipeline[symbol]["final_direction"] = direction
+                    _pipeline[symbol]["final_reason"] = (
+                        f"✅ Signal {direction} validé — {wyckoff_event} | Fib {fib_val} | "
+                        f"Session {current_session} | 4H:{tf4h}"
+                    )
+                    _pipeline[symbol]["completed_at"] = datetime.now(timezone.utc).isoformat()
 
         except Exception as exc:
-            with _pipeline_lock:
-                _pipeline[symbol]["final_status"] = "error"
-                _pipeline[symbol]["final_reason"] = str(exc)
+            if not silent:
+                with _pipeline_lock:
+                    _pipeline[symbol]["final_status"] = "error"
+                    _pipeline[symbol]["final_reason"] = str(exc)
 
     if pipeline_run_id:
         with _pipeline_lock:

@@ -50,6 +50,16 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
     ("signal", "zone_low",  "REAL"),
     ("signal", "zone_high", "REAL"),
     ("backtestresult", "pipeline_run_id", "TEXT"),
+    # Walk-forward backtest enrichment
+    ("signal",         "bt_outcome",      "TEXT"),       # "win" | "loss" | "timeout" | NULL
+    ("signal",         "bt_r_multiple",   "REAL"),       # actual R achieved (NULL for live)
+    ("signal",         "entry_price",     "REAL"),       # entry price stored on signal
+    ("signal",         "tp_price",        "REAL"),       # take-profit price
+    ("signal",         "sl_price",        "REAL"),       # stop-loss price
+    ("backtestresult", "signal_count",    "INTEGER"),    # total signals in walk-forward run
+    ("backtestresult", "step_count",      "INTEGER"),    # number of 4H steps evaluated
+    ("backtestresult", "date_from",       "TEXT"),       # ISO date start of backtest range
+    ("backtestresult", "date_to",         "TEXT"),       # ISO date end of backtest range
 ]
 
 

@@ -54,6 +54,11 @@ class Signal(SQLModel, table=True):
     pipeline_run_id: Optional[str] = None
     zone_low: Optional[float] = None
     zone_high: Optional[float] = None
+    bt_outcome: Optional[str] = None      # "win" | "loss" | "timeout" (backtest only)
+    bt_r_multiple: Optional[float] = None # actual R achieved (backtest only)
+    entry_price: Optional[float] = None
+    tp_price: Optional[float] = None
+    sl_price: Optional[float] = None
 
 
 class Trade(SQLModel, table=True):
@@ -100,6 +105,10 @@ class BacktestResult(SQLModel, table=True):
     drawdown: float
     r_multiple: float
     pipeline_run_id: Optional[str] = None
+    signal_count: Optional[int] = None   # total signals in walk-forward run
+    step_count: Optional[int] = None     # 4H steps evaluated
+    date_from: Optional[str] = None      # ISO date start
+    date_to: Optional[str] = None        # ISO date end
 
 
 class Log(SQLModel, table=True):

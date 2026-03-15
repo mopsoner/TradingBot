@@ -42,6 +42,11 @@ export type Signal = {
   pipeline_run_id?: string | null;
   zone_low?: number | null;
   zone_high?: number | null;
+  bt_outcome?: 'win' | 'loss' | 'timeout' | null;
+  bt_r_multiple?: number | null;
+  entry_price?: number | null;
+  sl_price?: number | null;
+  tp_price?: number | null;
 };
 
 export type PipelineRunRecord = {
@@ -78,6 +83,10 @@ export type BacktestResult = {
   pipeline_run_id?: string | null;
   symbols?: string[];
   data_warning?: string | null;
+  signal_count?: number | null;
+  step_count?: number | null;
+  date_from?: string | null;
+  date_to?: string | null;
 };
 
 export type SimulatedTrade = {
@@ -114,9 +123,11 @@ export const api = {
   systemProcesses: ()                         => get<{ processes: ProcessStatus[]; total_running: number; mode: string; timestamp: string }>('/api/system/processes'),
   dashboard:  ()                              => get<Dashboard>('/api/dashboard'),
   signals:    (params = '')                   => get<{ total: number; rows: Signal[] }>(`/api/signals${params}`),
-  signalsForBacktest: (pipeline_run_id: string | null | undefined, symbol: string) =>
+  signalsForBacktest: (pipeline_run_id: string | null | undefined, symbol: string, walkForward = false) =>
     pipeline_run_id
-      ? get<{ total: number; rows: Signal[] }>(`/api/signals?pipeline_run_id=${encodeURIComponent(pipeline_run_id)}&limit=500`)
+      ? walkForward
+        ? get<{ total: number; rows: Signal[] }>(`/api/signals?run_prefix=${encodeURIComponent(pipeline_run_id)}&accepted=true&limit=1000`)
+        : get<{ total: number; rows: Signal[] }>(`/api/signals?pipeline_run_id=${encodeURIComponent(pipeline_run_id)}&limit=500`)
       : get<{ total: number; rows: Signal[] }>(`/api/signals?symbol=${encodeURIComponent(symbol)}&limit=200`),
   trades:     (params = '')                   => get<{ total: number; rows: Trade[] }>(`/api/trades${params}`),
   positions:  ()                              => get<Position[]>('/api/positions'),

@@ -42,6 +42,8 @@ function BacktestDetailPanel({ r, simulatedTrades, dataWarning }: { r: BacktestR
   const [expandedSigId, setExpandedSigId] = useState<number | null>(null);
   const [sigFilter, setSigFilter]       = useState<'all' | 'accepted' | 'rejected'>('all');
 
+  const isWalkForward = (r.signal_count != null && r.signal_count > 0) || (r.step_count != null && r.step_count > 0);
+
   useEffect(() => {
     let cancelled = false;
     setLoadingSigs(true);
@@ -49,12 +51,12 @@ function BacktestDetailPanel({ r, simulatedTrades, dataWarning }: { r: BacktestR
     setSignals([]);
     setExpandedSigId(null);
     const firstSymbol = r.symbol.split(',')[0].trim();
-    api.signalsForBacktest(r.pipeline_run_id, firstSymbol)
+    api.signalsForBacktest(r.pipeline_run_id, firstSymbol, isWalkForward)
       .then(res => { if (!cancelled) setSignals(res.rows); })
       .catch(err => { if (!cancelled) setSigError(String(err)); })
       .finally(() => { if (!cancelled) setLoadingSigs(false); });
     return () => { cancelled = true; };
-  }, [r.pipeline_run_id, r.symbol]);
+  }, [r.pipeline_run_id, r.symbol, isWalkForward]);
 
   const hasSimulatedTrades = simulatedTrades && simulatedTrades.length > 0;
   const q = qualityBadge(r.win_rate, r.profit_factor, r.drawdown);
@@ -80,11 +82,17 @@ function BacktestDetailPanel({ r, simulatedTrades, dataWarning }: { r: BacktestR
     }}>
 
       {/* ── Header ──────────────────────────────────────────────────────── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: isWalkForward ? 8 : 16 }}>
         <span style={{
           padding: '3px 10px', borderRadius: 5, fontSize: 11, fontWeight: 700,
           background: q.bg, color: q.color, letterSpacing: 0.3,
         }}>{q.label}</span>
+        {isWalkForward && (
+          <span style={{
+            padding: '2px 8px', borderRadius: 5, fontSize: 10, fontWeight: 700,
+            background: 'rgba(139,92,246,0.15)', color: '#a78bfa', letterSpacing: 0.3,
+          }}>Walk-Forward</span>
+        )}
         <span style={{ fontSize: 14, fontWeight: 700 }}>{fmtSym(r.symbol)}</span>
         <span className="tag" style={{ fontSize: 11 }}>{r.timeframe}</span>
         <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{r.strategy_version || 'default-smc'}</span>
@@ -92,6 +100,31 @@ function BacktestDetailPanel({ r, simulatedTrades, dataWarning }: { r: BacktestR
           {new Date(r.timestamp).toLocaleString('fr-FR')}
         </span>
       </div>
+
+      {/* ── Walk-forward metadata ─────────────────────────────────────────── */}
+      {isWalkForward && (
+        <div style={{
+          display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16,
+          padding: '8px 12px', borderRadius: 7,
+          background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.2)',
+        }}>
+          {r.date_from && r.date_to && (
+            <span style={{ fontSize: 11, color: '#a78bfa' }}>
+              📅 {r.date_from} → {r.date_to}
+            </span>
+          )}
+          {r.step_count != null && (
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              🔁 {r.step_count} steps 4H
+            </span>
+          )}
+          {r.signal_count != null && (
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              📊 {r.signal_count} signaux jugés
+            </span>
+          )}
+        </div>
+      )}
 
       {/* ── single-column body ──────────────────────────────────────────── */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -194,13 +227,19 @@ function BacktestDetailPanel({ r, simulatedTrades, dataWarning }: { r: BacktestR
                     <th style={{ fontSize: 10 }}>Sweep</th>
                     <th style={{ fontSize: 10 }}>BOS</th>
                     <th style={{ fontSize: 10 }}>Wyckoff</th>
-                    <th style={{ fontSize: 10 }}>Statut</th>
+                    {isWalkForward
+                      ? <th style={{ fontSize: 10 }}>Outcome</th>
+                      : <th style={{ fontSize: 10 }}>Statut</th>
+                    }
                   </tr>
                 </thead>
                 <tbody>
                   {filteredSigs.map(sig => {
                     const isExp = expandedSigId === sig.id;
                     const dirColor = sig.direction === 'LONG' ? 'var(--accent-green)' : sig.direction === 'SHORT' ? 'var(--accent-red)' : 'var(--text-muted)';
+                    const outcomeColor = sig.bt_outcome === 'win' ? 'var(--accent-green)' : sig.bt_outcome === 'loss' ? 'var(--accent-red)' : 'var(--accent-yellow)';
+                    const outcomeBg   = sig.bt_outcome === 'win' ? 'rgba(34,197,94,0.15)' : sig.bt_outcome === 'loss' ? 'rgba(239,68,68,0.12)' : 'rgba(234,179,8,0.10)';
+                    const outcomeLabel = sig.bt_outcome === 'win' ? '✓ Win' : sig.bt_outcome === 'loss' ? '✗ Loss' : sig.bt_outcome === 'timeout' ? '⏱ Timeout' : '✓ Accepté';
                     return (
                       <React.Fragment key={sig.id}>
                         <tr
@@ -233,13 +272,27 @@ function BacktestDetailPanel({ r, simulatedTrades, dataWarning }: { r: BacktestR
                             {sig.wyckoff_event && sig.wyckoff_event !== 'Aucun' && sig.wyckoff_event !== 'N/A' ? sig.wyckoff_event : '—'}
                           </td>
                           <td>
-                            <span style={{
-                              fontSize: 10, padding: '1px 6px', borderRadius: 4, fontWeight: 600,
-                              background: sig.accepted ? 'rgba(34,197,94,0.15)' : 'rgba(120,120,120,0.12)',
-                              color: sig.accepted ? 'var(--accent-green)' : 'var(--text-muted)',
-                            }}>
-                              {sig.accepted ? '✓ Accepté' : '✗ Rejeté'}
-                            </span>
+                            {isWalkForward ? (
+                              <span style={{
+                                fontSize: 10, padding: '1px 6px', borderRadius: 4, fontWeight: 600,
+                                background: outcomeBg, color: outcomeColor,
+                              }}>
+                                {outcomeLabel}
+                                {sig.bt_r_multiple != null && (
+                                  <span style={{ marginLeft: 4, opacity: 0.8 }}>
+                                    {sig.bt_r_multiple > 0 ? '+' : ''}{sig.bt_r_multiple.toFixed(1)}R
+                                  </span>
+                                )}
+                              </span>
+                            ) : (
+                              <span style={{
+                                fontSize: 10, padding: '1px 6px', borderRadius: 4, fontWeight: 600,
+                                background: sig.accepted ? 'rgba(34,197,94,0.15)' : 'rgba(120,120,120,0.12)',
+                                color: sig.accepted ? 'var(--accent-green)' : 'var(--text-muted)',
+                              }}>
+                                {sig.accepted ? '✓ Accepté' : '✗ Rejeté'}
+                              </span>
+                            )}
                           </td>
                         </tr>
 
@@ -262,6 +315,10 @@ function BacktestDetailPanel({ r, simulatedTrades, dataWarning }: { r: BacktestR
                                   ['4H structure',   sig.tf_4h_structure],
                                   ['1H validation',  sig.tf_1h_validation],
                                   ['Session',        sig.session_name],
+                                  ['Entry',          sig.entry_price != null ? fmtZonePrice(sig.entry_price) : null],
+                                  ['SL',             sig.sl_price != null ? fmtZonePrice(sig.sl_price) : null],
+                                  ['TP',             sig.tp_price != null ? fmtZonePrice(sig.tp_price) : null],
+                                  ['Outcome',        sig.bt_outcome ? `${sig.bt_outcome}${sig.bt_r_multiple != null ? ' ' + (sig.bt_r_multiple > 0 ? '+' : '') + sig.bt_r_multiple.toFixed(2) + 'R' : ''}` : null],
                                   ['Raison rejet',   sig.reject_reason],
                                 ] as [string, string | null | undefined][])
                                   .filter(([, v]) => v)
@@ -2165,7 +2222,7 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
 
       {showWorkshop && (
         <AiWorkshopPanel
-          availableSymbols={availableSymbols}
+          availableSymbols={btUniverse}
           profiles={(profiles?.rows as Array<Record<string, unknown>> | undefined) ?? []}
           onClose={() => setShowWorkshop(false)}
           onProfilesCreated={() => reloadProfiles()}
