@@ -46,6 +46,9 @@ from src.openclaw.trade_execution import derive_margin_asset as _derive_margin_a
 market_data = MarketDataService()
 session_filter = SessionFilter()
 signal_engine = SignalEngine(config.strategy.fib_levels)
+
+_active_imports: dict[str, dict] = {}
+_active_imports_lock = threading.Lock()
 risk = RiskManager(
     config.risk.risk_per_trade,
     config.risk.max_open_positions,
@@ -1008,40 +1011,79 @@ def ingest_data(payload: list[CandleIn]) -> dict:
 class FetchRequest(BaseModel):
     symbols: list[str] = Field(min_length=1)
     timeframe: str = "1h"
-    days: int = Field(default=365, ge=1, le=1460)
+    days: int = Field(default=365, ge=0, le=1460)
     source: str | None = Field(default=None, description="Override source for this request (binance/yfinance). Falls back to config.")
+
+
+def _do_import_bg(job_id: str, symbol: str, tf: str, days: int, source: str) -> None:
+    from backend.app.services.candle_importer import import_candles
+
+    def _progress_cb(page: int, total_pages: int, candles_so_far: int) -> None:
+        with _active_imports_lock:
+            job = _active_imports.get(job_id)
+            if job:
+                job["page"] = page
+                job["total_pages"] = total_pages
+                job["candles"] = candles_so_far
+
+    try:
+        r = import_candles(symbol=symbol, timeframe=tf, days=days, source=source, progress_cb=_progress_cb)
+        with _active_imports_lock:
+            job = _active_imports.get(job_id)
+            if job:
+                job["status"] = "done"
+                job["candles"] = r.get("downloaded", 0)
+                job["inserted"] = r.get("inserted", 0)
+                job["completed_at"] = time.time()
+        with Session(engine) as s:
+            s.add(Log(level="INFO", message=f"Import {symbol} {tf} via {source}: {r.get('inserted', 0)} insérées, {r.get('skipped', 0)} existantes"))
+            s.commit()
+    except Exception as exc:
+        logger.warning("_do_import_bg failed %s %s: %s", symbol, tf, exc)
+        with _active_imports_lock:
+            job = _active_imports.get(job_id)
+            if job:
+                job["status"] = "error"
+                job["error"] = str(exc)
+                job["completed_at"] = time.time()
+        try:
+            with Session(engine) as s:
+                s.add(Log(level="ERROR", message=f"Import {symbol} {tf} via {source} failed: {exc}"))
+                s.commit()
+        except Exception:
+            pass
 
 
 @router.post("/data/fetch")
 def fetch_candles(req: FetchRequest) -> dict:
-    """
-    Download real candles from Binance or yfinance and store in DB.
-    Source: req.source if provided, else config.data.candle_source.
-    """
-    from backend.app.services.candle_importer import import_candles
-
     source = req.source or config.data.candle_source
     if source not in ("binance", "yfinance"):
         return {"ok": False, "reason": f"unknown source '{source}'. Use 'binance' or 'yfinance'."}
 
     tf = req.timeframe if req.timeframe in ("5m", "15m", "1h", "4h", "1d") else "1h"
 
-    results = []
-    total_inserted = 0
+    jobs = []
     for symbol in req.symbols:
-        try:
-            r = import_candles(symbol=symbol, timeframe=tf, days=req.days, source=source)
-            results.append(r)
-            total_inserted += r.get("inserted", 0)
-        except Exception as exc:
-            logger.warning("fetch_candles failed %s: %s", symbol, exc)
-            results.append({"ok": False, "symbol": symbol, "error": str(exc)})
+        job_id = str(uuid.uuid4())
+        with _active_imports_lock:
+            _active_imports[job_id] = {
+                "symbol": symbol,
+                "tf": tf,
+                "source": source,
+                "page": 0,
+                "total_pages": 0,
+                "candles": 0,
+                "inserted": 0,
+                "status": "running",
+                "started_at": time.time(),
+                "completed_at": None,
+                "error": None,
+            }
+        t = threading.Thread(target=_do_import_bg, args=(job_id, symbol, tf, req.days, source), daemon=True)
+        t.start()
+        jobs.append({"job_id": job_id, "symbol": symbol, "timeframe": tf})
 
-    with Session(engine) as s:
-        s.add(Log(level="INFO", message=f"Fetch {tf}/{source}: {total_inserted} bougies insérées pour {len(req.symbols)} symbole(s)"))
-        s.commit()
-
-    return {"ok": True, "source": source, "timeframe": tf, "results": results, "total_inserted": total_inserted}
+    return {"ok": True, "async": True, "jobs": jobs}
 
 
 class CsvImportRequest(BaseModel):
@@ -1767,6 +1809,32 @@ def system_processes() -> dict:
             "seconds_to_next": None,
             "run_count": 0,
         })
+
+    # ── Active imports
+    now_ts = time.time()
+    with _active_imports_lock:
+        expired_keys = [k for k, v in _active_imports.items() if v.get("completed_at") and now_ts - v["completed_at"] > 30]
+        for k in expired_keys:
+            del _active_imports[k]
+
+        for job_id, job in _active_imports.items():
+            page = job.get("page", 0)
+            total_pages = job.get("total_pages", 0)
+            candles_count = job.get("candles", 0)
+            pct = round(page / max(total_pages, 1) * 100) if total_pages > 0 else 0
+            processes.append({
+                "id":     f"import-{job_id[:8]}",
+                "type":   "import",
+                "label":  f"Import {job['symbol']} {job['tf']}",
+                "status": job["status"] if job["status"] in ("running", "done", "error") else "running",
+                "detail": f"{job['symbol']} {job['tf']} — {page}/{total_pages} pages ({candles_count} bougies)" if job["status"] == "running" else (
+                    f"{job['symbol']} {job['tf']} — {candles_count} bougies, {job.get('inserted', 0)} insérées" if job["status"] == "done" else
+                    f"{job['symbol']} {job['tf']} — Erreur: {job.get('error', '?')}"
+                ),
+                "pct_done": pct if job["status"] == "running" else (100 if job["status"] == "done" else pct),
+                "seconds_to_next": None,
+                "run_count": candles_count,
+            })
 
     total_running = sum(1 for p in processes if p["status"] == "running")
 

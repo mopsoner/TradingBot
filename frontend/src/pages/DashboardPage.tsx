@@ -15,6 +15,7 @@ const PROC_COLOR: Record<string, string> = {
   scanner:  'var(--accent-green)',
   pipeline: 'var(--accent)',
   backtest: '#a855f7',
+  import:   '#06b6d4',
 };
 
 function DashboardProcessCard() {
@@ -35,11 +36,14 @@ function DashboardProcessCard() {
     }).catch(() => {});
   };
 
+  const hasActiveImport = processes.some(p => p.type === 'import' && p.status === 'running');
+
   useEffect(() => {
     load();
-    const poll = setInterval(load, 8000);
+    const interval = hasActiveImport ? 3000 : 8000;
+    const poll = setInterval(load, interval);
     return () => clearInterval(poll);
-  }, []);
+  }, [hasActiveImport]);
 
   useEffect(() => {
     if (timerRef.current) clearInterval(timerRef.current);
@@ -78,10 +82,11 @@ function DashboardProcessCard() {
       )}
 
       {processes.map((p: ProcessStatus) => {
-        const color = PROC_COLOR[p.id] ?? 'var(--text-muted)';
+        const color = PROC_COLOR[p.type] ?? 'var(--text-muted)';
         const isScanner = p.id === 'scanner';
+        const isImport = p.type === 'import';
         const running = p.status === 'running';
-        const rgb = p.id === 'scanner' ? '34,197,94' : p.id === 'pipeline' ? '59,130,246' : '168,85,247';
+        const rgb = p.type === 'scanner' ? '34,197,94' : p.type === 'pipeline' ? '59,130,246' : p.type === 'import' ? '6,182,212' : '168,85,247';
         return (
           <div key={p.id} style={{
             display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px',
@@ -112,6 +117,16 @@ function DashboardProcessCard() {
                   {p.detail}
                 </div>
               )}
+              {isImport && p.pct_done !== undefined && (
+                <div style={{ marginTop: 4, height: 4, borderRadius: 2, background: 'rgba(100,116,139,0.15)', overflow: 'hidden' }}>
+                  <div style={{
+                    height: '100%', borderRadius: 2,
+                    width: `${p.pct_done}%`,
+                    background: p.status === 'error' ? 'var(--accent-red)' : '#06b6d4',
+                    transition: 'width 0.3s ease',
+                  }} />
+                </div>
+              )}
             </div>
 
             {isScanner && running && countdown !== null && (
@@ -140,6 +155,10 @@ function DashboardProcessCard() {
               >
                 {stopping ? 'Arrêt…' : '⏹ Arrêter le bot'}
               </button>
+            ) : isImport && p.status === 'done' ? (
+              <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600, flexShrink: 0 }}>Terminé</span>
+            ) : isImport && p.status === 'error' ? (
+              <span style={{ fontSize: 11, color: 'var(--accent-red)', fontWeight: 600, flexShrink: 0 }}>Erreur</span>
             ) : !running ? (
               <span style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0 }}>Terminé</span>
             ) : null}

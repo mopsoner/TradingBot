@@ -101,10 +101,11 @@ export type Dashboard = {
 
 export type ProcessStatus = {
   id: string;
-  type: 'scanner' | 'pipeline' | 'backtest' | 'live';
+  type: 'scanner' | 'pipeline' | 'backtest' | 'live' | 'import';
   label: string;
-  status: 'running' | 'stopped' | 'idle';
+  status: 'running' | 'stopped' | 'idle' | 'done' | 'error';
   detail: string;
+  pct_done?: number;
   seconds_to_next: number | null;
   run_count: number;
 };

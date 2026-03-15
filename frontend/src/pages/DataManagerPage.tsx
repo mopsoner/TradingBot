@@ -1,6 +1,6 @@
-import { useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApi } from '../hooks/useApi';
-import { api } from '../services/api';
+import { api, type ProcessStatus } from '../services/api';
 import type { AdminPage } from '../types';
 import { TIMEFRAMES } from '../constants';
 import { fmtDateTime } from '../utils/dateUtils';
@@ -62,6 +62,69 @@ export function DataManagerPage({ onNavigate }: Props) {
   const [deleteTarget, setDeleteTarget] = useState<{ symbol: string; tf?: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  const [activeJobIds, setActiveJobIds] = useState<string[]>([]);
+  const [importProcesses, setImportProcesses] = useState<ProcessStatus[]>([]);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const startImportPoll = useCallback((jobIds: string[]) => {
+    setActiveJobIds(jobIds);
+    const shortIds = jobIds.map(id => `import-${id.slice(0, 8)}`);
+    let failCount = 0;
+    const startedAt = Date.now();
+    const MAX_POLL_MS = 10 * 60 * 1000;
+
+    const cleanup = () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+      setLoading(null);
+      setLoadingAll(null);
+    };
+
+    const doPoll = () => {
+      if (Date.now() - startedAt > MAX_POLL_MS) {
+        cleanup();
+        setImportProcesses([]);
+        setActiveJobIds([]);
+        return;
+      }
+
+      api.systemProcesses().then(d => {
+        failCount = 0;
+        const importProcs = d.processes.filter(p => p.type === 'import' && shortIds.includes(p.id));
+        setImportProcesses(importProcs);
+
+        const allDone = importProcs.length > 0 && importProcs.every(p => p.status === 'done' || p.status === 'error');
+        const allGone = importProcs.length === 0 && Date.now() - startedAt > 5000;
+        if (allDone || allGone) {
+          cleanup();
+          refreshStats();
+          refreshCandles();
+          setTimeout(() => {
+            setActiveJobIds([]);
+            setImportProcesses([]);
+          }, 5000);
+        }
+      }).catch(() => {
+        failCount++;
+        if (failCount >= 5) {
+          cleanup();
+          setImportProcesses([]);
+          setActiveJobIds([]);
+        }
+      });
+    };
+
+    doPoll();
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(doPoll, 3000);
+  }, [refreshStats, refreshCandles]);
+
+  useEffect(() => {
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, []);
+
   const candleSource = (settings as Record<string, unknown> | null)?.data
     ? ((settings as Record<string, Record<string, unknown>>).data.candle_source as string) ?? 'yfinance'
     : 'yfinance';
@@ -89,17 +152,24 @@ export function DataManagerPage({ onNavigate }: Props) {
     const syms = Array.from(selected);
     try {
       const res = await api.fetchCandles({ symbols: syms, timeframe: tf, days }) as Record<string, unknown>;
-      const raw = (res.results as ImportResult[] | undefined) ?? [];
-      if (!loadingAll) {
-        setResults(raw);
-        refreshStats();
-        refreshCandles();
+      if (res.async === true) {
+        const jobs = (res.jobs as { job_id: string; symbol: string; timeframe: string }[]) ?? [];
+        startImportPoll(jobs.map(j => j.job_id));
+      } else {
+        const raw = (res.results as ImportResult[] | undefined) ?? [];
+        if (!loadingAll) {
+          setResults(raw);
+          refreshStats();
+          refreshCandles();
+          setLoading(null);
+        }
       }
     } catch (e) {
       console.error(e);
-      if (!loadingAll) setResults([{ ok: false, error: String(e) }]);
-    } finally {
-      if (!loadingAll) setLoading(null);
+      if (!loadingAll) {
+        setResults([{ ok: false, error: String(e) }]);
+        setLoading(null);
+      }
     }
   };
 
@@ -107,7 +177,7 @@ export function DataManagerPage({ onNavigate }: Props) {
     if (selected.size === 0 || loading || loadingAll) return;
     setResults([]);
     const syms = Array.from(selected);
-    const allResults: ImportResult[] = [];
+    const allJobIds: string[] = [];
     try {
       for (let i = 0; i < TIMEFRAMES.length; i++) {
         const tf = TIMEFRAMES[i];
@@ -115,18 +185,24 @@ export function DataManagerPage({ onNavigate }: Props) {
         setLoading(tf.value);
         try {
           const res = await api.fetchCandles({ symbols: syms, timeframe: tf.value, days }) as Record<string, unknown>;
-          const raw = (res.results as ImportResult[] | undefined) ?? [];
-          allResults.push(...raw);
-          setResults([...allResults]);
+          if (res.async === true) {
+            const jobs = (res.jobs as { job_id: string; symbol: string; timeframe: string }[]) ?? [];
+            allJobIds.push(...jobs.map(j => j.job_id));
+          }
         } catch (e) {
           console.error(e);
-          allResults.push({ ok: false, error: `${tf.label}: ${String(e)}` });
-          setResults([...allResults]);
+          setResults(prev => [...prev, { ok: false, error: `${tf.label}: ${String(e)}` }]);
         }
       }
-      refreshStats();
-      refreshCandles();
-    } finally {
+      if (allJobIds.length > 0) {
+        startImportPoll(allJobIds);
+      } else {
+        setLoading(null);
+        setLoadingAll(null);
+        refreshStats();
+        refreshCandles();
+      }
+    } catch {
       setLoading(null);
       setLoadingAll(null);
     }
@@ -317,7 +393,7 @@ export function DataManagerPage({ onNavigate }: Props) {
                     : 'linear-gradient(135deg, var(--accent), #7c3aed)',
                   border: loadingAll ? '1px solid rgba(59,130,246,0.3)' : 'none',
                 }}
-                disabled={!!loading || !!loadingAll || selected.size === 0}
+                disabled={!!loading || !!loadingAll || selected.size === 0 || activeJobIds.length > 0}
                 onClick={importAllTf}
               >
                 {loadingAll
@@ -357,15 +433,49 @@ export function DataManagerPage({ onNavigate }: Props) {
                       <button
                         className="btn btn-secondary"
                         style={{ minWidth: 120, fontSize: 12 }}
-                        disabled={!!loading || !!loadingAll || selected.size === 0}
+                        disabled={!!loading || !!loadingAll || selected.size === 0 || activeJobIds.length > 0}
                         onClick={() => importTf(tf.value)}
                       >
-                        {loading === tf.value ? 'Import…' : `Importer ${tf.label}`}
+                        {loading === tf.value ? 'En cours…' : `Importer ${tf.label}`}
                       </button>
                     </div>
                   );
                 })}
               </div>
+
+              {importProcesses.length > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  {importProcesses.map(proc => (
+                    <div
+                      key={proc.id}
+                      style={{
+                        padding: '10px 14px', borderRadius: 8, marginBottom: 6,
+                        background: proc.status === 'error' ? 'rgba(239,68,68,0.08)' : proc.status === 'done' ? 'rgba(34,197,94,0.08)' : 'rgba(6,182,212,0.08)',
+                        border: `1px solid ${proc.status === 'error' ? 'rgba(239,68,68,0.25)' : proc.status === 'done' ? 'rgba(34,197,94,0.25)' : 'rgba(6,182,212,0.25)'}`,
+                        fontSize: 12,
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: proc.status === 'running' ? 6 : 0 }}>
+                        <span style={{ fontWeight: 600 }}>
+                          {proc.status === 'done' ? '✅' : proc.status === 'error' ? '❌' : '⏳'}{' '}
+                          {proc.label}
+                        </span>
+                        <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>{proc.detail}</span>
+                      </div>
+                      {proc.status === 'running' && proc.pct_done !== undefined && (
+                        <div style={{ height: 4, borderRadius: 2, background: 'rgba(100,116,139,0.15)', overflow: 'hidden' }}>
+                          <div style={{
+                            height: '100%', borderRadius: 2,
+                            width: `${proc.pct_done}%`,
+                            background: '#06b6d4',
+                            transition: 'width 0.3s ease',
+                          }} />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {results.length > 0 && (
                 <div style={{ marginTop: 16 }}>
