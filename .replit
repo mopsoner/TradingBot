@@ -61,3 +61,9 @@ externalPort = 8000
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 120000
+
+[deployment]
+build = ["sh", "-c", "bash -c \"cd frontend && npm install && npm run build\""]
+run = ["sh", "-c", "uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --workers 1"]
+deploymentTarget = "gce"
+ignorePorts = true
