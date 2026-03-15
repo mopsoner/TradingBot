@@ -1,6 +1,9 @@
 import logging
+import os
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from backend.app.api.routes import router
 from backend.app.db.session import init_db, load_app_config
@@ -12,6 +15,17 @@ logging.basicConfig(
 
 app = FastAPI(title="Standalone Web Trading Platform")
 app.include_router(router, prefix="/api")
+
+_DIST = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist")
+if os.path.isdir(_DIST):
+    app.mount("/assets", StaticFiles(directory=os.path.join(_DIST, "assets")), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def serve_spa(full_path: str) -> FileResponse:
+        candidate = os.path.join(_DIST, full_path)
+        if os.path.isfile(candidate):
+            return FileResponse(candidate)
+        return FileResponse(os.path.join(_DIST, "index.html"))
 
 
 @app.on_event("startup")

@@ -73,7 +73,7 @@ export function BotControlPage() {
   const [manualResult, setManualResult] = useState<Record<string, unknown> | null>(null);
   const { data: botStatus, reload: refreshBot } = useApi(() => api.botStatus());
 
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!profileId && profileRows.length > 0) {

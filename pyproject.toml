@@ -12,6 +12,7 @@ dependencies = [
   "pytest>=9.0.2",
   "yfinance>=0.2.0",
   "pandas>=2.0.0",
+  "aiofiles>=23.0.0",
 ]
 
 [tool.pytest.ini_options]
