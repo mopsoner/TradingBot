@@ -299,6 +299,14 @@ def update_config(new_config: AppConfig) -> dict:
         s.add(Log(level="INFO", message=f"Configuration updated and persisted — mode={config.system.mode}"))
         s.commit()
 
+    if config.system.mode == "paper":
+        _auto_start_for_paper()
+    else:
+        with _auto_lock:
+            if _auto_state["running"]:
+                _auto_state["running"] = False
+        _auto_stop.set()
+
     return {"ok": True, "config": config.model_dump()}
 
 
@@ -1385,6 +1393,51 @@ def _autonomous_worker() -> None:
     with _auto_lock:
         _auto_state["running"]      = False
         _auto_state["next_run_at"]  = None
+
+
+def _auto_start_for_paper(interval_minutes: int = 5, timeframe: str = "5m") -> bool:
+    """
+    Auto-start the autonomous scanner when switching to paper mode.
+    Reads all distinct symbols that have candle data in the DB.
+    Returns True if scanner was started, False if already running or no data.
+    """
+    global _auto_thread, _auto_stop
+    with _auto_lock:
+        if _auto_state["running"]:
+            return False
+
+    with Session(engine) as s:
+        rows = s.exec(
+            select(MarketCandle.symbol).where(
+                MarketCandle.timeframe == timeframe
+            ).distinct()
+        ).all()
+        symbols = list(rows)
+
+    if not symbols:
+        with Session(engine) as s:
+            rows = s.exec(select(MarketCandle.symbol).distinct()).all()
+            symbols = list(rows)
+
+    if not symbols:
+        return False
+
+    with _auto_lock:
+        _auto_state["running"]          = True
+        _auto_state["symbols"]          = symbols
+        _auto_state["timeframe"]        = timeframe
+        _auto_state["profile_id"]       = None
+        _auto_state["interval_minutes"] = interval_minutes
+        _auto_state["run_count"]        = 0
+        _auto_state["last_signals"]     = 0
+        _auto_state["last_run_results"] = []
+        _auto_state["last_run_at"]      = None
+        _auto_state["next_run_at"]      = datetime.now(timezone.utc).isoformat()
+
+    _auto_stop.clear()
+    _auto_thread = threading.Thread(target=_autonomous_worker, daemon=True)
+    _auto_thread.start()
+    return True
 
 
 class AutonomousStartRequest(BaseModel):

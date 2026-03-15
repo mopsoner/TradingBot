@@ -47,6 +47,17 @@ def _restore_config() -> None:
         "Config restored from DB — mode=%s", saved.system.mode
     )
 
+    if saved.system.mode == "paper":
+        started = _routes._auto_start_for_paper()
+        if started:
+            logging.getLogger(__name__).info(
+                "Paper mode: autonomous scanner auto-started on startup"
+            )
+        else:
+            logging.getLogger(__name__).info(
+                "Paper mode: no candle data found — scanner not started"
+            )
+
 
 @app.get("/")
 def root() -> dict:
