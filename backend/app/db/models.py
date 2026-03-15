@@ -106,12 +106,15 @@ class BacktestResult(SQLModel, table=True):
     drawdown: float
     r_multiple: float
     pipeline_run_id: Optional[str] = None
-    signal_count: Optional[int] = None   # total signals in walk-forward run
-    step_count: Optional[int] = None     # 4H steps evaluated
-    date_from: Optional[str] = None      # ISO date start
-    date_to: Optional[str] = None        # ISO date end
-    profile_id: Optional[int] = None     # StrategyProfile.id used
-    overrides_json: Optional[str] = None # JSON snapshot of BacktestOverrides
+    signal_count: Optional[int] = None
+    step_count: Optional[int] = None
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
+    profile_id: Optional[int] = None
+    overrides_json: Optional[str] = None
+    status: Optional[str] = None
+    config: Optional[str] = None
+    trades_json: Optional[str] = None
 
 
 class Log(SQLModel, table=True):

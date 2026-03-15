@@ -60,6 +60,9 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
     ("backtestresult", "step_count",      "INTEGER"),    # number of 4H steps evaluated
     ("backtestresult", "date_from",       "TEXT"),       # ISO date start of backtest range
     ("backtestresult", "date_to",         "TEXT"),       # ISO date end of backtest range
+    ("backtestresult", "status",          "TEXT"),       # RUNNING / COMPLETED / FAILED
+    ("backtestresult", "config",          "TEXT"),       # JSON config (symbol, timeframe, dates)
+    ("backtestresult", "trades_json",     "TEXT"),       # JSON array of replay trades
 ]
 
 

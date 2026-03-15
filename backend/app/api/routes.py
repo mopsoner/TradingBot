@@ -1513,6 +1513,52 @@ def run_backtest(outcomes_r: list[float]) -> dict:
     return backtesting.run(outcomes_r).__dict__
 
 
+class ReplayStartRequest(BaseModel):
+    symbol: str = Field(min_length=2, max_length=20)
+    timeframe: str = Field("1h", pattern=r"^(15m|1h|4h|1d)$")
+    date_start: str
+    date_end: str
+
+
+@router.post("/backtest/replay/start")
+def replay_start(req: ReplayStartRequest) -> dict:
+    from backend.app.services.replay_engine import replay_manager
+    from datetime import datetime as _dt, timezone as _tz
+
+    try:
+        ds = _dt.fromisoformat(req.date_start.replace("Z", "+00:00"))
+        de = _dt.fromisoformat(req.date_end.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            ds = _dt.strptime(req.date_start, "%Y-%m-%d").replace(tzinfo=_tz.utc)
+            de = _dt.strptime(req.date_end, "%Y-%m-%d").replace(tzinfo=_tz.utc)
+        except ValueError:
+            return {"ok": False, "reason": "Format de date invalide. Utilisez YYYY-MM-DD."}
+
+    if ds >= de:
+        return {"ok": False, "reason": "date_start doit être avant date_end."}
+
+    session_id = replay_manager.start(
+        symbol=req.symbol.strip().upper(),
+        timeframe=req.timeframe,
+        date_start=ds,
+        date_end=de,
+    )
+    if session_id is None:
+        return {"ok": False, "reason": "Trop de replays en cours. Réessayez dans quelques instants."}
+    return {"ok": True, "session_id": session_id}
+
+
+@router.get("/backtest/replay/status/{session_id}")
+def replay_status(session_id: str) -> dict:
+    from backend.app.services.replay_engine import replay_manager
+
+    result = replay_manager.get_status(session_id)
+    if result is None:
+        return {"ok": False, "reason": "Session introuvable."}
+    return {"ok": True, **result}
+
+
 class WalkForwardRequest(BaseModel):
     symbol: str = Field("ETHUSDT", min_length=3, max_length=20)
     years: int = Field(4, ge=1, le=5)

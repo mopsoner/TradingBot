@@ -90,6 +90,9 @@ export type BacktestResult = {
   date_to?: string | null;
   profile_id?: number | null;
   overrides_json?: string | null;
+  status?: string | null;
+  config?: string | null;
+  trades_json?: string | null;
 };
 
 export type SimulatedTrade = {
@@ -188,6 +191,46 @@ export const api = {
   autonomousStatus: () => get<Record<string, unknown>>('/api/autonomous/status'),
   runWalkforward: (body: { symbol: string; years: number; timeframe: string; profile_id?: number | null }) =>
     post<Record<string, unknown>>('/api/backtest/walkforward', body),
+  replayStart: (body: { symbol: string; timeframe: string; date_start: string; date_end: string }) =>
+    post<{ ok: boolean; session_id?: string; reason?: string }>('/api/backtest/replay/start', body),
+  replayStatus: (sessionId: string) =>
+    get<ReplayStatusResponse>(`/api/backtest/replay/status/${sessionId}`),
+};
+
+export type ReplayTrade = {
+  timestamp: string;
+  direction: string;
+  entry_price: number;
+  sl_price: number;
+  tp_price: number;
+  result: string;
+  r_multiple: number;
+};
+
+export type ReplayMetrics = {
+  total_trades: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  profit_factor: number;
+  max_drawdown: number;
+  expectancy: number;
+  total_r: number;
+};
+
+export type ReplayStatusResponse = {
+  ok: boolean;
+  session_id?: string;
+  status?: 'RUNNING' | 'COMPLETED' | 'FAILED';
+  symbol?: string;
+  timeframe?: string;
+  candles_processed?: number;
+  total_candles?: number;
+  error?: string;
+  reason?: string;
+  metrics?: ReplayMetrics;
+  trades?: ReplayTrade[];
+  backtest_result_id?: number;
 };
 
 export type MarginAsset = {
