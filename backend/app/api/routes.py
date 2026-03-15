@@ -252,20 +252,44 @@ def symbols_by_quote(response: Response) -> dict[str, list[str]]:
 
 @router.get("/symbols/loaded")
 def symbols_loaded() -> list[dict]:
-    """Return distinct symbols that have candle data in the database, with counts per timeframe."""
+    """Return distinct symbols with candle data: counts per timeframe + date range."""
     with Session(engine) as s:
+        # Counts per timeframe
         rows = s.exec(
             select(MarketCandle.symbol, MarketCandle.timeframe, func.count(MarketCandle.id).label("count"))
             .group_by(MarketCandle.symbol, MarketCandle.timeframe)
             .order_by(MarketCandle.symbol, MarketCandle.timeframe)
         ).all()
+        # Date ranges per symbol
+        date_rows = s.exec(
+            select(
+                MarketCandle.symbol,
+                func.min(MarketCandle.timestamp).label("min_ts"),
+                func.max(MarketCandle.timestamp).label("max_ts"),
+            )
+            .group_by(MarketCandle.symbol)
+        ).all()
+    date_map: dict[str, dict] = {r[0]: {"min_ts": str(r[1])[:10], "max_ts": str(r[2])[:10]} for r in date_rows}
     result: dict[str, dict] = {}
     for symbol, timeframe, count in rows:
         if symbol not in result:
-            result[symbol] = {"symbol": symbol, "timeframes": {}, "total": 0}
+            # Determine quote currency
+            quote = "USDT"
+            for q in ("BTC", "ETH", "BNB"):
+                if symbol.endswith(q):
+                    quote = q
+                    break
+            result[symbol] = {
+                "symbol": symbol,
+                "quote": quote,
+                "timeframes": {},
+                "total": 0,
+                "min_ts": date_map.get(symbol, {}).get("min_ts"),
+                "max_ts": date_map.get(symbol, {}).get("max_ts"),
+            }
         result[symbol]["timeframes"][timeframe] = count
         result[symbol]["total"] += count
-    return list(result.values())
+    return sorted(result.values(), key=lambda x: -x["total"])
 
 
 @router.get("/symbols/prices")
@@ -424,9 +448,23 @@ class LiveApprovalIn(BaseModel):
     approved_by: str = "operator"
 
 
+DURATION_MAP: dict[str, int | None] = {
+    "1d":  1,
+    "1w":  7,
+    "1m":  30,
+    "3m":  90,
+    "6m":  180,
+    "1y":  365,
+    "2y":  730,
+    "4y":  1460,
+    "all": None,
+}
+
+
 class BacktestRunRequest(BaseModel):
     symbols: list[str]
     profile_id: int | None = None
+    duration: str = "all"          # "1d","1w","1m","3m","6m","1y","2y","4y","all"
 
 
 class CandleIn(BaseModel):
@@ -1172,6 +1210,13 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
 
     symbols_label = ", ".join(symbols)
 
+    # Résoudre la durée → date de début
+    duration_key = req.duration if req.duration in DURATION_MAP else "all"
+    days_back = DURATION_MAP[duration_key]
+    since_dt: datetime | None = None
+    if days_back is not None:
+        since_dt = datetime.now(timezone.utc) - timedelta(days=days_back)
+
     with Session(engine) as s:
         # Signaux du run courant → affichés dans le détail
         current_sigs = s.exec(
@@ -1180,9 +1225,11 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
             .order_by(Signal.timestamp)
         ).all()
 
-        # Tous les signaux historiques pour ces symboles → métriques statistiques
-        hist_q = select(Signal).where(Signal.symbol.in_(symbols)).order_by(Signal.timestamp)
-        all_sigs = s.exec(hist_q).all()
+        # Signaux historiques filtrés par durée → métriques statistiques
+        hist_q = select(Signal).where(Signal.symbol.in_(symbols))
+        if since_dt is not None:
+            hist_q = hist_q.where(Signal.timestamp >= since_dt)
+        all_sigs = s.exec(hist_q.order_by(Signal.timestamp)).all()
 
     target_rs: list = list(profile_params.get("target_r_multiples", config.strategy.target_r_multiples) or [2.0, 3.0])
     avg_r_win  = float(sum(target_rs) / len(target_rs)) if target_rs else 2.5
@@ -1239,12 +1286,17 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
         s.commit()
         s.refresh(result)
 
+    duration_labels = {"1d":"1 jour","1w":"1 semaine","1m":"1 mois","3m":"3 mois","6m":"6 mois","1y":"1 an","2y":"2 ans","4y":"4 ans","all":"Tout l'historique"}
+    duration_label = duration_labels.get(duration_key, duration_key)
+    period_str = f"{since_dt.strftime('%d/%m/%Y')} → aujourd'hui" if since_dt else "Tout l'historique"
+
     reject_lines = "\n".join(f"  - {cnt}x {r}" for r, cnt in top_rejects)
     report = (
         f"# Backtest Pipeline Report\n"
         f"- Symboles: {symbols_label}\n"
         f"- Timeframe: MTF (4H→1H→15m→5m)\n"
         f"- Strategy: {profile_name}\n"
+        f"- Durée: {duration_label} ({period_str})\n"
         f"- Signaux historiques totaux: {n_total}\n"
         f"- Signaux acceptés: {n_accepted} / {n_total}\n"
         f"- Win rate: {win_rate:.2%}\n"

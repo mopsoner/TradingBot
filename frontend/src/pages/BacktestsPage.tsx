@@ -1330,6 +1330,7 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
 
   const [selectedSymbols, setSelectedSymbols] = useState<string[]>([]);
   const [btQuote, setBtQuote]     = useState('USDT');
+  const [btDuration, setBtDuration] = useState('all');
   const [profileId, setProfileId] = useState<number | null>(null);
   const [report, setReport]       = useState<Record<string, unknown> | null>(null);
   const [lastResult, setLastResult] = useState<BacktestResult | null>(null);
@@ -1404,13 +1405,16 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
   );
 
   // ── Derived from DB-loaded candle data ────────────────────────────────────
-  const availableSymbols = useMemo(() => loadedEntries.map(e => e.symbol), [loadedEntries]);
-  const { data: byQuote } = useApi(() => api.symbolsByQuote());
+  const btQuotes = useMemo(() => {
+    const qs = [...new Set(loadedEntries.map(e => (e as Record<string,unknown>).quote as string ?? 'USDT'))].sort();
+    return qs.length > 0 ? qs : ['USDT'];
+  }, [loadedEntries]);
+
   const btUniverse = useMemo(() => {
-    const all = availableSymbols;
-    const fromQuote = ((byQuote ?? {})[btQuote] ?? []) as string[];
-    return fromQuote.length > 0 ? fromQuote.filter(s => all.includes(s)) : all;
-  }, [availableSymbols, byQuote, btQuote]);
+    return loadedEntries
+      .filter(e => ((e as Record<string,unknown>).quote as string ?? 'USDT') === btQuote)
+      .map(e => e.symbol);
+  }, [loadedEntries, btQuote]);
 
   // ── History filters (client-side) ─────────────────────────────────────────
   const [filterSymbol, setFilterSymbol] = useState('');
@@ -1442,7 +1446,7 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
     setStatus('');
     setOptimizeTarget(null);
     try {
-      const res = await api.runBacktest({ symbols: selectedSymbols, profile_id: profileId });
+      const res = await api.runBacktest({ symbols: selectedSymbols, profile_id: profileId, duration: btDuration });
       if (res.ok) {
         setStatus('✅ Backtest terminé — rapport généré.');
         setReport(res.result as Record<string, unknown>);
@@ -1601,17 +1605,19 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
                 <>
                   <div className="form-group">
                     <label>Cryptos à tester</label>
-                    {/* Quote filter tabs */}
-                    <div style={{ display: 'flex', gap: 5, marginBottom: 8 }}>
-                      {Object.keys(byQuote ?? { USDT: [] }).map(q => (
-                        <button key={q} onClick={() => { setBtQuote(q); setSelectedSymbols([]); }} style={{
-                          padding: '2px 10px', borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: 'pointer',
-                          border: `1px solid ${btQuote === q ? 'var(--accent)' : 'var(--border)'}`,
-                          background: btQuote === q ? 'rgba(59,130,246,0.15)' : 'var(--surface2)',
-                          color: btQuote === q ? 'var(--accent)' : 'var(--text-muted)',
-                        }}>{q}</button>
-                      ))}
-                    </div>
+                    {/* Quote filter tabs (from DB candle data) */}
+                    {btQuotes.length > 1 && (
+                      <div style={{ display: 'flex', gap: 5, marginBottom: 8 }}>
+                        {btQuotes.map(q => (
+                          <button key={q} onClick={() => { setBtQuote(q); setSelectedSymbols([]); }} style={{
+                            padding: '2px 10px', borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: 'pointer',
+                            border: `1px solid ${btQuote === q ? 'var(--accent)' : 'var(--border)'}`,
+                            background: btQuote === q ? 'rgba(59,130,246,0.15)' : 'var(--surface2)',
+                            color: btQuote === q ? 'var(--accent)' : 'var(--text-muted)',
+                          }}>{q}</button>
+                        ))}
+                      </div>
+                    )}
                     {/* Selection count + clear */}
                     <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span>{selectedSymbols.length} sélectionnée(s) sur {btUniverse.length}</span>
@@ -1624,23 +1630,57 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
                         tout sélectionner
                       </button>
                     </div>
-                    {/* Symbol grid */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 3, maxHeight: 200, overflowY: 'auto' }}>
+                    {/* Symbol grid with date range */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 240, overflowY: 'auto' }}>
                       {btUniverse.map(s => {
                         const sel = selectedSymbols.includes(s);
+                        const entry = loadedEntries.find(e => e.symbol === s) as { symbol: string; quote: string; total: number; min_ts: string | null; max_ts: string | null } | undefined;
+                        const minDate = entry?.min_ts ? new Date(entry.min_ts).toLocaleDateString('fr-FR', { month: 'short', year: 'numeric' }) : null;
+                        const maxDate = entry?.max_ts ? new Date(entry.max_ts).toLocaleDateString('fr-FR', { month: 'short', year: 'numeric' }) : null;
+                        const candles = entry?.total;
                         return (
                           <label key={s} style={{
-                            display: 'flex', alignItems: 'center', gap: 4, padding: '3px 6px',
-                            borderRadius: 5, cursor: 'pointer', fontSize: 11, userSelect: 'none',
-                            background: sel ? 'rgba(59,130,246,0.12)' : 'transparent',
+                            display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px',
+                            borderRadius: 6, cursor: 'pointer', userSelect: 'none',
+                            background: sel ? 'rgba(59,130,246,0.12)' : 'var(--surface2)',
                             border: `1px solid ${sel ? 'var(--accent)' : 'var(--border)'}`,
                           }}>
                             <input type="checkbox" checked={sel} style={{ width: 'auto', margin: 0 }}
                               onChange={() => setSelectedSymbols(prev => sel ? prev.filter(x => x !== s) : [...prev, s])} />
-                            {fmtSym(s).split('/')[0]}
+                            <span style={{ fontWeight: 700, fontSize: 13, color: sel ? 'var(--accent)' : 'var(--text)' }}>
+                              {fmtSym(s)}
+                            </span>
+                            {minDate && maxDate && (
+                              <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                                {minDate} → {maxDate}
+                                {candles !== undefined && (
+                                  <span style={{ marginLeft: 5, color: 'var(--accent-green)', fontWeight: 600 }}>
+                                    {candles >= 1000 ? `${(candles / 1000).toFixed(1)}k` : candles} bougies
+                                  </span>
+                                )}
+                              </span>
+                            )}
                           </label>
                         );
                       })}
+                    </div>
+                  </div>
+
+                  {/* Duration selector */}
+                  <div className="form-group">
+                    <label>Période d'analyse</label>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 4 }}>
+                      {([
+                        ['1d', '1j'], ['1w', '1S'], ['1m', '1M'], ['3m', '3M'], ['6m', '6M'],
+                        ['1y', '1A'], ['2y', '2A'], ['4y', '4A'], ['all', 'Tout'],
+                      ] as [string, string][]).map(([val, label]) => (
+                        <button key={val} onClick={() => setBtDuration(val)} style={{
+                          padding: '4px 0', borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: 'pointer',
+                          border: `1px solid ${btDuration === val ? 'var(--accent)' : 'var(--border)'}`,
+                          background: btDuration === val ? 'rgba(59,130,246,0.2)' : 'var(--surface2)',
+                          color: btDuration === val ? 'var(--accent)' : 'var(--text-muted)',
+                        }}>{label}</button>
+                      ))}
                     </div>
                   </div>
                 </>
