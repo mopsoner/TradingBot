@@ -75,6 +75,8 @@ export type BacktestResult = {
   id: number; timestamp: string; symbol: string; timeframe: string;
   strategy_version: string; win_rate: number; profit_factor: number;
   expectancy: number; drawdown: number; r_multiple: number;
+  pipeline_run_id?: string | null;
+  symbols?: string[];
 };
 
 export type SimulatedTrade = {
@@ -99,8 +101,10 @@ export type Dashboard = {
 export const api = {
   dashboard:  ()                              => get<Dashboard>('/api/dashboard'),
   signals:    (params = '')                   => get<{ total: number; rows: Signal[] }>(`/api/signals${params}`),
-  signalsForBacktest: (symbol: string) =>
-    get<{ total: number; rows: Signal[] }>(`/api/signals?symbol=${encodeURIComponent(symbol)}&limit=500`),
+  signalsForBacktest: (pipeline_run_id: string | null | undefined, symbol: string) =>
+    pipeline_run_id
+      ? get<{ total: number; rows: Signal[] }>(`/api/signals?pipeline_run_id=${encodeURIComponent(pipeline_run_id)}&limit=500`)
+      : get<{ total: number; rows: Signal[] }>(`/api/signals?symbol=${encodeURIComponent(symbol)}&limit=200`),
   trades:     (params = '')                   => get<{ total: number; rows: Trade[] }>(`/api/trades${params}`),
   positions:  ()                              => get<Position[]>('/api/positions'),
   backtests:  (params = '')                   => get<{ total: number; rows: BacktestResult[] }>(`/api/backtests${params}`),

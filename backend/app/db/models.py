@@ -99,6 +99,7 @@ class BacktestResult(SQLModel, table=True):
     expectancy: float
     drawdown: float
     r_multiple: float
+    pipeline_run_id: Optional[str] = None
 
 
 class Log(SQLModel, table=True):

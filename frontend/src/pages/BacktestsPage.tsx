@@ -48,12 +48,12 @@ function BacktestDetailPanel({ r, simulatedTrades }: { r: BacktestResult; simula
     setSigError('');
     setSignals([]);
     setExpandedSigId(null);
-    api.signalsForBacktest(r.symbol)
+    api.signalsForBacktest(r.pipeline_run_id, r.symbol)
       .then(res => { if (!cancelled) setSignals(res.rows); })
       .catch(err => { if (!cancelled) setSigError(String(err)); })
       .finally(() => { if (!cancelled) setLoadingSigs(false); });
     return () => { cancelled = true; };
-  }, [r.symbol, r.timeframe]);
+  }, [r.pipeline_run_id, r.symbol]);
 
   const hasSimulatedTrades = simulatedTrades && simulatedTrades.length > 0;
   const q = qualityBadge(r.win_rate, r.profit_factor, r.drawdown);
@@ -1289,7 +1289,8 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
   const loadedEntries = loadedData ?? [];
   const hasData = loadedEntries.length > 0;
 
-  const [symbol, setSymbol]       = useState('');
+  const [selectedSymbols, setSelectedSymbols] = useState<string[]>([]);
+  const [btQuote, setBtQuote]     = useState('USDT');
   const [profileId, setProfileId] = useState<number | null>(null);
   const [report, setReport]       = useState<Record<string, unknown> | null>(null);
   const [lastResult, setLastResult] = useState<BacktestResult | null>(null);
@@ -1365,13 +1366,12 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
 
   // ── Derived from DB-loaded candle data ────────────────────────────────────
   const availableSymbols = useMemo(() => loadedEntries.map(e => e.symbol), [loadedEntries]);
-
-  // Auto-select first symbol when data arrives
-  useEffect(() => {
-    if (!symbol && loadedEntries.length > 0) {
-      setSymbol(loadedEntries[0].symbol);
-    }
-  }, [loadedEntries, symbol]);
+  const { data: byQuote } = useApi(() => api.symbolsByQuote());
+  const btUniverse = useMemo(() => {
+    const all = availableSymbols;
+    const fromQuote = ((byQuote ?? {})[btQuote] ?? []) as string[];
+    return fromQuote.length > 0 ? fromQuote.filter(s => all.includes(s)) : all;
+  }, [availableSymbols, byQuote, btQuote]);
 
   // ── History filters (client-side) ─────────────────────────────────────────
   const [filterSymbol, setFilterSymbol] = useState('');
@@ -1403,7 +1403,7 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
     setStatus('');
     setOptimizeTarget(null);
     try {
-      const res = await api.runBacktest({ symbol, profile_id: profileId });
+      const res = await api.runBacktest({ symbols: selectedSymbols, profile_id: profileId });
       if (res.ok) {
         setStatus('✅ Backtest terminé — rapport généré.');
         setReport(res.result as Record<string, unknown>);
@@ -1561,18 +1561,48 @@ export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../t
               {hasData && (
                 <>
                   <div className="form-group">
-                    <label>Crypto ({availableSymbols.length} disponibles en base)</label>
-                    <select value={symbol} onChange={e => setSymbol(e.target.value)}>
-                      {loadedEntries.map(e => {
-                        const totalCandles = e.total;
-                        const tfs = Object.keys(e.timeframes).sort().join(', ');
+                    <label>Cryptos à tester</label>
+                    {/* Quote filter tabs */}
+                    <div style={{ display: 'flex', gap: 5, marginBottom: 8 }}>
+                      {Object.keys(byQuote ?? { USDT: [] }).map(q => (
+                        <button key={q} onClick={() => { setBtQuote(q); setSelectedSymbols([]); }} style={{
+                          padding: '2px 10px', borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: 'pointer',
+                          border: `1px solid ${btQuote === q ? 'var(--accent)' : 'var(--border)'}`,
+                          background: btQuote === q ? 'rgba(59,130,246,0.15)' : 'var(--surface2)',
+                          color: btQuote === q ? 'var(--accent)' : 'var(--text-muted)',
+                        }}>{q}</button>
+                      ))}
+                    </div>
+                    {/* Selection count + clear */}
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span>{selectedSymbols.length} sélectionnée(s) sur {btUniverse.length}</span>
+                      {selectedSymbols.length > 0 && (
+                        <button onClick={() => setSelectedSymbols([])} style={{ fontSize: 10, color: 'var(--accent-red)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+                          tout décocher
+                        </button>
+                      )}
+                      <button onClick={() => setSelectedSymbols([...btUniverse])} style={{ fontSize: 10, color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, marginLeft: 'auto' }}>
+                        tout sélectionner
+                      </button>
+                    </div>
+                    {/* Symbol grid */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 3, maxHeight: 200, overflowY: 'auto' }}>
+                      {btUniverse.map(s => {
+                        const sel = selectedSymbols.includes(s);
                         return (
-                          <option key={e.symbol} value={e.symbol}>
-                            {fmtSym(e.symbol)} — {totalCandles.toLocaleString()} bougies ({tfs})
-                          </option>
+                          <label key={s} style={{
+                            display: 'flex', alignItems: 'center', gap: 4, padding: '3px 6px',
+                            borderRadius: 5, cursor: 'pointer', fontSize: 11, userSelect: 'none',
+                            background: sel ? 'rgba(59,130,246,0.12)' : 'transparent',
+                            border: `1px solid ${sel ? 'var(--accent)' : 'var(--border)'}`,
+                          }}>
+                            <input type="checkbox" checked={sel} style={{ width: 'auto', margin: 0 }}
+                              onChange={() => setSelectedSymbols(prev => sel ? prev.filter(x => x !== s) : [...prev, s])} />
+                            {fmtSym(s).split('/')[0]}
+                          </label>
                         );
                       })}
-                    </select>
+                    </div>
                   </div>
                 </>
               )}

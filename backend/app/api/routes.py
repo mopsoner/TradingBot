@@ -95,6 +95,7 @@ def get_signals(
     accepted: Optional[bool] = None,
     symbol: Optional[str] = None,
     timeframe: Optional[str] = None,
+    pipeline_run_id: Optional[str] = None,
 ) -> dict:
     with Session(engine) as s:
         q = select(Signal).order_by(Signal.timestamp.desc())
@@ -108,6 +109,9 @@ def get_signals(
         if timeframe is not None:
             q = q.where(Signal.timeframe == timeframe)
             count_q = count_q.where(Signal.timeframe == timeframe)
+        if pipeline_run_id is not None:
+            q = q.where(Signal.pipeline_run_id == pipeline_run_id)
+            count_q = count_q.where(Signal.pipeline_run_id == pipeline_run_id)
         total = s.exec(count_q).one()
         rows = s.exec(q.offset(offset).limit(limit)).all()
     return {"total": total, "rows": [r.model_dump() for r in rows]}
@@ -421,7 +425,7 @@ class LiveApprovalIn(BaseModel):
 
 
 class BacktestRunRequest(BaseModel):
-    symbol: str
+    symbols: list[str]
     profile_id: int | None = None
 
 
@@ -1152,13 +1156,17 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
         except Exception:
             profile_params = {}
 
+    symbols = [s.strip() for s in req.symbols if s.strip()]
+    if not symbols:
+        return {"ok": False, "reason": "Aucun symbole sélectionné"}
+
     run_id = str(uuid.uuid4())
-    _run_live_scan([req.symbol], "MTF", profile_params, run_id, profile_name)
+    _run_live_scan(symbols, "MTF", profile_params, run_id, profile_name)
 
     with Session(engine) as s:
         sigs = s.exec(
             select(Signal)
-            .where(Signal.symbol == req.symbol)
+            .where(Signal.pipeline_run_id == run_id)
             .order_by(Signal.timestamp)
         ).all()
 
@@ -1181,27 +1189,29 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
         equity += avg_r_win if sg.accepted else -1.0
         if equity > peak:
             peak = equity
-        dd = (peak - equity) / max(peak, 1.0)
-        if dd > max_dd:
-            max_dd = dd
+        if peak > 0:
+            dd = (peak - equity) / peak
+            if dd > max_dd:
+                max_dd = dd
     drawdown = max_dd
 
-    strategy_ver = profile_name
+    symbols_label = ", ".join(symbols)
 
     with Session(engine) as s:
         result = BacktestResult(
-            symbol=req.symbol,
+            symbol=symbols_label,
             timeframe="MTF",
-            strategy_version=strategy_ver,
+            strategy_version=profile_name,
             win_rate=win_rate,
             profit_factor=profit_factor,
             expectancy=expectancy,
             drawdown=drawdown,
             r_multiple=r_multiple,
+            pipeline_run_id=run_id,
         )
         s.add(result)
         s.add(Log(level="INFO", message=(
-            f"Backtest pipeline {req.symbol} — {strategy_ver}: "
+            f"Backtest pipeline [{symbols_label}] — {profile_name}: "
             f"{n_accepted}/{n_total} signaux acceptés "
             f"WR={win_rate:.1%} PF={profit_factor:.2f}"
         )))
@@ -1210,22 +1220,23 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
 
     report = (
         f"# Backtest Pipeline Report\n"
-        f"- Symbol: {req.symbol}\n"
+        f"- Symboles: {symbols_label}\n"
         f"- Timeframe: MTF (4H→1H→15m→5m)\n"
-        f"- Strategy: {strategy_ver}\n"
-        f"- Signaux historiques analysés: {n_total}\n"
+        f"- Strategy: {profile_name}\n"
+        f"- Signaux analysés (ce run): {n_total}\n"
         f"- Signaux acceptés: {n_accepted} / {n_total}\n"
         f"- Win rate: {win_rate:.2%}\n"
         f"- Profit factor: {profit_factor:.2f}\n"
         f"- Drawdown max: {drawdown:.2%}\n"
         f"- Expectancy: {expectancy:.4f}R\n"
-        f"- R total accumulé: {r_multiple:.2f}R\n"
+        f"- R total: {r_multiple:.2f}R\n"
     )
 
     trades = [
         {
             "index": i + 1,
-            "direction": ("LONG" if sg.direction == "LONG" else "SHORT") if sg.direction else "LONG",
+            "symbol": sg.symbol,
+            "direction": (sg.direction or "LONG"),
             "outcome": "win" if sg.accepted else "loss",
             "r_multiple": round(avg_r_win if sg.accepted else -1.0, 4),
             "timestamp": sg.timestamp.isoformat() if sg.timestamp else "",
