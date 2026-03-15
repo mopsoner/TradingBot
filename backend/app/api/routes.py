@@ -102,6 +102,7 @@ def get_signals(
     timeframe: Optional[str] = None,
     pipeline_run_id: Optional[str] = None,
     run_prefix: Optional[str] = None,  # walk-forward: match pipeline_run_id LIKE '{prefix}%'
+    mode: Optional[str] = None,        # "backtest" | "scanner" — filters by bt_outcome presence
 ) -> dict:
     with Session(engine) as s:
         q = select(Signal).order_by(Signal.timestamp.desc())
@@ -122,6 +123,12 @@ def get_signals(
             like_pat = f"{run_prefix}%"
             q = q.where(Signal.pipeline_run_id.like(like_pat))  # type: ignore[union-attr]
             count_q = count_q.where(Signal.pipeline_run_id.like(like_pat))  # type: ignore[union-attr]
+        if mode == "backtest":
+            q = q.where(Signal.bt_outcome != None)   # noqa: E711
+            count_q = count_q.where(Signal.bt_outcome != None)  # noqa: E711
+        elif mode == "scanner":
+            q = q.where(Signal.bt_outcome == None)   # noqa: E711
+            count_q = count_q.where(Signal.bt_outcome == None)  # noqa: E711
         total = s.exec(count_q).one()
         rows = s.exec(q.offset(offset).limit(limit)).all()
     return {"total": total, "rows": [r.model_dump() for r in rows]}

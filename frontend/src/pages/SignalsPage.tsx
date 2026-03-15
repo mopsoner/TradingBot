@@ -182,18 +182,27 @@ const FILTER_OPTIONS = [
   { id: 'rejected', label: 'Rejetés' },
 ] as const;
 
+type ModeFilter = 'all' | 'backtest' | 'scanner';
+
 export function SignalsPage() {
   const [filter, setFilter] = useState<'all' | 'accepted' | 'rejected'>('all');
+  const [modeFilter, setModeFilter] = useState<ModeFilter>('all');
+  const [symbolFilter, setSymbolFilter] = useState<string>('');
   const [selected, setSelected] = useState<Signal | null>(null);
   const [pipelineData, setPipelineData] = useState<PipelineState | null>(null);
   const pollRef = useRef<number | null>(null);
   const [detailRunId, setDetailRunId] = useState<string | null>(null);
 
-  const params =
-    filter === 'accepted' ? '?accepted=true' :
-    filter === 'rejected' ? '?accepted=false' : '';
+  const params = (() => {
+    const parts: string[] = [];
+    if (filter === 'accepted') parts.push('accepted=true');
+    if (filter === 'rejected') parts.push('accepted=false');
+    if (modeFilter !== 'all') parts.push(`mode=${modeFilter}`);
+    if (symbolFilter) parts.push(`symbol=${encodeURIComponent(symbolFilter)}`);
+    return parts.length ? `?${parts.join('&')}` : '';
+  })();
 
-  const { data, loading, error } = useApi(() => api.signals(params), [filter]);
+  const { data, loading, error } = useApi(() => api.signals(params), [filter, modeFilter, symbolFilter]);
   const { sorted: sortedRows, Th } = useSortable<Signal>(data?.rows ?? [], 'timestamp', 'desc');
 
   useEffect(() => {
@@ -247,6 +256,68 @@ export function SignalsPage() {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* ── Filtres mode + crypto ──────────────────────────── */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+        {/* Mode filter */}
+        <div style={{ display: 'flex', background: 'var(--surface2)', borderRadius: 8, padding: 3, gap: 2, border: '1px solid var(--border)' }}>
+          {([
+            ['all',      'Tous les modes'],
+            ['backtest', '📊 Backtest'],
+            ['scanner',  '🔍 Scanner'],
+          ] as [ModeFilter, string][]).map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => setModeFilter(id)}
+              style={{
+                padding: '5px 13px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+                cursor: 'pointer', transition: 'all 0.15s',
+                background: modeFilter === id ? 'var(--surface3, #1c2128)' : 'transparent',
+                color: modeFilter === id ? 'var(--text)' : 'var(--text-muted)',
+                border: modeFilter === id ? '1px solid var(--border)' : '1px solid transparent',
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Symbol filter */}
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+          <span style={{ position: 'absolute', left: 9, fontSize: 12, color: 'var(--text-muted)', pointerEvents: 'none' }}>🔎</span>
+          <select
+            value={symbolFilter}
+            onChange={e => setSymbolFilter(e.target.value)}
+            style={{
+              paddingLeft: 28, paddingRight: 10, paddingTop: 6, paddingBottom: 6,
+              borderRadius: 8, fontSize: 12, fontWeight: 600,
+              border: `1px solid ${symbolFilter ? 'var(--accent)' : 'var(--border)'}`,
+              background: symbolFilter ? 'rgba(59,130,246,0.08)' : 'var(--surface2)',
+              color: symbolFilter ? 'var(--accent)' : 'var(--text)',
+              cursor: 'pointer', minWidth: 140,
+            }}
+          >
+            <option value="">— Toutes cryptos —</option>
+            {[...new Set(data?.rows.map(r => r.symbol) ?? [])].sort().map(sym => (
+              <option key={sym} value={sym}>{fmtSym(sym)}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Reset chip */}
+        {(modeFilter !== 'all' || symbolFilter) && (
+          <button
+            onClick={() => { setModeFilter('all'); setSymbolFilter(''); }}
+            style={{
+              padding: '5px 12px', borderRadius: 8, fontSize: 11, fontWeight: 700,
+              border: '1px solid var(--border)', background: 'transparent',
+              color: 'var(--text-muted)', cursor: 'pointer',
+            }}
+          >
+            ✕ Réinitialiser
+          </button>
+        )}
       </div>
 
       {/* ── Pipeline actif ────────────────────────────────── */}

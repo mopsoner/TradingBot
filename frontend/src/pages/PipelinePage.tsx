@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
-import type { PipelineEntry, PipelineStep, PipelineRunRecord } from '../services/api';
+import type { PipelineEntry, PipelineStep, PipelineRunRecord, ProcessStatus } from '../services/api';
 import { nowTime, fmtSym, fmtDateTime } from '../utils/dateUtils';
 import { PipelineRunDetailModal } from '../components/PipelineRunDetail';
 
@@ -76,6 +76,116 @@ function StepDot({ step, index }: { step: PipelineStep; index: number }) {
         </span>
       )}
     </span>
+  );
+}
+
+const PROC_COLOR: Record<string, string> = {
+  scanner:  'var(--accent-green)',
+  pipeline: 'var(--accent)',
+  backtest: '#a855f7',
+  live:     'var(--accent-red)',
+  import:   '#06b6d4',
+};
+
+function PipelineProcessCard() {
+  const [processes, setProcesses] = useState<ProcessStatus[]>([]);
+  const [totalRunning, setTotalRunning] = useState(0);
+  const [stopping, setStopping] = useState<string | null>(null);
+
+  const load = () => {
+    api.systemProcesses().then(d => {
+      setProcesses(d.processes);
+      setTotalRunning(d.total_running);
+    }).catch(() => {});
+  };
+
+  useEffect(() => {
+    load();
+    const poll = setInterval(load, 4000);
+    return () => clearInterval(poll);
+  }, []);
+
+  const handleStop = async (procId: string) => {
+    setStopping(procId);
+    try { await api.autonomousStop(); } catch { /**/ }
+    setTimeout(() => { load(); setStopping(null); }, 800);
+  };
+
+  if (processes.length === 0) return null;
+
+  return (
+    <div className="card" style={{ marginBottom: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <h3 style={{ margin: 0, fontSize: 14 }}>Processus actifs</h3>
+        <span style={{
+          fontSize: 11, fontWeight: 700, padding: '2px 10px', borderRadius: 10,
+          background: totalRunning > 0 ? 'rgba(59,130,246,0.15)' : 'rgba(100,116,139,0.12)',
+          color: totalRunning > 0 ? 'var(--accent)' : 'var(--text-muted)',
+        }}>
+          {totalRunning} actif{totalRunning !== 1 ? 's' : ''}
+        </span>
+      </div>
+      {processes.map((p: ProcessStatus) => {
+        const color = PROC_COLOR[p.type] ?? 'var(--text-muted)';
+        const running = p.status === 'running';
+        const isImport = p.type === 'import';
+        const canStop = running && (p.type === 'scanner' || p.type === 'pipeline' || p.type === 'live');
+        const rgb = p.type === 'scanner' ? '34,197,94' : p.type === 'pipeline' ? '59,130,246' : p.type === 'live' ? '248,81,73' : p.type === 'import' ? '6,182,212' : '168,85,247';
+        return (
+          <div key={p.id} style={{
+            display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px',
+            borderRadius: 8, marginBottom: 6,
+            background: running ? `rgba(${rgb},0.06)` : 'rgba(100,116,139,0.07)',
+            border: `1px solid ${running ? color + '44' : 'var(--border)'}`,
+          }}>
+            <span style={{
+              width: 10, height: 10, borderRadius: '50%', flexShrink: 0,
+              background: running ? color : 'var(--text-muted)',
+              boxShadow: running ? `0 0 8px ${color}` : 'none',
+              animation: running ? 'pulse 2s infinite' : 'none',
+            }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, color: running ? 'var(--text)' : 'var(--text-muted)' }}>
+                {p.label}
+              </div>
+              {p.detail && (
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {p.detail}
+                </div>
+              )}
+              {isImport && p.pct_done !== undefined && (
+                <div style={{ marginTop: 4, height: 4, borderRadius: 2, background: 'rgba(100,116,139,0.15)', overflow: 'hidden' }}>
+                  <div style={{
+                    height: '100%', borderRadius: 2,
+                    width: `${p.pct_done}%`,
+                    background: p.status === 'error' ? 'var(--accent-red)' : '#06b6d4',
+                    transition: 'width 0.3s ease',
+                  }} />
+                </div>
+              )}
+            </div>
+            {canStop ? (
+              <button
+                onClick={() => handleStop(p.id)}
+                disabled={stopping === p.id}
+                style={{
+                  padding: '5px 12px', borderRadius: 6, fontSize: 11, fontWeight: 700, flexShrink: 0,
+                  border: '1px solid rgba(239,68,68,0.45)',
+                  background: stopping === p.id ? 'rgba(239,68,68,0.06)' : 'rgba(239,68,68,0.13)',
+                  color: 'var(--accent-red)',
+                  cursor: stopping === p.id ? 'default' : 'pointer',
+                  opacity: stopping === p.id ? 0.6 : 1,
+                }}
+              >
+                {stopping === p.id ? 'Arrêt…' : '⏹ Arrêter'}
+              </button>
+            ) : !running ? (
+              <span style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0 }}>Terminé</span>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -333,6 +443,8 @@ export function PipelinePage() {
           </button>
         </div>
       </div>
+
+      <PipelineProcessCard />
 
       <div className="grid-2" style={{ marginBottom: 20 }}>
         {/* Config card */}
