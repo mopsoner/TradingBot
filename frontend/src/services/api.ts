@@ -166,6 +166,8 @@ export const api = {
   ingestData:    (body: Record<string, unknown>[]) => post<Record<string, unknown>>('/api/data/ingest', body),
   fetchCandles:  (body: { symbols: string[]; timeframe: string; days: number; source?: string }) =>
     post<Record<string, unknown>>('/api/data/fetch', body),
+  fetchBulk: (body: { symbols: string[]; timeframes?: string[]; days: number; source?: string }) =>
+    post<Record<string, unknown>>('/api/data/fetch/bulk', body),
   importCsv:     (body: { symbol: string; timeframe: string; csv_text: string }) =>
     post<Record<string, unknown>>('/api/data/import/csv', body),
   deleteCandles: (body: { symbol: string; timeframe?: string }) =>

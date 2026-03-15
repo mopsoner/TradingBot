@@ -49,6 +49,7 @@ export function DataManagerPage({ onNavigate }: Props) {
   const { data: prices } = useApi(() => api.symbolPrices());
   const { data: stats, reload: refreshStats } = useApi(() => api.dataStats());
   const { data: candles, reload: refreshCandles } = useApi(() => api.candles('?limit=50'));
+  const { data: dbStats, reload: refreshDbStats } = useApi(() => api.dataStats());
 
   const [quote, setQuote] = useState<string>('USDT');
   const quotes = Object.keys(byQuote ?? { USDT: [] });
@@ -58,6 +59,7 @@ export function DataManagerPage({ onNavigate }: Props) {
   const [days, setDays] = useState(365);
   const [loading, setLoading] = useState<string | null>(null);
   const [loadingAll, setLoadingAll] = useState<string | null>(null);
+  const [bulkLoading, setBulkLoading] = useState(false);
   const [results, setResults] = useState<ImportResult[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<{ symbol: string; tf?: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -205,6 +207,30 @@ export function DataManagerPage({ onNavigate }: Props) {
     } catch {
       setLoading(null);
       setLoadingAll(null);
+    }
+  };
+
+  const importAllBinance = async () => {
+    if (selected.size === 0 || bulkLoading || loading || loadingAll) return;
+    setBulkLoading(true);
+    setResults([]);
+    const syms = Array.from(selected);
+    try {
+      const res = await api.fetchBulk({
+        symbols: syms,
+        timeframes: ['5m', '15m', '1h', '4h'],
+        days,
+        source: 'binance',
+      }) as Record<string, unknown>;
+      if (res.async === true) {
+        const jobs = (res.jobs as { job_id: string; symbol: string; timeframe: string }[]) ?? [];
+        startImportPoll(jobs.map(j => j.job_id));
+      }
+    } catch (e) {
+      console.error(e);
+      setResults([{ ok: false, error: String(e) }]);
+    } finally {
+      setBulkLoading(false);
     }
   };
 
@@ -386,19 +412,42 @@ export function DataManagerPage({ onNavigate }: Props) {
               <button
                 className="btn btn-primary"
                 style={{
-                  width: '100%', padding: '12px 20px', fontSize: 14, fontWeight: 700,
-                  marginBottom: 12, letterSpacing: 0.3,
-                  background: loadingAll
-                    ? 'linear-gradient(135deg, rgba(59,130,246,0.25), rgba(124,58,237,0.25))'
-                    : 'linear-gradient(135deg, var(--accent), #7c3aed)',
-                  border: loadingAll ? '1px solid rgba(59,130,246,0.3)' : 'none',
+                  width: '100%', padding: '14px 20px', fontSize: 14, fontWeight: 700,
+                  marginBottom: 8, letterSpacing: 0.3,
+                  background: bulkLoading
+                    ? 'linear-gradient(135deg, rgba(240,185,11,0.25), rgba(240,185,11,0.15))'
+                    : 'linear-gradient(135deg, #f0b90b, #e58e00)',
+                  border: bulkLoading ? '1px solid rgba(240,185,11,0.4)' : 'none',
+                  color: '#000',
+                  boxShadow: bulkLoading ? 'none' : '0 0 12px rgba(240,185,11,0.35)',
                 }}
-                disabled={!!loading || !!loadingAll || selected.size === 0 || activeJobIds.length > 0}
+                disabled={!!loading || !!loadingAll || bulkLoading || selected.size === 0 || activeJobIds.length > 0}
+                onClick={importAllBinance}
+              >
+                {bulkLoading
+                  ? 'Binance — Import en cours…'
+                  : `Binance — Fetch 5m + 15m + 1h + 4h (${days}j)`}
+              </button>
+
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 12, paddingLeft: 2 }}>
+                Utilise l'API publique Binance — données réelles 15m/5m sans limite yfinance
+              </div>
+
+              <button
+                className="btn btn-secondary"
+                style={{
+                  width: '100%', padding: '10px 20px', fontSize: 13, fontWeight: 600,
+                  marginBottom: 12,
+                  background: loadingAll
+                    ? 'rgba(59,130,246,0.08)'
+                    : 'var(--surface2)',
+                }}
+                disabled={!!loading || !!loadingAll || bulkLoading || selected.size === 0 || activeJobIds.length > 0}
                 onClick={importAllTf}
               >
                 {loadingAll
                   ? `Import ${loadingAll}…`
-                  : `Importer tous les timeframes (${TIMEFRAMES.map(t => t.value).join(' + ')})`}
+                  : `Source actuelle — tous les TF (${candleSource})`}
               </button>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -578,6 +627,79 @@ export function DataManagerPage({ onNavigate }: Props) {
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div className="card">
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <h3 style={{ margin: 0 }}>Couverture DB par TF</h3>
+              <button
+                className="btn btn-secondary"
+                style={{ fontSize: 11, padding: '3px 10px' }}
+                onClick={() => { refreshStats(); refreshDbStats(); }}
+              >↻ Actualiser</button>
+            </div>
+            {(() => {
+              const coverage = (dbStats?.coverage as Array<{symbol: string; timeframe: string; count: number; from: string; to: string}> | undefined) ?? [];
+              const allSymbols = [...new Set(coverage.map(c => c.symbol))].sort();
+              const allTfs = ['5m', '15m', '1h', '4h'];
+              if (allSymbols.length === 0) {
+                return (
+                  <div style={{ textAlign: 'center', padding: 24, opacity: 0.5, fontSize: 13 }}>
+                    Aucune donnée — importez des bougies
+                  </div>
+                );
+              }
+              return (
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr>
+                        <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid var(--border)', color: 'var(--text-muted)', fontWeight: 600 }}>Symbole</th>
+                        {allTfs.map(tf => (
+                          <th key={tf} style={{ textAlign: 'center', padding: '6px 8px', borderBottom: '1px solid var(--border)', color: 'var(--text-muted)', fontWeight: 600 }}>{tf}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {allSymbols.map(sym => (
+                        <tr key={sym}>
+                          <td style={{ padding: '8px 8px', borderBottom: '1px solid var(--border)', fontWeight: 700 }}>
+                            {sym.replace('USDT', '')}
+                          </td>
+                          {allTfs.map(tf => {
+                            const cell = coverage.find(c => c.symbol === sym && c.timeframe === tf);
+                            return (
+                              <td key={tf} style={{ textAlign: 'center', padding: '8px 4px', borderBottom: '1px solid var(--border)' }}>
+                                {cell ? (
+                                  <div>
+                                    <div style={{
+                                      display: 'inline-block', padding: '2px 7px', borderRadius: 5,
+                                      fontSize: 11, fontWeight: 700,
+                                      background: 'rgba(34,197,94,0.12)', color: '#22c55e',
+                                      marginBottom: 2,
+                                    }}>
+                                      {cell.count.toLocaleString()}
+                                    </div>
+                                    <div style={{ fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.3 }}>
+                                      {cell.from}<br/>{cell.to}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span style={{
+                                    display: 'inline-block', padding: '2px 7px', borderRadius: 5,
+                                    fontSize: 11, background: 'rgba(239,68,68,0.1)', color: '#ef4444',
+                                  }}>—</span>
+                                )}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
+          </div>
+
           <div className="card">
             <h3>Bougies récentes</h3>
             <div style={{ maxHeight: 380, overflowY: 'auto' }}>

@@ -112,7 +112,7 @@ class SessionSettings(BaseModel):
 
 class DataSettings(BaseModel):
     candle_source: str = Field(
-        "yfinance",
+        "binance",
         description="Source de données bougies : 'binance' (API Binance), 'yfinance' (Yahoo Finance)",
     )
 

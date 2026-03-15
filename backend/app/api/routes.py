@@ -219,10 +219,28 @@ def data_stats() -> dict:
         latest = s.exec(select(MarketCandle).order_by(MarketCandle.timestamp.desc()).limit(1)).first()
         symbols = s.exec(select(MarketCandle.symbol)).all()
         unique_symbols = sorted(list(set(symbols)))
+
+        # Per (symbol, timeframe) breakdown
+        from sqlalchemy import text as sa_text
+        rows = s.exec(sa_text(
+            "SELECT symbol, timeframe, COUNT(*) as n, MIN(timestamp) as ts_min, MAX(timestamp) as ts_max "
+            "FROM marketcandle GROUP BY symbol, timeframe ORDER BY symbol, timeframe"
+        )).fetchall()
+        coverage: list[dict] = []
+        for row in rows:
+            coverage.append({
+                "symbol": row[0],
+                "timeframe": row[1],
+                "count": row[2],
+                "from": str(row[3])[:10] if row[3] else None,
+                "to": str(row[4])[:10] if row[4] else None,
+            })
+
     return {
         "total_candles": total_candles,
         "tracked_symbols": unique_symbols,
         "last_candle_at": latest.timestamp if latest else None,
+        "coverage": coverage,
     }
 
 
@@ -1097,6 +1115,54 @@ def fetch_candles(req: FetchRequest) -> dict:
         jobs.append({"job_id": job_id, "symbol": symbol, "timeframe": tf})
 
     return {"ok": True, "async": True, "jobs": jobs}
+
+
+class BulkFetchRequest(BaseModel):
+    symbols: list[str] = Field(min_length=1)
+    timeframes: list[str] = Field(default_factory=lambda: ["5m", "15m", "1h", "4h"])
+    days: int = Field(default=365, ge=0, le=1460)
+    source: str = Field(default="binance")
+
+
+@router.post("/data/fetch/bulk")
+def fetch_candles_bulk(req: BulkFetchRequest) -> dict:
+    """
+    Fetch all specified timeframes for all specified symbols in one call.
+    Launches one background job per (symbol × timeframe) pair.
+    Always uses the Binance public API by default for accurate multi-TF data.
+    """
+    source = req.source if req.source in ("binance", "yfinance") else "binance"
+    valid_tfs = [tf for tf in req.timeframes if tf in ("5m", "15m", "1h", "4h", "1d")]
+    if not valid_tfs:
+        valid_tfs = ["5m", "15m", "1h", "4h"]
+
+    jobs = []
+    for symbol in req.symbols:
+        for tf in valid_tfs:
+            job_id = str(uuid.uuid4())
+            with _active_imports_lock:
+                _active_imports[job_id] = {
+                    "symbol": symbol,
+                    "tf": tf,
+                    "source": source,
+                    "page": 0,
+                    "total_pages": 0,
+                    "candles": 0,
+                    "inserted": 0,
+                    "status": "running",
+                    "started_at": time.time(),
+                    "completed_at": None,
+                    "error": None,
+                }
+            t = threading.Thread(
+                target=_do_import_bg,
+                args=(job_id, symbol, tf, req.days, source),
+                daemon=True,
+            )
+            t.start()
+            jobs.append({"job_id": job_id, "symbol": symbol, "timeframe": tf})
+
+    return {"ok": True, "async": True, "jobs": jobs, "total": len(jobs)}
 
 
 class CsvImportRequest(BaseModel):
