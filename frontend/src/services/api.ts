@@ -47,6 +47,7 @@ export type Signal = {
   entry_price?: number | null;
   sl_price?: number | null;
   tp_price?: number | null;
+  mode?: 'paper' | 'live' | 'research' | 'backtest' | null;
 };
 
 export type PipelineRunRecord = {

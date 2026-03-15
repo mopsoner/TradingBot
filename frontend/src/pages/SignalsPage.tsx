@@ -248,7 +248,7 @@ const FILTER_OPTIONS = [
   { id: 'rejected', label: 'Rejetés' },
 ] as const;
 
-type ModeFilter = 'all' | 'backtest' | 'scanner';
+type ModeFilter = 'all' | 'backtest' | 'paper' | 'live' | 'research';
 
 export function SignalsPage() {
   const [filter, setFilter] = useState<'all' | 'accepted' | 'rejected'>('all');
@@ -329,9 +329,11 @@ export function SignalsPage() {
         {/* Mode filter */}
         <div style={{ display: 'flex', background: 'var(--surface2)', borderRadius: 8, padding: 3, gap: 2, border: '1px solid var(--border)' }}>
           {([
-            ['all',      'Tous les modes'],
+            ['all',      'Tous'],
             ['backtest', '📊 Backtest'],
-            ['scanner',  '🔍 Scanner'],
+            ['paper',    '🧪 Paper'],
+            ['live',     '🔴 Live'],
+            ['research', '🔬 Research'],
           ] as [ModeFilter, string][]).map(([id, label]) => (
             <button
               key={id}

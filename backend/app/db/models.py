@@ -59,6 +59,7 @@ class Signal(SQLModel, table=True):
     entry_price: Optional[float] = None
     tp_price: Optional[float] = None
     sl_price: Optional[float] = None
+    mode: Optional[str] = None            # "paper" | "live" | "research" | "backtest"
 
 
 class Trade(SQLModel, table=True):
