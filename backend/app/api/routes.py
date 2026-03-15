@@ -1548,12 +1548,37 @@ def run_walkforward(req: WalkForwardRequest) -> dict:
         rr_ratio=rr_ratio,
     )
 
+    # ── Persist BacktestResult ────────────────────────────────────────────────
+    profile_name_label = profile.name if req.profile_id and profile else f"SMC/Wyckoff — yfinance"
+    gross_win  = sum(s.r_multiple for s in result.signals if s.result == "win")
+    gross_loss = sum(abs(s.r_multiple) for s in result.signals if s.result == "loss")
+    wins   = [s for s in result.signals if s.result == "win"]
+    losses = [s for s in result.signals if s.result == "loss"]
+    _wr    = result.win_rate
+    _pf    = result.profit_factor
+    _exp   = (_wr * (gross_win / len(wins) if wins else 0) - (1 - _wr) * (gross_loss / len(losses) if losses else 0))
+    _rmult = (gross_win / len(wins)) if wins else 0
+    _bt = BacktestResult(
+        symbol=req.symbol, timeframe=req.timeframe,
+        strategy_version=profile_name_label,
+        win_rate=round(_wr, 4), profit_factor=round(_pf, 4),
+        expectancy=round(_exp, 4), drawdown=round(result.max_drawdown, 4),
+        r_multiple=round(_rmult, 4),
+        signal_count=result.total_signals,
+        date_from=str(result.period_start)[:10] if result.period_start else None,
+        date_to=str(result.period_end)[:10] if result.period_end else None,
+        profile_id=req.profile_id,
+        overrides_json=json.dumps(config.backtest.overrides.model_dump()),
+    )
     with Session(engine) as s:
+        s.add(_bt)
         s.add(Log(level="INFO", message=f"Walk-forward {req.symbol} {req.timeframe} {req.years}y: {result.total_signals} signals, WR {result.win_rate:.2%}, PF {result.profit_factor:.2f}"))
         s.commit()
+        s.refresh(_bt)
 
     return {
         "ok": True,
+        "backtest_id": _bt.id,
         "signals": [
             {
                 "timestamp": sig.timestamp,

@@ -43,11 +43,7 @@ class SystemSettings(BaseModel):
 
 class TradingSettings(BaseModel):
     enabled_symbols: list[str] = Field(default_factory=lambda: [
-        "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "AVAXUSDT",
-        "XRPUSDT", "ADAUSDT", "DOGEUSDT", "DOTUSDT", "MATICUSDT",
-        "LINKUSDT", "UNIUSDT", "LTCUSDT", "ATOMUSDT", "NEARUSDT",
-        "AAVEUSDT", "FILUSDT", "APTUSDT", "ARBUSDT", "OPUSDT",
-        "SUIUSDT", "INJUSDT", "TIAUSDT", "SEIUSDT", "WLDUSDT",
+        "BTCUSDT", "ETHUSDT",
     ])
     risk_per_symbol: dict[str, float] = Field(default_factory=dict)
     max_open_per_symbol: dict[str, int] = Field(default_factory=dict)
