@@ -97,10 +97,10 @@ function JournalRow({ row }: { row: Signal }) {
           marginTop: 10,
         }}>
           {[
-            ['Zone liquidité', row.liquidity_zone],
-            ['Sweep level', row.sweep_level != null ? `${row.sweep_level}%` : null],
-            ['BOS level', row.bos_level != null ? `${row.bos_level}` : null],
-            ['Displacement', row.displacement_force != null ? row.displacement_force.toFixed(3) : null],
+            ['Zone liquidité', row.liquidity_zone && row.liquidity_zone !== 'N/A' ? row.liquidity_zone : null],
+            ['Sweep level', row.sweep_level != null && row.sweep_level > 0 ? row.sweep_level.toFixed(4) : null],
+            ['BOS level', row.bos_level != null && row.bos_level > 0 ? row.bos_level.toFixed(4) : null],
+            ['Displacement', row.displacement_force != null && row.displacement_force > 0 ? row.displacement_force.toFixed(3) : null],
             ['4H structure', row.tf_4h_structure],
             ['1H validation', row.tf_1h_validation],
             ['Setup type', row.setup_type],

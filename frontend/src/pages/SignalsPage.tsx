@@ -101,7 +101,7 @@ function SignalDetailModal({ signal, onClose }: { signal: Signal; onClose: () =>
             <div className="field-group">
               <div className="field-label">Niveau Sweep</div>
               <div className="field-value">
-                {signal.sweep_level > 0 ? `${signal.sweep_level.toFixed(2)} %` : '—'}
+                {signal.sweep_level > 0 ? signal.sweep_level.toFixed(4) : '—'}
               </div>
             </div>
             <div className="field-group">
@@ -392,8 +392,8 @@ export function SignalsPage() {
                             <span className="tag" style={{ fontSize: 11 }}>{s.timeframe}</span>
                           </td>
                           <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text-soft)' }}>{s.setup_type || '—'}</td>
-                          <td style={{ padding: '10px 14px', fontWeight: 600, fontSize: 13 }}>{s.sweep_level > 0 ? `${s.sweep_level.toFixed(2)}%` : '—'}</td>
-                          <td style={{ padding: '10px 14px', fontWeight: 600, fontSize: 13 }}>{s.bos_level > 0 ? s.bos_level.toFixed(2) : '—'}</td>
+                          <td style={{ padding: '10px 14px', fontWeight: 600, fontSize: 13 }}>{s.sweep_level > 0 ? s.sweep_level.toFixed(4) : '—'}</td>
+                          <td style={{ padding: '10px 14px', fontWeight: 600, fontSize: 13 }}>{s.bos_level > 0 ? s.bos_level.toFixed(4) : '—'}</td>
                           <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text-soft)' }}>{s.fib_zone && s.fib_zone !== 'N/A' ? s.fib_zone : '—'}</td>
                           <td style={{ padding: '10px 14px' }}>
                             <span className={`badge ${s.accepted ? 'badge-green' : 'badge-gray'}`}>
