@@ -1552,6 +1552,46 @@ def _set_step(symbol: str, idx: int, status: str, detail: str = "") -> None:
             step["detail"] = detail
 
 
+def _get_last_price(symbol: str) -> float:
+    """
+    Retourne le dernier prix de clôture réel pour le symbole.
+    Priorité : 1) dernière bougie MarketCandle en DB
+               2) yfinance (1 bougie horaire)
+               3) fallback simulé rng.uniform(80, 120)
+    """
+    try:
+        with Session(engine) as s:
+            candle = s.exec(
+                select(MarketCandle)
+                .where(MarketCandle.symbol == symbol)
+                .order_by(MarketCandle.timestamp.desc())  # type: ignore[arg-type]
+                .limit(1)
+            ).first()
+            if candle and candle.close and candle.close > 0:
+                return round(candle.close, 4)
+    except Exception:
+        pass
+
+    try:
+        from backend.app.services.candle_importer import YF_TICKER_MAP
+        import yfinance as yf
+        ticker = YF_TICKER_MAP.get(symbol.upper(), symbol.upper().replace("USDT", "-USD"))
+        df = yf.download(ticker, period="1d", interval="1h", progress=False, auto_adjust=True)
+        if not df.empty:
+            if hasattr(df.columns, "get_level_values"):
+                import pandas as pd
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+            last_close = float(df["Close"].iloc[-1])
+            if last_close > 0:
+                return round(last_close, 4)
+    except Exception:
+        pass
+
+    rng_fallback = random.Random()
+    return round(rng_fallback.uniform(80, 120), 4)
+
+
 def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pipeline_run_id: str | None = None, profile_name: str = "SMC/Wyckoff") -> None:
     """
     Pipeline live SMC/Wyckoff conforme au cahier des charges.
@@ -1616,8 +1656,8 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
                 _pipeline[sym]["final_reason"] = reason
                 _pipeline[sym]["completed_at"] = datetime.now(timezone.utc).isoformat()
 
-        # Prix de référence simulé pour ce symbole (base pour sweep, BOS, entry)
-        base_price = round(rng.uniform(80, 120), 4)
+        # Prix de référence réel pour ce symbole (DB → yfinance → fallback)
+        base_price = _get_last_price(symbol)
         sweep_price: float = 0.0
 
         try:
