@@ -167,21 +167,24 @@ def detect_wyckoff(
     structure_4h: str,
     enable_spring: bool = True,
     enable_utad: bool = True,
+    lookback: int = 5,
 ) -> tuple[bool, bool, Optional[str], str]:
     """
     Returns (spring, utad, direction, wyckoff_event).
     Spring → bullish (LONG), UTAD → bearish (SHORT).
-    Scans the last 5 candles so a Spring/UTAD a few bars ago still qualifies.
+    `lookback` controls how many recent candles are scanned for the event
+    (live=5, backtest=20 for a wider detection window).
     """
     if len(candles_15m) < 6:
         return False, False, None, "Aucun"
 
-    # Use a wider window for swing detection (n=1 = more sensitive)
-    reference = candles_15m[-20:]
+    # Reference window for swing detection
+    ref_window = max(lookback + 5, 20)
+    reference  = candles_15m[-ref_window:]
     highs, lows = swing_highs_lows(reference, n=1) if len(reference) >= 5 else ([], [])
 
-    # Check the last 5 candles for a Spring or UTAD event
-    for last in reversed(candles_15m[-5:]):
+    # Scan the last `lookback` candles for a Spring or UTAD event
+    for last in reversed(candles_15m[-lookback:]):
         if enable_spring and structure_4h in ("Bullish", "Neutre / Range") and lows:
             ref_low = lows[-1].low
             if last.low < ref_low and last.close > ref_low:

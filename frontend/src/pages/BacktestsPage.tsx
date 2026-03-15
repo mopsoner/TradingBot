@@ -1,2249 +1,459 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
-import type { BacktestResult, Signal, SimulatedTrade } from '../services/api';
-import { TIMEFRAMES } from '../constants';
-import { fmtSym } from '../utils/dateUtils';
-import { Tooltip } from '../components/Tooltip';
-import { useSortable } from '../hooks/useSortable';
+import type { AdminPage } from '../types';
+import type { BacktestResult, Signal } from '../services/api';
 
+/* ── Helpers ─────────────────────────────────────────────────────────────── */
 function pct(n: number) { return (n * 100).toFixed(1) + '%'; }
 function num(n: number, d = 2) { return n.toFixed(d); }
-
-function qualityBadge(wr: number, pf: number, dd: number): { label: string; color: string; bg: string } {
-  const score = (wr >= 0.55 ? 2 : wr >= 0.45 ? 1 : 0) +
-                (pf >= 1.5 ? 2 : pf >= 1.1 ? 1 : 0) +
-                (dd <= 0.08 ? 2 : dd <= 0.15 ? 1 : 0);
-  if (score >= 5) return { label: 'Excellent',   color: '#22c55e', bg: 'rgba(34,197,94,0.12)' };
-  if (score >= 3) return { label: 'Bon',         color: '#3b82f6', bg: 'rgba(59,130,246,0.12)' };
-  if (score >= 2) return { label: 'Attention',   color: '#eab308', bg: 'rgba(234,179,8,0.12)' };
-  return                  { label: 'Insuffisant', color: '#ef4444', bg: 'rgba(239,68,68,0.12)' };
-}
-
-function fmtZonePrice(n: number): string {
+function fmtPrice(n: number) {
   if (n >= 10000) return n.toLocaleString(undefined, { maximumFractionDigits: 0 });
   if (n >= 100)   return n.toFixed(2);
   if (n >= 1)     return n.toFixed(4);
   return n.toFixed(6);
 }
-
-function fmtZone(name: string, low?: number | null, high?: number | null): string {
-  if (!name || name === 'N/A') return '—';
-  if (low != null && high != null && low > 0) {
-    return `${name} [${fmtZonePrice(low)} – ${fmtZonePrice(high)}]`;
-  }
-  return name;
+function qualityBadge(wr: number, pf: number, dd: number) {
+  const score = (wr >= 0.55 ? 2 : wr >= 0.45 ? 1 : 0)
+              + (pf >= 1.5 ? 2 : pf >= 1.1 ? 1 : 0)
+              + (dd <= 0.08 ? 2 : dd <= 0.15 ? 1 : 0);
+  if (score >= 5) return { label: 'Excellent',    color: '#22c55e', bg: 'rgba(34,197,94,0.12)' };
+  if (score >= 3) return { label: 'Bon',          color: '#3b82f6', bg: 'rgba(59,130,246,0.12)' };
+  if (score >= 2) return { label: 'Attention',    color: '#eab308', bg: 'rgba(234,179,8,0.12)' };
+  return            { label: 'Insuffisant',  color: '#ef4444', bg: 'rgba(239,68,68,0.12)' };
+}
+function colorFor(val: number, goodAbove: number, warnAbove: number) {
+  return val >= goodAbove ? 'var(--accent-green)' : val >= warnAbove ? 'var(--accent-yellow)' : 'var(--accent-red)';
 }
 
-function BacktestDetailPanel({ r, simulatedTrades, dataWarning }: { r: BacktestResult; simulatedTrades?: SimulatedTrade[]; dataWarning?: string | null }) {
-  const [signals, setSignals]           = useState<Signal[]>([]);
-  const [loadingSigs, setLoadingSigs]   = useState(true);
-  const [sigError, setSigError]         = useState('');
-  const [expandedSigId, setExpandedSigId] = useState<number | null>(null);
-  const [sigFilter, setSigFilter]       = useState<'all' | 'accepted' | 'rejected'>('all');
-
-  const isWalkForward = (r.signal_count != null && r.signal_count > 0) || (r.step_count != null && r.step_count > 0);
+/* ── ExpandedSignals ─────────────────────────────────────────────────────── */
+function ExpandedSignals({ r }: { r: BacktestResult }) {
+  const [signals, setSignals] = useState<Signal[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState('');
 
   useEffect(() => {
     let cancelled = false;
-    setLoadingSigs(true);
-    setSigError('');
+    setLoading(true);
+    setError('');
     setSignals([]);
-    setExpandedSigId(null);
     const firstSymbol = r.symbol.split(',')[0].trim();
-    api.signalsForBacktest(r.pipeline_run_id, firstSymbol, isWalkForward)
+    api.signalsForBacktest(r.pipeline_run_id, firstSymbol)
       .then(res => { if (!cancelled) setSignals(res.rows); })
-      .catch(err => { if (!cancelled) setSigError(String(err)); })
-      .finally(() => { if (!cancelled) setLoadingSigs(false); });
+      .catch(err => { if (!cancelled) setError(String(err)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [r.pipeline_run_id, r.symbol, isWalkForward]);
+  }, [r.pipeline_run_id, r.symbol]);
 
-  const hasSimulatedTrades = simulatedTrades && simulatedTrades.length > 0;
-  const q = qualityBadge(r.win_rate, r.profit_factor, r.drawdown);
-
-  const filteredSigs = signals.filter(s =>
-    sigFilter === 'all' ? true : sigFilter === 'accepted' ? s.accepted : !s.accepted
+  if (loading) return (
+    <div style={{ padding: '12px 20px', color: 'var(--text-muted)', fontSize: 12 }}>Chargement des signaux…</div>
+  );
+  if (error) return (
+    <div style={{ padding: '12px 20px', color: 'var(--accent-red)', fontSize: 12 }}>{error}</div>
+  );
+  if (signals.length === 0) return (
+    <div style={{ padding: '12px 20px', color: 'var(--text-muted)', fontSize: 12 }}>Aucun signal accepté pour ce backtest.</div>
   );
 
-  const metrics: [string, string, string][] = [
-    ['Win Rate',      pct(r.win_rate),        r.win_rate >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)'],
-    ['Profit Factor', num(r.profit_factor),   r.profit_factor >= 1.2 ? 'var(--accent-green)' : r.profit_factor >= 1.0 ? 'var(--accent-yellow)' : 'var(--accent-red)'],
-    ['Drawdown',      pct(r.drawdown),        r.drawdown <= 0.1 ? 'var(--accent-green)' : r.drawdown <= 0.2 ? 'var(--accent-yellow)' : 'var(--accent-red)'],
-    ['Expectancy',    num(r.expectancy, 4),   r.expectancy > 0 ? 'var(--accent-green)' : 'var(--accent-red)'],
-    ['R Multiple',    num(r.r_multiple) + 'R', r.r_multiple > 0 ? 'var(--accent-green)' : 'var(--accent-red)'],
-  ];
-
   return (
-    <div style={{
-      padding: '18px 20px',
-      background: 'rgba(6,9,15,0.7)',
-      borderTop: '1px solid rgba(59,130,246,0.2)',
-      borderBottom: '2px solid rgba(59,130,246,0.25)',
-    }}>
-
-      {/* ── Header ──────────────────────────────────────────────────────── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: isWalkForward ? 8 : 16 }}>
-        <span style={{
-          padding: '3px 10px', borderRadius: 5, fontSize: 11, fontWeight: 700,
-          background: q.bg, color: q.color, letterSpacing: 0.3,
-        }}>{q.label}</span>
-        {isWalkForward && (
-          <span style={{
-            padding: '2px 8px', borderRadius: 5, fontSize: 10, fontWeight: 700,
-            background: 'rgba(139,92,246,0.15)', color: '#a78bfa', letterSpacing: 0.3,
-          }}>Walk-Forward</span>
-        )}
-        <span style={{ fontSize: 14, fontWeight: 700 }}>{fmtSym(r.symbol)}</span>
-        <span className="tag" style={{ fontSize: 11 }}>{r.timeframe}</span>
-        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{r.strategy_version || 'default-smc'}</span>
-        <span className="muted" style={{ fontSize: 11, marginLeft: 'auto' }}>
-          {new Date(r.timestamp).toLocaleString('fr-FR')}
-        </span>
-      </div>
-
-      {/* ── Walk-forward metadata ─────────────────────────────────────────── */}
-      {isWalkForward && (
-        <div style={{
-          display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16,
-          padding: '8px 12px', borderRadius: 7,
-          background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.2)',
-        }}>
-          {r.date_from && r.date_to && (
-            <span style={{ fontSize: 11, color: '#a78bfa' }}>
-              📅 {r.date_from} → {r.date_to}
-            </span>
-          )}
-          {r.step_count != null && (
-            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-              🔁 {r.step_count} steps 4H
-            </span>
-          )}
-          {r.signal_count != null && (
-            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-              📊 {r.signal_count} signaux jugés
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* ── single-column body ──────────────────────────────────────────── */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-
-        {/* LEFT — Résultats */}
-        <div>
-          {/* Bannière avertissement données */}
-          {dataWarning && (
-            <div style={{
-              marginBottom: 12, padding: '8px 12px', borderRadius: 7,
-              background: 'rgba(234,179,8,0.08)', border: '1px solid rgba(234,179,8,0.3)',
-              display: 'flex', alignItems: 'flex-start', gap: 8,
-            }}>
-              <span style={{ fontSize: 14, flexShrink: 0 }}>⚠️</span>
-              <span style={{ fontSize: 11, color: 'var(--accent-yellow)', lineHeight: 1.5 }}>{dataWarning}</span>
-            </div>
-          )}
-
-          {/* Win rate bar */}
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-              <span style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.6 }}>Win Rate</span>
-              <span style={{ fontSize: 13, fontWeight: 800, color: r.win_rate >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-                {pct(r.win_rate)}
-              </span>
-            </div>
-            <div style={{ height: 8, borderRadius: 4, background: 'var(--surface2)', overflow: 'hidden', position: 'relative' }}>
-              <div style={{
-                height: '100%', borderRadius: 4,
-                width: `${Math.min(r.win_rate * 100, 100)}%`,
-                background: r.win_rate >= 0.5
-                  ? 'linear-gradient(90deg,#22c55e,#4ade80)'
-                  : 'linear-gradient(90deg,#ef4444,#f87171)',
-                transition: 'width 0.4s ease',
-              }} />
-              <div style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, background: 'rgba(255,255,255,0.15)' }} />
-            </div>
-          </div>
-
-          {/* Metrics 2×3 grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-            {metrics.map(([label, value, color]) => (
-              <div key={label} style={{
-                padding: '10px 12px', borderRadius: 8,
-                background: 'var(--surface2)', border: '1px solid var(--border)',
-              }}>
-                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>{label}</div>
-                <div style={{ fontWeight: 800, fontSize: 17, color }}>{value}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* RIGHT — Signaux */}
-        <div>
-          {/* Signals header + filter tabs */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 13, fontWeight: 700 }}>Signaux du run</span>
-            {!loadingSigs && (
-              <>
-                <span className="muted" style={{ fontSize: 11 }}>
-                  {filteredSigs.length}/{signals.length}
-                </span>
-                <div style={{ display: 'flex', gap: 3, marginLeft: 6 }}>
-                  {(['all', 'accepted', 'rejected'] as const).map(f => (
-                    <button key={f} onClick={() => { setSigFilter(f); setExpandedSigId(null); }} style={{
-                      padding: '2px 9px', borderRadius: 4, fontSize: 10, fontWeight: 600, cursor: 'pointer',
-                      background: sigFilter === f ? 'var(--accent)' : 'var(--surface2)',
-                      color: sigFilter === f ? '#fff' : 'var(--text-muted)',
-                      border: `1px solid ${sigFilter === f ? 'var(--accent)' : 'var(--border)'}`,
-                    }}>
-                      {f === 'all' ? 'Tous' : f === 'accepted' ? 'Acceptés' : 'Rejetés'}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-
-          {loadingSigs ? (
-            <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>
-              Chargement des signaux…
-            </div>
-          ) : sigError ? (
-            <div style={{ padding: 12, borderRadius: 8, background: 'rgba(239,68,68,0.08)', color: 'var(--accent-red)', fontSize: 12 }}>
-              Erreur chargement signaux
-            </div>
-          ) : filteredSigs.length === 0 && !hasSimulatedTrades ? (
-            <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12, background: 'var(--surface2)', borderRadius: 8 }}>
-              Aucun signal pour {fmtSym(r.symbol)} {r.timeframe}
-            </div>
-          ) : filteredSigs.length > 0 ? (
-            <div style={{ maxHeight: 340, overflowY: 'auto', borderRadius: 8, border: '1px solid var(--border)' }}>
-              <table style={{ marginBottom: 0 }}>
-                <thead>
-                  <tr>
-                    <th style={{ fontSize: 10 }}>Date</th>
-                    <th style={{ fontSize: 10 }}>Dir</th>
-                    <th style={{ fontSize: 10 }}>Zone [range]</th>
-                    <th style={{ fontSize: 10 }}>Sweep</th>
-                    <th style={{ fontSize: 10 }}>BOS</th>
-                    <th style={{ fontSize: 10 }}>Wyckoff</th>
-                    {isWalkForward
-                      ? <th style={{ fontSize: 10 }}>Outcome</th>
-                      : <th style={{ fontSize: 10 }}>Statut</th>
-                    }
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredSigs.map(sig => {
-                    const isExp = expandedSigId === sig.id;
-                    const dirColor = sig.direction === 'LONG' ? 'var(--accent-green)' : sig.direction === 'SHORT' ? 'var(--accent-red)' : 'var(--text-muted)';
-                    const outcomeColor = sig.bt_outcome === 'win' ? 'var(--accent-green)' : sig.bt_outcome === 'loss' ? 'var(--accent-red)' : 'var(--accent-yellow)';
-                    const outcomeBg   = sig.bt_outcome === 'win' ? 'rgba(34,197,94,0.15)' : sig.bt_outcome === 'loss' ? 'rgba(239,68,68,0.12)' : 'rgba(234,179,8,0.10)';
-                    const outcomeLabel = sig.bt_outcome === 'win' ? '✓ Win' : sig.bt_outcome === 'loss' ? '✗ Loss' : sig.bt_outcome === 'timeout' ? '⏱ Timeout' : '✓ Accepté';
-                    return (
-                      <React.Fragment key={sig.id}>
-                        <tr
-                          onClick={() => setExpandedSigId(isExp ? null : sig.id)}
-                          style={{
-                            cursor: 'pointer',
-                            background: isExp ? 'rgba(59,130,246,0.09)' : 'transparent',
-                          }}
-                          onMouseEnter={e => { if (!isExp) e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; }}
-                          onMouseLeave={e => { if (!isExp) e.currentTarget.style.background = 'transparent'; }}
-                        >
-                          <td style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                            {sig.timestamp.slice(0, 10)}
-                          </td>
-                          <td>
-                            {sig.direction
-                              ? <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4, background: dirColor + '22', color: dirColor }}>{sig.direction}</span>
-                              : <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>—</span>}
-                          </td>
-                          <td style={{ fontSize: 11, color: 'var(--text-soft)', whiteSpace: 'nowrap' }}>
-                            {fmtZone(sig.liquidity_zone, sig.zone_low, sig.zone_high)}
-                          </td>
-                          <td style={{ fontSize: 11, fontFamily: 'monospace', fontWeight: 600 }}>
-                            {sig.sweep_level > 0 ? fmtZonePrice(sig.sweep_level) : '—'}
-                          </td>
-                          <td style={{ fontSize: 11, fontFamily: 'monospace', fontWeight: 600 }}>
-                            {sig.bos_level > 0 ? fmtZonePrice(sig.bos_level) : '—'}
-                          </td>
-                          <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                            {sig.wyckoff_event && sig.wyckoff_event !== 'Aucun' && sig.wyckoff_event !== 'N/A' ? sig.wyckoff_event : '—'}
-                          </td>
-                          <td>
-                            {isWalkForward ? (
-                              <span style={{
-                                fontSize: 10, padding: '1px 6px', borderRadius: 4, fontWeight: 600,
-                                background: outcomeBg, color: outcomeColor,
-                              }}>
-                                {outcomeLabel}
-                                {sig.bt_r_multiple != null && (
-                                  <span style={{ marginLeft: 4, opacity: 0.8 }}>
-                                    {sig.bt_r_multiple > 0 ? '+' : ''}{sig.bt_r_multiple.toFixed(1)}R
-                                  </span>
-                                )}
-                              </span>
-                            ) : (
-                              <span style={{
-                                fontSize: 10, padding: '1px 6px', borderRadius: 4, fontWeight: 600,
-                                background: sig.accepted ? 'rgba(34,197,94,0.15)' : 'rgba(120,120,120,0.12)',
-                                color: sig.accepted ? 'var(--accent-green)' : 'var(--text-muted)',
-                              }}>
-                                {sig.accepted ? '✓ Accepté' : '✗ Rejeté'}
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-
-                        {/* ── Signal detail row ── */}
-                        {isExp && (
-                          <tr style={{ background: 'rgba(59,130,246,0.04)' }}>
-                            <td colSpan={7} style={{ padding: '10px 16px', borderBottom: '1px solid rgba(59,130,246,0.12)' }}>
-                              <div style={{
-                                display: 'grid',
-                                gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
-                                gap: '8px 16px',
-                              }}>
-                                {([
-                                  ['Zone liquidité', fmtZone(sig.liquidity_zone, sig.zone_low, sig.zone_high)],
-                                  ['Sweep',          sig.sweep_level > 0 ? fmtZonePrice(sig.sweep_level) : null],
-                                  ['BOS',            sig.bos_level > 0 ? fmtZonePrice(sig.bos_level) : null],
-                                  ['Displacement',   sig.displacement_force != null && sig.displacement_force > 0 ? sig.displacement_force.toFixed(3) : null],
-                                  ['Wyckoff',        sig.wyckoff_event && sig.wyckoff_event !== 'Aucun' && sig.wyckoff_event !== 'N/A' ? sig.wyckoff_event : null],
-                                  ['Fib zone',       sig.fib_zone && sig.fib_zone !== 'N/A' ? sig.fib_zone : null],
-                                  ['4H structure',   sig.tf_4h_structure],
-                                  ['1H validation',  sig.tf_1h_validation],
-                                  ['Session',        sig.session_name],
-                                  ['Entry',          sig.entry_price != null ? fmtZonePrice(sig.entry_price) : null],
-                                  ['SL',             sig.sl_price != null ? fmtZonePrice(sig.sl_price) : null],
-                                  ['TP',             sig.tp_price != null ? fmtZonePrice(sig.tp_price) : null],
-                                  ['Outcome',        sig.bt_outcome ? `${sig.bt_outcome}${sig.bt_r_multiple != null ? ' ' + (sig.bt_r_multiple > 0 ? '+' : '') + sig.bt_r_multiple.toFixed(2) + 'R' : ''}` : null],
-                                  ['Raison rejet',   sig.reject_reason],
-                                ] as [string, string | null | undefined][])
-                                  .filter(([, v]) => v)
-                                  .map(([label, val]) => (
-                                    <div key={label}>
-                                      <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
-                                      <div style={{ fontSize: 12, fontWeight: 500, marginTop: 2 }}>{String(val)}</div>
-                                    </div>
-                                  ))}
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
-
-          {/* Simulated trades fallback */}
-          {!loadingSigs && signals.length === 0 && hasSimulatedTrades && (
-            <div style={{ marginTop: filteredSigs.length > 0 ? 14 : 0 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8, color: 'var(--text-muted)' }}>
-                Trades simulés
-                <span style={{ fontWeight: 400, marginLeft: 6, fontSize: 11 }}>{simulatedTrades!.length} trades</span>
-              </div>
-              <div style={{ maxHeight: 260, overflowY: 'auto', borderRadius: 8, border: '1px solid var(--border)' }}>
-                <table style={{ marginBottom: 0 }}>
-                  <thead>
-                    <tr>
-                      <th style={{ fontSize: 10 }}>#</th>
-                      <th style={{ fontSize: 10 }}>Date</th>
-                      <th style={{ fontSize: 10 }}>Direction</th>
-                      <th style={{ fontSize: 10 }}>Résultat</th>
-                      <th style={{ fontSize: 10 }}>R-Multiple</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {simulatedTrades!.map(t => (
-                      <tr key={t.index}>
-                        <td className="muted" style={{ fontSize: 11 }}>{t.index}</td>
-                        <td className="muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{new Date(t.timestamp).toLocaleString('fr-FR')}</td>
-                        <td>
-                          <span style={{
-                            fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4,
-                            background: t.direction === 'LONG' ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
-                            color: t.direction === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)',
-                          }}>{t.direction}</span>
-                        </td>
-                        <td>
-                          <span style={{
-                            fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4,
-                            background: t.outcome === 'win' ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
-                            color: t.outcome === 'win' ? 'var(--accent-green)' : 'var(--accent-red)',
-                          }}>
-                            {t.outcome === 'win' ? 'Win' : 'Loss'}
-                          </span>
-                        </td>
-                        <td style={{
-                          fontSize: 11, fontFamily: 'monospace', fontWeight: 600,
-                          color: t.r_multiple > 0 ? 'var(--accent-green)' : 'var(--accent-red)',
-                        }}>
-                          {t.r_multiple > 0 ? '+' : ''}{t.r_multiple.toFixed(2)}R
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-const IMPACT_COLOR = { haut: 'var(--accent-red)', moyen: 'var(--accent-yellow)', faible: 'var(--accent-green)' } as const;
-
-function delta(a: number, b: number, higherIsBetter = true) {
-  const d = a - b;
-  const good = higherIsBetter ? d > 0 : d < 0;
-  const sign = d > 0 ? '+' : '';
-  return <span style={{ color: good ? 'var(--accent-green)' : d === 0 ? 'var(--text-muted)' : 'var(--accent-red)', fontSize: 12 }}>
-    {sign}{d.toFixed(3)}
-  </span>;
-}
-
-function ComparePanel({ a, b }: { a: BacktestResult; b: BacktestResult }) {
-  const rows: [string, string, (r: BacktestResult) => string, boolean][] = [
-    ['Symbole',        'Crypto testée',                                             r => r.symbol,                       true],
-    ['Timeframe',      'Unité de temps des bougies',                                r => r.timeframe,                    true],
-    ['Stratégie',      'Profil de stratégie utilisé',                               r => r.strategy_version,             true],
-    ['Win rate',       '% de trades gagnants sur le total',                         r => pct(r.win_rate),                true],
-    ['Profit factor',  'Ratio gains totaux / pertes totales. >1.2 = rentable',      r => num(r.profit_factor),           true],
-    ['Drawdown',       'Perte maximale depuis un pic. Plus bas = moins risqué',      r => pct(r.drawdown),                false],
-    ['Expectancy',     'Gain moyen par trade en R. Positif = stratégie rentable',   r => num(r.expectancy, 4),           true],
-    ['R multiple',     'Rendement moyen en unités de risque (1R = 1× votre risque)',r => num(r.r_multiple) + 'R',        true],
-  ];
-
-  return (
-    <div className="card" style={{ marginTop: 16 }}>
-      <h3>Comparaison — #{a.id} vs #{b.id}</h3>
-      <table>
+    <div style={{ padding: '12px 20px 16px', background: 'rgba(6,9,15,0.6)', borderTop: '1px solid rgba(59,130,246,0.15)' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
         <thead>
-          <tr>
-            <th>Métrique</th>
-            <th>#{a.id} · {a.symbol} {a.timeframe}</th>
-            <th>#{b.id} · {b.symbol} {b.timeframe}</th>
-            <th>Delta (A − B)</th>
+          <tr style={{ color: 'var(--text-muted)' }}>
+            {['Timestamp','Symbole','Direction','Outcome','R','Entry','SL','TP'].map(h => (
+              <th key={h} style={{ padding: '4px 8px', textAlign: 'left', fontWeight: 500, whiteSpace: 'nowrap' }}>{h}</th>
+            ))}
           </tr>
         </thead>
         <tbody>
-          {rows.map(([label, tip, fn, higherIsBetter]) => {
-            const va = fn(a), vb = fn(b);
-            const na = parseFloat(va), nb = parseFloat(vb);
+          {signals.map(sig => {
+            const dC = sig.direction === 'LONG' ? '#22c55e' : sig.direction === 'SHORT' ? '#ef4444' : '#9ca3af';
+            const oC = sig.bt_outcome === 'win' ? '#22c55e' : sig.bt_outcome === 'loss' ? '#ef4444' : '#eab308';
+            const oL = sig.bt_outcome === 'win' ? '✓ Win' : sig.bt_outcome === 'loss' ? '✗ Loss' : sig.bt_outcome === 'timeout' ? '⏱ TO' : '—';
+            const rVal = sig.bt_r_multiple ?? 0;
             return (
-              <tr key={label}>
-                <td className="muted" style={{ fontWeight: 600 }}>
-                  <Tooltip text={tip}>{label}</Tooltip>
+              <tr key={sig.id} style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+                <td style={{ padding: '4px 8px', color: 'var(--text-muted)' }}>
+                  {sig.timestamp ? new Date(sig.timestamp).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}
                 </td>
-                <td style={{ fontWeight: 600, color: 'var(--accent)' }}>{va}</td>
-                <td style={{ fontWeight: 600 }}>{vb}</td>
-                <td>{!isNaN(na) && !isNaN(nb) ? delta(na, nb, higherIsBetter) : <span className="muted">—</span>}</td>
+                <td style={{ padding: '4px 8px', color: 'var(--text-primary)', fontWeight: 600 }}>{sig.symbol}</td>
+                <td style={{ padding: '4px 8px', color: dC, fontWeight: 600 }}>{sig.direction || '—'}</td>
+                <td style={{ padding: '4px 8px', color: oC, fontWeight: 600 }}>{oL}</td>
+                <td style={{ padding: '4px 8px', color: rVal > 0 ? '#22c55e' : rVal < 0 ? '#ef4444' : '#eab308', fontWeight: 700 }}>
+                  {rVal > 0 ? '+' : ''}{rVal.toFixed(2)}R
+                </td>
+                <td style={{ padding: '4px 8px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
+                  {sig.entry_price ? fmtPrice(sig.entry_price) : '—'}
+                </td>
+                <td style={{ padding: '4px 8px', color: '#ef4444', fontFamily: 'monospace' }}>
+                  {sig.sl_price ? fmtPrice(sig.sl_price) : '—'}
+                </td>
+                <td style={{ padding: '4px 8px', color: '#22c55e', fontFamily: 'monospace' }}>
+                  {sig.tp_price ? fmtPrice(sig.tp_price) : '—'}
+                </td>
               </tr>
             );
           })}
         </tbody>
       </table>
-      <div style={{ marginTop: 12, padding: 10, borderRadius: 6, background: 'var(--surface2)', fontSize: 12 }}>
-        {a.win_rate >= b.win_rate && a.profit_factor >= b.profit_factor
-          ? <span style={{ color: 'var(--accent-green)' }}>✅ Backtest A est globalement meilleur sur win rate et profit factor.</span>
-          : b.win_rate >= a.win_rate && b.profit_factor >= a.profit_factor
-          ? <span style={{ color: 'var(--accent-yellow)' }}>⚡ Backtest B surpasse A sur win rate et profit factor.</span>
-          : <span className="muted">Les deux backtests ont des avantages différents — arbitrage selon votre priorité.</span>
-        }
+    </div>
+  );
+}
+
+/* ── BacktestRow ─────────────────────────────────────────────────────────── */
+function BacktestRow({
+  r, selected, onSelect, onOptimize, onCompare,
+}: {
+  r: BacktestResult;
+  selected: boolean;
+  onSelect: () => void;
+  onOptimize: () => void;
+  onCompare: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const q = qualityBadge(r.win_rate, r.profit_factor, r.drawdown);
+  const dateRange = r.date_from && r.date_to
+    ? `${r.date_from} → ${r.date_to}`
+    : new Date(r.timestamp).toLocaleDateString('fr-FR');
+
+  return (
+    <>
+      <tr
+        style={{ borderTop: '1px solid rgba(255,255,255,0.05)', cursor: 'pointer', transition: 'background 0.15s' }}
+        onMouseEnter={e => (e.currentTarget.style.background = 'rgba(59,130,246,0.05)')}
+        onMouseLeave={e => (e.currentTarget.style.background = '')}
+      >
+        <td style={{ padding: '10px 8px' }}>
+          <input type="checkbox" checked={selected} onChange={onSelect} onClick={e => e.stopPropagation()} />
+        </td>
+        <td style={{ padding: '10px 8px', color: 'var(--text-primary)', fontWeight: 600 }} onClick={() => setExpanded(!expanded)}>
+          <span style={{ marginRight: 6, opacity: 0.5 }}>{expanded ? '▾' : '▸'}</span>
+          {r.symbol}
+        </td>
+        <td style={{ padding: '10px 8px', color: 'var(--text-muted)', fontSize: 11 }} onClick={() => setExpanded(!expanded)}>
+          {dateRange}
+        </td>
+        <td style={{ padding: '10px 8px', color: 'var(--text-secondary)', textAlign: 'center' }} onClick={() => setExpanded(!expanded)}>
+          {r.signal_count ?? '—'}
+          {r.step_count ? <span style={{ color: 'var(--text-muted)', fontSize: 10 }}> / {r.step_count} steps</span> : null}
+        </td>
+        <td style={{ padding: '10px 8px', textAlign: 'center', color: colorFor(r.win_rate, 0.5, 0.42), fontWeight: 700 }} onClick={() => setExpanded(!expanded)}>
+          {pct(r.win_rate)}
+        </td>
+        <td style={{ padding: '10px 8px', textAlign: 'center', color: colorFor(r.profit_factor, 1.5, 1.1), fontWeight: 700 }} onClick={() => setExpanded(!expanded)}>
+          {num(r.profit_factor)}
+        </td>
+        <td style={{ padding: '10px 8px', textAlign: 'center', color: r.drawdown <= 0.1 ? '#22c55e' : r.drawdown <= 0.2 ? '#eab308' : '#ef4444', fontWeight: 700 }} onClick={() => setExpanded(!expanded)}>
+          {pct(r.drawdown)}
+        </td>
+        <td style={{ padding: '10px 8px', textAlign: 'center' }} onClick={() => setExpanded(!expanded)}>
+          <span style={{ padding: '2px 8px', borderRadius: 4, background: q.bg, color: q.color, fontSize: 11, fontWeight: 600 }}>{q.label}</span>
+        </td>
+        <td style={{ padding: '10px 8px', textAlign: 'right' }}>
+          <button onClick={onOptimize} style={{ marginRight: 6, padding: '3px 8px', borderRadius: 4, border: '1px solid rgba(59,130,246,0.4)', background: 'transparent', color: 'var(--accent)', fontSize: 11, cursor: 'pointer' }}>AI</button>
+          <button onClick={onCompare} style={{ padding: '3px 8px', borderRadius: 4, border: '1px solid rgba(255,255,255,0.15)', background: 'transparent', color: 'var(--text-muted)', fontSize: 11, cursor: 'pointer' }}>Comparer</button>
+        </td>
+      </tr>
+      {expanded && (
+        <tr>
+          <td colSpan={9} style={{ padding: 0 }}>
+            <ExpandedSignals r={r} />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+/* ── ComparePanel ────────────────────────────────────────────────────────── */
+function delta(a: number, b: number, higherIsBetter = true) {
+  const d = a - b;
+  const good = higherIsBetter ? d > 0 : d < 0;
+  const sign = d > 0 ? '+' : '';
+  return <span style={{ color: good ? '#22c55e' : '#ef4444', fontSize: 11 }}>{sign}{d.toFixed(3)}</span>;
+}
+function ComparePanel({ a, b, onClose }: { a: BacktestResult; b: BacktestResult; onClose: () => void }) {
+  const rows: [string, (r: BacktestResult) => string, boolean][] = [
+    ['Win Rate',      r => pct(r.win_rate),      true],
+    ['Profit Factor', r => num(r.profit_factor), true],
+    ['Drawdown',      r => pct(r.drawdown),      false],
+    ['Expectancy',    r => num(r.expectancy, 4), true],
+    ['R Multiple',    r => num(r.r_multiple) + 'R', true],
+    ['Signals',       r => String(r.signal_count ?? '—'), true],
+  ];
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={onClose}>
+      <div style={{ background: 'var(--bg-card)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 10, padding: 24, minWidth: 480, maxWidth: 600 }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+          <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>Comparaison</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 18 }}>×</button>
+        </div>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+          <thead>
+            <tr style={{ color: 'var(--text-muted)' }}>
+              <th style={{ textAlign: 'left', padding: '4px 8px' }}>Métrique</th>
+              <th style={{ textAlign: 'right', padding: '4px 8px' }}>{a.symbol}</th>
+              <th style={{ textAlign: 'right', padding: '4px 8px' }}>{b.symbol}</th>
+              <th style={{ textAlign: 'right', padding: '4px 8px' }}>Δ</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(([label, fn, hib]) => {
+              const va = fn(a), vb = fn(b);
+              const na = parseFloat(va), nb = parseFloat(vb);
+              return (
+                <tr key={label} style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                  <td style={{ padding: '6px 8px', color: 'var(--text-muted)' }}>{label}</td>
+                  <td style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--text-primary)', fontWeight: 600 }}>{va}</td>
+                  <td style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--text-primary)', fontWeight: 600 }}>{vb}</td>
+                  <td style={{ padding: '6px 8px', textAlign: 'right' }}>{!isNaN(na) && !isNaN(nb) ? delta(na, nb, hib) : '—'}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
     </div>
   );
 }
 
-type Analysis = {
-  score: number;
-  verdict: string;
-  suggestions: Array<{ titre: string; probleme: string; action: string; impact: 'haut' | 'moyen' | 'faible' }>;
-};
-
-function OptimizePanel({ result, onClose, onProfileCreated }: { result: BacktestResult; onClose: () => void; onProfileCreated?: () => void }) {
-  const [loading, setLoading]     = useState(false);
-  const [analysis, setAnalysis]   = useState<Analysis | null>(null);
-  const [error, setError]         = useState('');
-  const [profileId, setProfileId] = useState<number | null>(null);
-  const [profileName, setProfileName] = useState('');
-  const [saving, setSaving]       = useState(false);
-  const [saved, setSaved]         = useState<string | null>(null);
+/* ── OptimizePanel ───────────────────────────────────────────────────────── */
+function OptimizePanel({ result, onClose }: { result: BacktestResult; onClose: () => void }) {
+  const [loading, setLoading] = useState(false);
+  const [analysis, setAnalysis] = useState<Record<string, unknown> | null>(null);
+  const [error, setError] = useState('');
 
   const run = async () => {
-    setLoading(true);
-    setError('');
-    setSaved(null);
+    setLoading(true); setError(''); setAnalysis(null);
     try {
       const res = await api.optimizeBacktest(result.id);
-      if (res.ok) {
-        const a = res.analysis as Analysis & { suggested_name?: string; suggested_params?: Record<string, unknown> };
-        setAnalysis(a);
-        setProfileId(typeof res.profile_id === 'number' ? res.profile_id : null);
-        setProfileName(a.suggested_name ?? _nextVersion(String(res.profile_name ?? result.strategy_version)));
-      } else {
-        setError(String(res.reason ?? 'Erreur inconnue'));
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erreur réseau');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const createProfile = async () => {
-    if (!analysis || !profileName.trim()) return;
-    const a = analysis as Analysis & { suggested_params?: Record<string, unknown> };
-    setSaving(true);
-    try {
-      let res: Record<string, unknown>;
-      if (profileId && a.suggested_params) {
-        res = await api.createOptimizedProfile(profileId, {
-          source_profile_id: profileId,
-          suggested_params: a.suggested_params,
-          new_name: profileName.trim(),
-        });
-      } else {
-        res = await api.saveStrategyProfile({
-          name: profileName.trim(),
-          mode: 'research',
-          parameters: a.suggested_params ?? {},
-        });
-      }
-      if (res.ok) {
-        setSaved(profileName.trim());
-        onProfileCreated?.();
-      } else {
-        setError(String(res.reason ?? 'Erreur lors de la création'));
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erreur réseau');
-    } finally {
-      setSaving(false);
-    }
+      setAnalysis(res.analysis as Record<string, unknown>);
+    } catch (e) { setError(String(e)); }
+    finally { setLoading(false); }
   };
 
   return (
-    <div className="card" style={{ marginTop: 16, border: '1px solid rgba(88,166,255,0.3)' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <div>
-          <h3 style={{ margin: 0 }}>🤖 Optimisation IA — #{result.id} · {result.symbol} {result.timeframe}</h3>
-          <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
-            L'IA analyse vos métriques et paramètres pour proposer des améliorations précises, puis génère un profil optimisé.
-          </div>
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={onClose}>
+      <div style={{ background: 'var(--bg-card)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 10, padding: 24, width: 540, maxHeight: '80vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+          <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>Optimisation IA — {result.symbol}</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 18 }}>×</button>
         </div>
-        <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={onClose}>✕ Fermer</button>
-      </div>
-
-      {!analysis && !loading && (
-        <button className="btn btn-primary" onClick={run} style={{ width: '100%' }}>
-          ▶ Lancer l'analyse IA
-        </button>
-      )}
-
-      {loading && (
-        <div style={{ textAlign: 'center', padding: 32 }}>
-          <div style={{ fontSize: 32, marginBottom: 8 }}>🤖</div>
-          <div className="muted">Analyse en cours… (~5–10 secondes)</div>
-          <div style={{ marginTop: 12, height: 3, background: 'var(--surface2)', borderRadius: 2, overflow: 'hidden' }}>
-            <div style={{ height: '100%', background: 'var(--accent)', animation: 'pulse 1.5s ease-in-out infinite', width: '60%' }} />
-          </div>
-        </div>
-      )}
-
-      {error && (
-        <div style={{ padding: 12, background: 'rgba(248,81,73,0.1)', borderRadius: 6, color: 'var(--accent-red)', fontSize: 13, marginBottom: 10 }}>
-          ❌ {error}
-          <button className="btn btn-secondary" style={{ marginLeft: 12, fontSize: 12 }} onClick={run}>Réessayer</button>
-        </div>
-      )}
-
-      {analysis && (
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 16, padding: 16, background: 'var(--surface2)', borderRadius: 8 }}>
-            <div style={{ textAlign: 'center' }}>
-              <div style={{ fontSize: 36, fontWeight: 900, color: analysis.score >= 70 ? 'var(--accent-green)' : analysis.score >= 50 ? 'var(--accent-yellow)' : 'var(--accent-red)' }}>
-                {analysis.score}
-              </div>
-              <div className="muted" style={{ fontSize: 11 }}>Score /100</div>
-            </div>
-            <div style={{ flex: 1, fontSize: 14, fontStyle: 'italic' }}>"{analysis.verdict}"</div>
-            <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={run}>
-              🔄 Relancer
-            </button>
-          </div>
-
-          <div style={{ display: 'grid', gap: 10, marginBottom: 16 }}>
-            {analysis.suggestions.map((s, i) => (
-              <div key={i} style={{ padding: '12px 14px', background: 'var(--surface2)', borderRadius: 8, borderLeft: `4px solid ${IMPACT_COLOR[s.impact] ?? 'var(--border)'}` }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <span style={{ fontWeight: 700, fontSize: 13 }}>{s.titre}</span>
-                  <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: IMPACT_COLOR[s.impact] + '22', color: IMPACT_COLOR[s.impact] }}>
-                    Impact {s.impact}
-                  </span>
-                </div>
-                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>
-                  ⚠ {s.probleme}
-                </div>
-                <div style={{ fontSize: 12, padding: '6px 10px', background: 'rgba(88,166,255,0.08)', borderRadius: 4 }}>
-                  → {s.action}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Create optimized profile */}
-          {!saved ? (
-            <div style={{ padding: 14, background: 'rgba(88,166,255,0.05)', borderRadius: 8, border: '1px solid rgba(88,166,255,0.2)' }}>
-              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--accent)' }}>
-                ➕ Créer un profil optimisé basé sur cette analyse
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <input
-                  value={profileName}
-                  onChange={e => setProfileName(e.target.value)}
-                  placeholder="Nom du profil…"
-                  style={{ flex: 1, padding: '8px 12px', borderRadius: 6, border: '1px solid rgba(88,166,255,0.3)', background: 'var(--surface)', color: 'var(--text)', fontSize: 13 }}
-                />
-                <button
-                  className="btn btn-primary"
-                  style={{ whiteSpace: 'nowrap', background: 'linear-gradient(135deg, #3b82f6, #2563eb)', borderColor: '#3b82f6' }}
-                  onClick={createProfile}
-                  disabled={saving || !profileName.trim()}
-                >
-                  {saving ? 'Création…' : '✓ Créer le profil'}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div style={{ padding: 12, background: 'rgba(63,185,80,0.1)', borderRadius: 8, border: '1px solid rgba(63,185,80,0.3)', color: 'var(--accent-green)', fontSize: 13 }}>
-              ✅ Profil <strong>"{saved}"</strong> créé avec succès — visible dans la page Stratégie.
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function _nextVersion(name: string): string {
-  const m = name.match(/-v(\d+)$/i);
-  if (m) return name.slice(0, m.index) + `-v${Number(m[1]) + 1}`;
-  return name + '-v2';
-}
-
-type MultiAnalysis = {
-  score: number;
-  verdict: string;
-  synthesis: string;
-  strengths: Array<{ backtest_id: number; point: string }>;
-  weaknesses: Array<{ backtest_id: number; point: string }>;
-  suggested_name: string;
-  suggested_params: Record<string, unknown>;
-  param_insights: Array<{ param: string; from: string; to: string; reason: string }>;
-};
-
-const PARAM_LABELS: Record<string, string> = {
-  enable_spring: 'Spring Wyckoff',
-  enable_utad: 'UTAD (distribution)',
-  bos_sensitivity: 'Sensibilité BOS (1-10)',
-  displacement_threshold: 'Seuil Displacement',
-  fib_levels: 'Niveaux Fibonacci',
-  rsi_period: 'Période RSI',
-  rsi_overbought: 'RSI Surachat',
-  rsi_oversold: 'RSI Survente',
-  volume_confirmation: 'Confirmation Volume',
-  volume_multiplier: 'Multiplicateur Volume',
-  risk_per_trade: 'Risque par trade',
-  max_open_trades: 'Trades max simultanés',
-  stop_loss_atr_mult: 'SL Multiplicateur ATR',
-  take_profit_rr: 'TP Ratio R:R',
-};
-
-function MultiOptimizePanel({
-  backtestIds,
-  rows,
-  onClose,
-  onProfileCreated,
-}: {
-  backtestIds: number[];
-  rows: BacktestResult[];
-  onClose: () => void;
-  onProfileCreated: () => void;
-}) {
-  const [loading, setLoading]     = useState(false);
-  const [analysis, setAnalysis]   = useState<MultiAnalysis | null>(null);
-  const [error, setError]         = useState('');
-  const [profileName, setProfileName] = useState('');
-  const [saving, setSaving]       = useState(false);
-  const [saved, setSaved]         = useState<string | null>(null);
-
-  const selectedRows = rows.filter(r => backtestIds.includes(r.id));
-
-  const run = async () => {
-    setLoading(true);
-    setError('');
-    setAnalysis(null);
-    setSaved(null);
-    try {
-      const res = await api.multiOptimize(backtestIds);
-      if (res.ok) {
-        const a = res.analysis as MultiAnalysis;
-        setAnalysis(a);
-        setProfileName(a.suggested_name ?? `IA-Optimised-v${Date.now().toString().slice(-4)}`);
-      } else {
-        setError(String(res.reason ?? 'Erreur inconnue'));
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erreur réseau');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const createProfile = async () => {
-    if (!analysis || !profileName.trim()) return;
-    setSaving(true);
-    try {
-      const res = await api.saveStrategyProfile({
-        name: profileName.trim(),
-        mode: 'research',
-        parameters: analysis.suggested_params,
-      });
-      if (res.ok) {
-        setSaved(profileName.trim());
-        onProfileCreated();
-      } else {
-        setError(String(res.reason ?? 'Erreur lors de la création'));
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erreur réseau');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="card" style={{
-      marginTop: 16,
-      border: '1px solid rgba(139,92,246,0.4)',
-      background: 'linear-gradient(135deg, rgba(139,92,246,0.04) 0%, var(--surface) 100%)',
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
-        <div>
-          <h3 style={{ margin: 0, color: '#a78bfa' }}>🧠 Création de stratégie optimisée par IA</h3>
-          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-            L'IA compare {backtestIds.length} backtests, identifie les patterns gagnants et génère une stratégie synthétisée prête à l'emploi.
-          </div>
-        </div>
-        <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={onClose}>✕ Fermer</button>
-      </div>
-
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
-        {selectedRows.map(r => (
-          <div key={r.id} style={{
-            padding: '6px 12px', borderRadius: 6, fontSize: 12,
-            background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.3)',
-          }}>
-            <strong>#{r.id}</strong> {fmtSym(r.symbol)} {r.timeframe}
-            <span style={{ marginLeft: 6, color: r.win_rate >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-              WR {pct(r.win_rate)}
-            </span>
-            <span style={{ marginLeft: 6, color: r.profit_factor >= 1.2 ? 'var(--accent-green)' : 'var(--accent-yellow)' }}>
-              PF {num(r.profit_factor)}
-            </span>
-          </div>
-        ))}
-      </div>
-
-      {!analysis && !loading && (
-        <button
-          className="btn btn-primary"
-          onClick={run}
-          style={{ width: '100%', background: 'linear-gradient(135deg, #7c3aed, #4f46e5)', borderColor: '#7c3aed', fontSize: 14, padding: '12px 0' }}
-        >
-          🧠 Analyser et créer une stratégie optimisée
-        </button>
-      )}
-
-      {loading && (
-        <div style={{ textAlign: 'center', padding: 40 }}>
-          <div style={{ fontSize: 48, marginBottom: 12 }}>🧠</div>
-          <div style={{ fontWeight: 700, marginBottom: 6 }}>Analyse comparative en cours…</div>
-          <div className="muted" style={{ fontSize: 13 }}>L'IA compare les {backtestIds.length} backtests et synthétise la meilleure stratégie (~10–20 secondes)</div>
-          <div style={{ marginTop: 16, height: 4, background: 'var(--surface2)', borderRadius: 2, overflow: 'hidden' }}>
-            <div style={{
-              height: '100%', borderRadius: 2,
-              background: 'linear-gradient(90deg, #7c3aed, #4f46e5)',
-              animation: 'pulse 1.8s ease-in-out infinite', width: '65%',
-            }} />
-          </div>
-        </div>
-      )}
-
-      {error && (
-        <div style={{ padding: 12, background: 'rgba(248,81,73,0.1)', borderRadius: 6, color: 'var(--accent-red)', fontSize: 13, marginTop: 8 }}>
-          ❌ {error}
-          <button className="btn btn-secondary" style={{ marginLeft: 12, fontSize: 12 }} onClick={run}>Réessayer</button>
-        </div>
-      )}
-
-      {analysis && (
-        <div>
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20,
-            padding: 20, background: 'rgba(139,92,246,0.08)', borderRadius: 10, border: '1px solid rgba(139,92,246,0.2)',
-          }}>
-            <div style={{ textAlign: 'center', minWidth: 80 }}>
-              <div style={{
-                fontSize: 44, fontWeight: 900,
-                color: analysis.score >= 70 ? 'var(--accent-green)' : analysis.score >= 50 ? 'var(--accent-yellow)' : 'var(--accent-red)',
-              }}>
-                {analysis.score}
-              </div>
-              <div className="muted" style={{ fontSize: 11 }}>Score /100</div>
-            </div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 6, color: '#a78bfa' }}>
-                {analysis.verdict}
-              </div>
-              <div style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--text-muted)' }}>
-                {analysis.synthesis}
-              </div>
-            </div>
-            <button className="btn btn-secondary" style={{ fontSize: 11, alignSelf: 'flex-start' }} onClick={run}>
-              🔄 Relancer
-            </button>
-          </div>
-
-          <div className="grid-2" style={{ marginBottom: 20 }}>
-            <div>
-              <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--accent-green)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                ✅ Points forts identifiés
-              </div>
-              {analysis.strengths?.map((s, i) => (
-                <div key={i} style={{ padding: '8px 12px', marginBottom: 6, borderRadius: 6, background: 'rgba(63,185,80,0.08)', border: '1px solid rgba(63,185,80,0.2)', fontSize: 12 }}>
-                  <span style={{ color: 'var(--accent-green)', fontWeight: 700 }}>#{s.backtest_id}</span>
-                  <span style={{ marginLeft: 6 }}>{s.point}</span>
-                </div>
-              ))}
-            </div>
-            <div>
-              <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--accent-red)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                ⚠ Faiblesses corrigées
-              </div>
-              {analysis.weaknesses?.map((w, i) => (
-                <div key={i} style={{ padding: '8px 12px', marginBottom: 6, borderRadius: 6, background: 'rgba(248,81,73,0.06)', border: '1px solid rgba(248,81,73,0.2)', fontSize: 12 }}>
-                  <span style={{ color: 'var(--accent-red)', fontWeight: 700 }}>#{w.backtest_id}</span>
-                  <span style={{ marginLeft: 6 }}>{w.point}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {analysis.param_insights && analysis.param_insights.length > 0 && (
-            <div style={{ marginBottom: 20 }}>
-              <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--accent)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                🔧 Ajustements de paramètres
-              </div>
-              <div style={{ display: 'grid', gap: 6 }}>
-                {analysis.param_insights.map((ins, i) => (
-                  <div key={i} style={{
-                    display: 'flex', alignItems: 'center', gap: 10,
-                    padding: '8px 12px', borderRadius: 6, background: 'var(--surface2)', fontSize: 12,
-                  }}>
-                    <span style={{ fontWeight: 700, minWidth: 150, color: 'var(--text)' }}>
-                      {PARAM_LABELS[ins.param] ?? ins.param}
-                    </span>
-                    <span style={{ color: 'var(--accent-red)', textDecoration: 'line-through' }}>{ins.from}</span>
-                    <span style={{ color: 'var(--text-muted)' }}>→</span>
-                    <span style={{ color: 'var(--accent-green)', fontWeight: 700 }}>{ins.to}</span>
-                    <span style={{ color: 'var(--text-muted)', flex: 1, fontStyle: 'italic' }}>{ins.reason}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div style={{
-            padding: 20, borderRadius: 10,
-            background: 'rgba(139,92,246,0.06)', border: '2px solid rgba(139,92,246,0.3)',
-          }}>
-            <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12, color: '#a78bfa' }}>
-              ✨ Stratégie optimisée générée — Paramètres proposés
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8, marginBottom: 16 }}>
-              {Object.entries(analysis.suggested_params).map(([key, val]) => (
-                <div key={key} style={{ padding: '8px 10px', background: 'var(--surface)', borderRadius: 6, border: '1px solid var(--border)' }}>
-                  <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 3 }}>
-                    {PARAM_LABELS[key] ?? key}
-                  </div>
-                  <div style={{ fontWeight: 700, fontSize: 13, color: '#a78bfa' }}>
-                    {Array.isArray(val) ? (val as number[]).join(', ') : String(val)}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {saved ? (
-              <div style={{ padding: 14, borderRadius: 8, background: 'rgba(63,185,80,0.1)', border: '1px solid rgba(63,185,80,0.3)', textAlign: 'center' }}>
-                <div style={{ fontWeight: 700, color: 'var(--accent-green)', fontSize: 15, marginBottom: 4 }}>
-                  ✅ Profil "{saved}" créé avec succès !
-                </div>
-                <div className="muted" style={{ fontSize: 12 }}>
-                  Retrouvez-le dans la page Stratégie pour le tester et le backtester.
-                </div>
-              </div>
-            ) : (
-              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                <input
-                  value={profileName}
-                  onChange={e => setProfileName(e.target.value)}
-                  placeholder="Nom du profil…"
-                  style={{ flex: 1, padding: '10px 12px', borderRadius: 6, border: '1px solid rgba(139,92,246,0.4)', background: 'var(--surface)', color: 'var(--text)', fontSize: 13 }}
-                />
-                <button
-                  className="btn btn-primary"
-                  onClick={createProfile}
-                  disabled={saving || !profileName.trim()}
-                  style={{
-                    background: 'linear-gradient(135deg, #7c3aed, #4f46e5)',
-                    borderColor: '#7c3aed', whiteSpace: 'nowrap', padding: '10px 20px',
-                  }}
-                >
-                  {saving ? 'Création…' : '✅ Créer ce profil de stratégie'}
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Types ───────────────────────────────────────────────────────────────────
-type WorkshopSymbolResult = {
-  symbol: string;
-  status: 'pending' | 'running' | 'done' | 'error';
-  ai_score?: number;
-  verdict?: string;
-  synthesis?: string;
-  suggestions?: Array<{ titre: string; probleme: string; action: string; impact: 'haut' | 'moyen' | 'faible' }>;
-  profile?: { id: number; name: string; params: Record<string, unknown> };
-  win_rate?: number;
-  profit_factor?: number;
-  drawdown?: number;
-  expectancy?: number;
-  r_multiple?: number;
-  n_trades?: number;
-  error?: string;
-};
-
-type WorkshopJob = {
-  ok: boolean;
-  status: 'running' | 'done' | 'error';
-  total: number;
-  done: number;
-  current: string | null;
-  results: WorkshopSymbolResult[];
-  error?: string;
-};
-
-// ── AI Workshop Panel ────────────────────────────────────────────────────────
-function AiWorkshopPanel({
-  availableSymbols,
-  profiles,
-  onClose,
-  onProfilesCreated,
-}: {
-  availableSymbols: string[];
-  profiles: Array<Record<string, unknown>>;
-  onClose: () => void;
-  onProfilesCreated: () => void;
-}) {
-  const [selectedSymbols, setSelectedSymbols] = useState<string[]>(
-    availableSymbols.slice(0, 5)
-  );
-  const [timeframe, setTimeframe] = useState('4h');
-  const [horizon, setHorizon]     = useState(1460);
-  const [profileId, setProfileId] = useState<number | null>(null);
-  const [jobId, setJobId]         = useState<string | null>(null);
-  const [job, setJob]             = useState<WorkshopJob | null>(null);
-  const [starting, setStarting]   = useState(false);
-  const [error, setError]         = useState('');
-  const [expandedSym, setExpandedSym] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const toggleSym = (s: string) =>
-    setSelectedSymbols(prev =>
-      prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]
-    );
-
-  const startWorkshop = async () => {
-    if (!selectedSymbols.length) return;
-    setStarting(true);
-    setError('');
-    setJob(null);
-    try {
-      const res = await api.startAiWorkshop({
-        symbols: selectedSymbols,
-        timeframe,
-        horizon_days: horizon,
-        profile_id: profileId,
-      }) as Record<string, unknown>;
-      if (res.ok) {
-        setJobId(String(res.job_id));
-      } else {
-        setError(String(res.reason ?? 'Erreur démarrage'));
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erreur réseau');
-    } finally {
-      setStarting(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!jobId) return;
-    pollRef.current = setInterval(async () => {
-      try {
-        const status = await api.getAiWorkshopStatus(jobId) as WorkshopJob;
-        setJob(status);
-        if (status.status === 'done' || status.status === 'error') {
-          if (pollRef.current) clearInterval(pollRef.current);
-          if (status.status === 'done') onProfilesCreated();
-        }
-      } catch (_) {}
-    }, 900);
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [jobId]);
-
-  const doneResults = job?.results.filter(r => r.status === 'done') ?? [];
-  const avgScore    = doneResults.length ? Math.round(doneResults.reduce((s, r) => s + (r.ai_score ?? 0), 0) / doneResults.length) : 0;
-  const progress    = job ? Math.round((job.done / Math.max(job.total, 1)) * 100) : 0;
-  const isDone      = job?.status === 'done';
-
-  return (
-    <div className="card" style={{
-      marginTop: 20,
-      border: '1px solid rgba(139,92,246,0.5)',
-      background: 'linear-gradient(135deg, rgba(139,92,246,0.06) 0%, rgba(79,70,229,0.04) 50%, var(--surface) 100%)',
-      boxShadow: '0 0 40px rgba(139,92,246,0.08)',
-    }}>
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
-        <div>
-          <h3 style={{ margin: 0, color: '#c4b5fd', fontSize: 18 }}>
-            🧬 AI Workshop — Profils par crypto
-          </h3>
-          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-            L'IA backteste chaque crypto séparément, analyse les spécificités et génère un profil de stratégie sur-mesure.
-          </div>
-        </div>
-        <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={onClose}>✕ Fermer</button>
-      </div>
-
-      {/* Config (only before starting) */}
-      {!jobId && (
-        <>
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text-muted)' }}>
-              CRYPTOS À ANALYSER ({selectedSymbols.length} sélectionnées)
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {availableSymbols.map(s => (
-                <button
-                  key={s}
-                  onClick={() => toggleSym(s)}
-                  style={{
-                    padding: '5px 12px', borderRadius: 20, fontSize: 12, cursor: 'pointer',
-                    border: selectedSymbols.includes(s)
-                      ? '1px solid rgba(139,92,246,0.8)'
-                      : '1px solid var(--border)',
-                    background: selectedSymbols.includes(s)
-                      ? 'rgba(139,92,246,0.18)'
-                      : 'var(--surface2)',
-                    color: selectedSymbols.includes(s) ? '#c4b5fd' : 'var(--text-muted)',
-                    fontWeight: selectedSymbols.includes(s) ? 700 : 400,
-                    transition: 'all 0.15s',
-                  }}
-                >
-                  {fmtSym(s)}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
-            <div className="form-group" style={{ flex: 1, margin: 0 }}>
-              <label style={{ fontSize: 11 }}>Timeframe</label>
-              <select value={timeframe} onChange={e => setTimeframe(e.target.value)} style={{ fontSize: 13 }}>
-                {TIMEFRAMES.map(tf => <option key={tf.value} value={tf.value}>{tf.label}</option>)}
-              </select>
-            </div>
-            <div className="form-group" style={{ flex: 1, margin: 0 }}>
-              <label style={{ fontSize: 11 }}>Horizon (jours)</label>
-              <select value={horizon} onChange={e => setHorizon(Number(e.target.value))} style={{ fontSize: 13 }}>
-                <option value={365}>1 an (365j)</option>
-                <option value={730}>2 ans (730j)</option>
-                <option value={1095}>3 ans (1095j)</option>
-                <option value={1460}>4 ans (1460j)</option>
-              </select>
-            </div>
-            <div className="form-group" style={{ flex: 1, margin: 0 }}>
-              <label style={{ fontSize: 11 }}>Profil de base</label>
-              <select value={profileId ?? ''} onChange={e => setProfileId(e.target.value ? Number(e.target.value) : null)} style={{ fontSize: 13 }}>
-                <option value="">SMC-Wyckoff-Optimisé (défaut)</option>
-                {profiles.map(p => <option key={String(p.id)} value={String(p.id)}>{String(p.name)}</option>)}
-              </select>
-            </div>
-          </div>
-
-          {error && (
-            <div style={{ marginBottom: 12, padding: 10, borderRadius: 6, background: 'rgba(248,81,73,0.1)', border: '1px solid rgba(248,81,73,0.3)', color: 'var(--accent-red)', fontSize: 13 }}>
-              ❌ {error}
-            </div>
-          )}
-
-          <button
-            className="btn btn-primary"
-            onClick={startWorkshop}
-            disabled={starting || selectedSymbols.length === 0}
-            style={{
-              width: '100%',
-              background: 'linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%)',
-              borderColor: '#7c3aed',
-              fontSize: 15, padding: '14px 0', fontWeight: 700,
-            }}
-          >
-            {starting ? 'Démarrage…' : `🧬 Lancer l'analyse IA sur ${selectedSymbols.length} crypto${selectedSymbols.length > 1 ? 's' : ''}`}
+        {!analysis && !loading && (
+          <button onClick={run} style={{ width: '100%', padding: '10px', borderRadius: 6, background: 'rgba(59,130,246,0.2)', border: '1px solid rgba(59,130,246,0.4)', color: 'var(--accent)', cursor: 'pointer', fontWeight: 600 }}>
+            Lancer l'analyse GPT-4o
           </button>
-        </>
-      )}
-
-      {/* Progress bar */}
-      {jobId && job && !isDone && (
-        <div style={{ marginBottom: 20 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 13 }}>
-            <span>
-              {job.current
-                ? <>Analyse en cours : <strong style={{ color: '#c4b5fd' }}>{fmtSym(job.current)}</strong></>
-                : 'Initialisation…'
-              }
-            </span>
-            <span className="muted">{job.done}/{job.total}</span>
-          </div>
-          <div style={{ height: 6, background: 'var(--surface2)', borderRadius: 3, overflow: 'hidden' }}>
-            <div style={{
-              height: '100%', borderRadius: 3, transition: 'width 0.6s ease',
-              background: 'linear-gradient(90deg, #7c3aed, #06b6d4)',
-              width: `${progress}%`,
-            }} />
-          </div>
-        </div>
-      )}
-
-      {/* Symbol cards */}
-      {jobId && job && job.results.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: isDone ? 20 : 0 }}>
-          {job.results.map(r => {
-            const isExpanded = expandedSym === r.symbol;
-            const scoreColor = (r.ai_score ?? 0) >= 80 ? 'var(--accent-green)' : (r.ai_score ?? 0) >= 60 ? 'var(--accent-yellow)' : 'var(--accent-red)';
-            return (
-              <div key={r.symbol} style={{
-                borderRadius: 8, border: '1px solid',
-                borderColor: r.status === 'done' ? 'rgba(63,185,80,0.3)' : r.status === 'error' ? 'rgba(248,81,73,0.3)' : r.status === 'running' ? 'rgba(139,92,246,0.5)' : 'var(--border)',
-                background: r.status === 'done' ? 'rgba(63,185,80,0.04)' : r.status === 'running' ? 'rgba(139,92,246,0.06)' : 'var(--surface2)',
-                overflow: 'hidden',
-                transition: 'all 0.2s',
-              }}>
-                <div
-                  style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12, cursor: r.status === 'done' ? 'pointer' : 'default' }}
-                  onClick={() => r.status === 'done' && setExpandedSym(isExpanded ? null : r.symbol)}
-                >
-                  {/* Status icon */}
-                  <div style={{ fontSize: 18, flexShrink: 0 }}>
-                    {r.status === 'done'    ? '✅'
-                    : r.status === 'error'  ? '❌'
-                    : r.status === 'running' ? <span style={{ animation: 'pulse 1s ease infinite', display: 'inline-block' }}>🔄</span>
-                    : '⏳'}
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: 14 }}>
-                      {fmtSym(r.symbol)}
-                      {r.profile && <span className="tag" style={{ marginLeft: 8, fontSize: 10, background: 'rgba(139,92,246,0.2)', color: '#c4b5fd' }}>{r.profile.name}</span>}
-                    </div>
-                    {r.status === 'running' && <div className="muted" style={{ fontSize: 12 }}>Backtest + analyse IA en cours…</div>}
-                    {r.status === 'pending' && <div className="muted" style={{ fontSize: 12 }}>En attente…</div>}
-                    {r.status === 'done' && (
-                      <div style={{ fontSize: 12, display: 'flex', gap: 12, marginTop: 2 }}>
-                        <span style={{ color: (r.win_rate ?? 0) >= 0.55 ? 'var(--accent-green)' : 'var(--accent-yellow)' }}>
-                          WR {pct(r.win_rate ?? 0)}
-                        </span>
-                        <span style={{ color: (r.profit_factor ?? 0) >= 2 ? 'var(--accent-green)' : 'var(--accent-yellow)' }}>
-                          PF {num(r.profit_factor ?? 0)}
-                        </span>
-                        <span className="muted">DD {pct(r.drawdown ?? 0)}</span>
-                        <span className="muted">{r.n_trades} trades</span>
-                      </div>
-                    )}
-                    {r.status === 'error' && <div style={{ fontSize: 12, color: 'var(--accent-red)' }}>{r.error}</div>}
-                  </div>
-                  {r.status === 'done' && r.ai_score !== undefined && (
-                    <div style={{ textAlign: 'center', flexShrink: 0 }}>
-                      <div style={{ fontSize: 22, fontWeight: 800, color: scoreColor, lineHeight: 1 }}>{r.ai_score}</div>
-                      <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>/ 100</div>
-                    </div>
-                  )}
-                  {r.status === 'done' && (
-                    <div style={{ color: 'var(--text-muted)', fontSize: 12, flexShrink: 0 }}>
-                      {isExpanded ? '▲' : '▼'}
-                    </div>
-                  )}
+        )}
+        {loading && <p style={{ color: 'var(--text-muted)', textAlign: 'center' }}>Analyse en cours…</p>}
+        {error && <p style={{ color: 'var(--accent-red)' }}>{error}</p>}
+        {analysis && (
+          <div>
+            {(analysis.summary as string | undefined) && (
+              <p style={{ color: 'var(--text-primary)', fontSize: 13, lineHeight: 1.6, marginBottom: 12 }}>{analysis.summary as string}</p>
+            )}
+            {(analysis.recommendations as unknown[] | undefined)?.map((rec, i) => {
+              const r = rec as Record<string, unknown>;
+              return (
+                <div key={i} style={{ padding: '10px 12px', marginBottom: 8, background: 'rgba(255,255,255,0.04)', borderRadius: 6, borderLeft: '3px solid rgba(59,130,246,0.5)' }}>
+                  <div style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: 13 }}>{r.title as string}</div>
+                  <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 4 }}>{r.description as string}</div>
                 </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
-                {/* Expanded detail */}
-                {isExpanded && r.status === 'done' && (
-                  <div style={{ padding: '0 16px 16px', borderTop: '1px solid var(--border)' }}>
-                    {r.verdict && (
-                      <div style={{ padding: '10px 14px', borderRadius: 6, background: 'var(--surface)', margin: '12px 0 10px', fontSize: 13, fontStyle: 'italic', color: 'var(--text-muted)' }}>
-                        "{r.verdict}"
-                      </div>
-                    )}
-                    {r.synthesis && (
-                      <div style={{ fontSize: 12, marginBottom: 12, color: 'var(--text)', lineHeight: 1.6 }}>
-                        {r.synthesis}
-                      </div>
-                    )}
+/* ── LaunchForm ──────────────────────────────────────────────────────────── */
+const DURATIONS = ['1m', '3m', '6m', '1y', '2y'];
 
-                    {/* Suggested params */}
-                    {r.profile?.params && (
-                      <div style={{ marginBottom: 12 }}>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>Paramètres optimisés</div>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
-                          {([
-                            ['Displacement', r.profile.params.displacement_threshold as number, '.2f'],
-                            ['ATR min', r.profile.params.displacement_atr_min as number, '.1f×'],
-                            ['BOS sens.', r.profile.params.bos_sensitivity as number, '/10'],
-                            ['Vol mult.', r.profile.params.volume_multiplier_active as number, '.1f×'],
-                            ['R:R target', r.profile.params.take_profit_rr as number, '.1f'],
-                            ['Risk/trade', (r.profile.params.risk_per_trade as number) * 100, '.1f%'],
-                          ] as [string, number, string][]).map(([label, val, fmt]) => (
-                            <div key={label} style={{ padding: '6px 10px', borderRadius: 6, background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.15)' }}>
-                              <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{label}</div>
-                              <div style={{ fontWeight: 700, fontSize: 14, color: '#c4b5fd' }}>
-                                {fmt.includes('f') ? Number(val ?? 0).toFixed(fmt.startsWith('.2') ? 2 : 1) : val}
-                                {fmt.includes('×') ? '×' : fmt.includes('/10') ? '/10' : fmt.includes('%') ? '%' : ''}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+function LaunchForm({ onLaunched }: { onLaunched: () => void }) {
+  const { data: symbolsData } = useApi(() => api.symbols());
+  const { data: profilesData } = useApi(() => api.strategyProfiles());
 
-                    {/* Suggestions */}
-                    {r.suggestions && r.suggestions.length > 0 && (
-                      <div>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>Insights IA</div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                          {r.suggestions.slice(0, 3).map((sg, i) => (
-                            <div key={i} style={{ display: 'flex', gap: 10, padding: '8px 12px', borderRadius: 6, background: 'var(--surface2)', borderLeft: `3px solid ${IMPACT_COLOR[sg.impact]}` }}>
-                              <div style={{ flex: 1 }}>
-                                <div style={{ fontWeight: 600, fontSize: 12, color: IMPACT_COLOR[sg.impact] }}>{sg.titre}</div>
-                                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{sg.action}</div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
+  const btUniverse: string[] = Array.isArray(symbolsData) ? symbolsData.filter((s: string) => s.endsWith('USDT')) : [];
+  const profiles: Array<Record<string, unknown>> = (profilesData?.rows as Array<Record<string, unknown>> | undefined) ?? [];
+
+  const [selected, setSelected] = useState<string[]>(['FETUSDT']);
+  const [duration, setDuration] = useState('1y');
+  const [profileId, setProfileId] = useState<string>('');
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError]   = useState('');
+
+  const toggle = (s: string) => setSelected(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]);
+
+  const launch = async () => {
+    if (selected.length === 0) { setError('Sélectionnez au moins 1 symbole.'); return; }
+    setRunning(true); setResult(null); setError('');
+    try {
+      const body: Record<string, unknown> = { symbols: selected, duration };
+      if (profileId) body.profile_id = parseInt(profileId, 10);
+      const res = await api.runBacktest(body);
+      const n = (res.signal_count as number | undefined) ?? 0;
+      setResult(`✓ Backtest terminé — ${n} signal${n !== 1 ? 's' : ''} accepté${n !== 1 ? 's' : ''}`);
+      onLaunched();
+    } catch (e) { setError(String(e)); }
+    finally { setRunning(false); }
+  };
+
+  return (
+    <div style={{ background: 'var(--bg-card)', border: '1px solid rgba(59,130,246,0.2)', borderRadius: 10, padding: 20, marginBottom: 24 }}>
+      <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: 16, fontSize: 14 }}>Nouveau backtest walk-forward</div>
+
+      {/* Symbols grid */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ color: 'var(--text-muted)', fontSize: 11, marginBottom: 6 }}>
+          Symboles — {selected.length} sélectionné(s)
+          <button onClick={() => setSelected([...btUniverse])} style={{ marginLeft: 8, color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', fontSize: 10, padding: 0 }}>Tous</button>
+          <button onClick={() => setSelected([])} style={{ marginLeft: 6, color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', fontSize: 10, padding: 0 }}>Aucun</button>
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {btUniverse.map(s => {
+            const on = selected.includes(s);
+            return (
+              <button key={s} onClick={() => toggle(s)} style={{
+                padding: '3px 10px', borderRadius: 4, fontSize: 11, cursor: 'pointer', fontWeight: on ? 700 : 400,
+                background: on ? 'rgba(59,130,246,0.2)' : 'rgba(255,255,255,0.04)',
+                border: `1px solid ${on ? 'rgba(59,130,246,0.5)' : 'rgba(255,255,255,0.1)'}`,
+                color: on ? 'var(--accent)' : 'var(--text-muted)',
+              }}>{s.replace('USDT', '')}</button>
             );
           })}
         </div>
-      )}
+      </div>
 
-      {/* Summary when done */}
-      {isDone && doneResults.length > 0 && (
-        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
-            {[
-              ['Cryptos analysées', doneResults.length, '#c4b5fd'],
-              ['Score IA moyen', avgScore + '/100', avgScore >= 75 ? 'var(--accent-green)' : 'var(--accent-yellow)'],
-              ['WR moyen', pct(doneResults.reduce((s, r) => s + (r.win_rate ?? 0), 0) / Math.max(doneResults.length, 1)), 'var(--accent-green)'],
-              ['PF moyen', num(doneResults.reduce((s, r) => s + (r.profit_factor ?? 0), 0) / Math.max(doneResults.length, 1)), 'var(--accent-green)'],
-            ].map(([label, value, color]) => (
-              <div key={String(label)} style={{ padding: '12px', borderRadius: 8, background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.2)', textAlign: 'center' }}>
-                <div style={{ fontSize: 20, fontWeight: 800, color: String(color) }}>{value}</div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{label}</div>
-              </div>
+      {/* Durée + Profil */}
+      <div style={{ display: 'flex', gap: 16, marginBottom: 14, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ color: 'var(--text-muted)', fontSize: 11, marginBottom: 6 }}>Durée</div>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {DURATIONS.map(d => (
+              <button key={d} onClick={() => setDuration(d)} style={{
+                padding: '4px 12px', borderRadius: 4, fontSize: 12, cursor: 'pointer',
+                background: duration === d ? 'rgba(59,130,246,0.2)' : 'rgba(255,255,255,0.04)',
+                border: `1px solid ${duration === d ? 'rgba(59,130,246,0.5)' : 'rgba(255,255,255,0.1)'}`,
+                color: duration === d ? 'var(--accent)' : 'var(--text-muted)', fontWeight: duration === d ? 700 : 400,
+              }}>{d}</button>
             ))}
           </div>
-          <div style={{ padding: 12, borderRadius: 8, background: 'rgba(63,185,80,0.08)', border: '1px solid rgba(63,185,80,0.25)', fontSize: 13, textAlign: 'center' }}>
-            ✅ <strong>{doneResults.length} profil{doneResults.length > 1 ? 's' : ''}</strong> créé{doneResults.length > 1 ? 's' : ''} et disponible{doneResults.length > 1 ? 's' : ''} dans la page Stratégie.
-            {job?.results.filter(r => r.status === 'error').length
-              ? <span style={{ color: 'var(--accent-red)', marginLeft: 8 }}>({job.results.filter(r => r.status === 'error').length} erreur{job.results.filter(r => r.status === 'error').length > 1 ? 's' : ''})</span>
-              : null}
-          </div>
-          <button
-            className="btn btn-secondary"
-            style={{ width: '100%', marginTop: 12 }}
-            onClick={() => { setJobId(null); setJob(null); setError(''); }}
-          >
-            🔁 Nouvelle analyse
-          </button>
         </div>
-      )}
+        <div>
+          <div style={{ color: 'var(--text-muted)', fontSize: 11, marginBottom: 6 }}>Profil stratégie</div>
+          <select value={profileId} onChange={e => setProfileId(e.target.value)} style={{
+            background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4,
+            color: 'var(--text-primary)', fontSize: 12, padding: '5px 10px',
+          }}>
+            <option value=''>Défaut (SMC/Wyckoff)</option>
+            {profiles.map(p => <option key={String(p.id)} value={String(p.id)}>{String(p.name)}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {error && <div style={{ color: 'var(--accent-red)', fontSize: 12, marginBottom: 10 }}>{error}</div>}
+      {result && <div style={{ color: '#22c55e', fontSize: 12, marginBottom: 10 }}>{result}</div>}
+
+      <button onClick={launch} disabled={running} style={{
+        padding: '9px 28px', borderRadius: 6, fontSize: 13, cursor: running ? 'default' : 'pointer', fontWeight: 700,
+        background: running ? 'rgba(59,130,246,0.1)' : 'rgba(59,130,246,0.25)',
+        border: '1px solid rgba(59,130,246,0.5)', color: running ? 'var(--text-muted)' : 'var(--accent)',
+        opacity: running ? 0.7 : 1,
+      }}>
+        {running ? 'Backtest en cours…' : 'Lancer le backtest'}
+      </button>
     </div>
   );
 }
 
-type WFSignal = {
-  timestamp: string;
-  direction: string;
-  entry_price: number;
-  tp_price: number;
-  sl_price: number;
-  result: string;
-  r_multiple: number;
-  steps: Record<string, unknown>;
-};
+/* ── BacktestsPage ───────────────────────────────────────────────────────── */
+export function BacktestsPage({ onNavigate: _onNavigate }: { onNavigate?: (page: AdminPage) => void } = {}) {
+  const { data, reload } = useApi(() => api.backtests('?limit=100&order=-timestamp'));
+  const rows: BacktestResult[] = (data?.rows ?? []) as BacktestResult[];
 
-type WFMetrics = {
-  total_signals: number;
-  wins: number;
-  losses: number;
-  pending: number;
-  win_rate: number;
-  profit_factor: number;
-  max_drawdown: number;
-  total_r: number;
-};
+  const [compareA, setCompareA]       = useState<BacktestResult | null>(null);
+  const [compareB, setCompareB]       = useState<BacktestResult | null>(null);
+  const [optimizeTarget, setOptimize] = useState<BacktestResult | null>(null);
+  const [compareQueue, setCompareQueue] = useState<number[]>([]);
 
-type WFResult = {
-  ok: boolean;
-  signals: WFSignal[];
-  metrics: WFMetrics;
-  candles_downloaded: number;
-  period_start: string;
-  period_end: string;
-};
-
-const WF_SYMBOLS = ['ETHUSDT', 'BTCUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'ADAUSDT', 'AVAXUSDT', 'DOTUSDT', 'LINKUSDT', 'DOGEUSDT', 'LTCUSDT'];
-
-const STEP_LABELS: Record<string, string> = {
-  liquidity_zone: 'Zone de liquidite',
-  sweep: 'Sweep',
-  spring: 'Spring (Wyckoff)',
-  utad: 'UTAD (distribution)',
-  displacement: 'Displacement',
-  bos: 'BOS (Break of Structure)',
-  expansion: 'Expansion',
-  fib_match: 'Fib Retracement',
-};
-
-
-export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../types').AdminPage) => void }) {
-  const { data, reload } = useApi(() => api.backtests());
-  const { data: profiles, reload: reloadProfiles } = useApi(() => api.strategyProfiles());
-  const { data: loadedData } = useApi(() => api.loadedSymbols());
-  const { data: procs, reload: refreshProcs } = useApi(() => api.systemProcesses());
-
-  // Poll bot status every 8 s
-  useEffect(() => {
-    const id = setInterval(refreshProcs, 8000);
-    return () => clearInterval(id);
-  }, []);
-
-  const loadedEntries = loadedData ?? [];
-  const hasData = loadedEntries.length > 0;
-
-  const [selectedSymbols, setSelectedSymbols] = useState<string[]>([]);
-  const [btQuote, setBtQuote]     = useState('USDT');
-  const [btDuration, setBtDuration] = useState('all');
-  const [profileId, setProfileId] = useState<number | null>(null);
-  const [stopping, setStopping]   = useState(false);
-
-  const stopBot = async () => {
-    setStopping(true);
-    await api.autonomousStop();
-    await refreshProcs();
-    setStopping(false);
-  };
-  const [report, setReport]       = useState<Record<string, unknown> | null>(null);
-  const [lastResult, setLastResult] = useState<BacktestResult | null>(null);
-  const [status, setStatus]       = useState('');
-  const [running, setRunning]     = useState(false);
-  const [compareIds, setCompareIds] = useState<[number | null, number | null]>([null, null]);
-  const [optimizeTarget, setOptimizeTarget] = useState<BacktestResult | null>(null);
-  const [optimizeIds, setOptimizeIds] = useState<Set<number>>(new Set());
-  const [showMultiOptimize, setShowMultiOptimize] = useState(false);
-  const [showWorkshop, setShowWorkshop] = useState(false);
-  const [leftTab, setLeftTab] = useState<'sim' | 'real'>('sim');
-  const [expandedRow, setExpandedRow] = useState<number | null>(null);
-  const [tradesMap, setTradesMap] = useState<Record<number, SimulatedTrade[]>>({});
-  const [dataWarningsMap, setDataWarningsMap] = useState<Record<number, string>>({});
-
-  const [wfSymbol, setWfSymbol] = useState('ETHUSDT');
-  const [wfYears, setWfYears] = useState(4);
-  const [wfTimeframe, setWfTimeframe] = useState('1h');
-  const [wfProfileId, setWfProfileId] = useState<number | null>(null);
-  const [wfRunning, setWfRunning] = useState(false);
-  const [wfResult, setWfResult] = useState<WFResult | null>(null);
-  const [wfError, setWfError] = useState('');
-  const [wfExpandedIdx, setWfExpandedIdx] = useState<number | null>(null);
-  const [wfSortCol, setWfSortCol] = useState<'timestamp' | 'direction' | 'result' | 'r_multiple'>('timestamp');
-  const [wfSortDir, setWfSortDir] = useState<'asc' | 'desc'>('asc');
-
-  const runWalkForward = async () => {
-    setWfRunning(true);
-    setWfError('');
-    setWfResult(null);
-    try {
-      const res = await api.runWalkforward({
-        symbol: wfSymbol,
-        years: wfYears,
-        timeframe: wfTimeframe,
-        profile_id: wfProfileId,
-      }) as WFResult;
-      if (res.ok) {
-        setWfResult(res);
-      } else {
-        setWfError(String((res as Record<string, unknown>).reason ?? 'Erreur inconnue'));
-      }
-    } catch (e) {
-      setWfError(e instanceof Error ? e.message : 'Erreur reseau');
-    } finally {
-      setWfRunning(false);
+  const handleCompare = (r: BacktestResult) => {
+    if (compareQueue.includes(r.id)) {
+      setCompareQueue(q => q.filter(id => id !== r.id));
+      return;
+    }
+    const next = [...compareQueue, r.id];
+    if (next.length >= 2) {
+      const [idA, idB] = next;
+      const a = rows.find(x => x.id === idA);
+      const b = rows.find(x => x.id === idB);
+      if (a && b) { setCompareA(a); setCompareB(b); }
+      setCompareQueue([]);
+    } else {
+      setCompareQueue(next);
     }
   };
-
-  const wfSortedSignals = useMemo(() => {
-    if (!wfResult) return [];
-    const sigs = [...wfResult.signals];
-    sigs.sort((a, b) => {
-      let cmp = 0;
-      if (wfSortCol === 'timestamp') cmp = a.timestamp.localeCompare(b.timestamp);
-      else if (wfSortCol === 'direction') cmp = a.direction.localeCompare(b.direction);
-      else if (wfSortCol === 'result') cmp = a.result.localeCompare(b.result);
-      else if (wfSortCol === 'r_multiple') cmp = a.r_multiple - b.r_multiple;
-      return wfSortDir === 'asc' ? cmp : -cmp;
-    });
-    return sigs;
-  }, [wfResult, wfSortCol, wfSortDir]);
-
-  const toggleWfSort = (col: typeof wfSortCol) => {
-    if (wfSortCol === col) setWfSortDir(d => d === 'asc' ? 'desc' : 'asc');
-    else { setWfSortCol(col); setWfSortDir('asc'); }
-  };
-
-  const WfSortTh = ({ col, children }: { col: typeof wfSortCol; children: React.ReactNode }) => (
-    <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleWfSort(col)}>
-      {children} {wfSortCol === col ? (wfSortDir === 'asc' ? '▲' : '▼') : ''}
-    </th>
-  );
-
-  // ── Derived from DB-loaded candle data ────────────────────────────────────
-  const btQuotes = useMemo(() => {
-    const qs = [...new Set(loadedEntries.map(e => (e as Record<string,unknown>).quote as string ?? 'USDT'))].sort();
-    return qs.length > 0 ? qs : ['USDT'];
-  }, [loadedEntries]);
-
-  const btUniverse = useMemo(() => {
-    return loadedEntries
-      .filter(e => ((e as Record<string,unknown>).quote as string ?? 'USDT') === btQuote)
-      .map(e => e.symbol);
-  }, [loadedEntries, btQuote]);
-
-  // ── History filters (client-side) ─────────────────────────────────────────
-  const [filterSymbol, setFilterSymbol] = useState('');
-  const [filterTF,     setFilterTF]     = useState('');
-  const [filterMinPF,  setFilterMinPF]  = useState('');
-  const [filterMinWR,  setFilterMinWR]  = useState('');
-
-  const rows = useMemo(() => data?.rows ?? [], [data]);
-
-  const filteredRows = useMemo(() => rows.filter(r => {
-    if (filterSymbol && r.symbol !== filterSymbol) return false;
-    if (filterTF     && r.timeframe !== filterTF) return false;
-    if (filterMinPF  && r.profit_factor < Number(filterMinPF)) return false;
-    if (filterMinWR  && r.win_rate < Number(filterMinWR) / 100) return false;
-    return true;
-  }), [rows, filterSymbol, filterTF, filterMinPF, filterMinWR]);
-
-  const { sorted: sortedHistory, Th: HistoryTh } = useSortable<BacktestResult>(filteredRows, 'id', 'desc');
-
-  const avgPF = rows.length ? rows.reduce((s, b) => s + b.profit_factor, 0) / rows.length : 0;
-  const avgWR = rows.length ? rows.reduce((s, b) => s + b.win_rate, 0) / rows.length : 0;
-  const avgDD = rows.length ? rows.reduce((s, b) => s + b.drawdown, 0) / rows.length : 0;
-
-  const historySymbols = useMemo(() => [...new Set(rows.map(r => r.symbol))].sort(), [rows]);
-  const historyTFs     = useMemo(() => [...new Set(rows.map(r => r.timeframe))].sort(), [rows]);
-
-  const runBacktest = async () => {
-    setRunning(true);
-    setStatus('');
-    setOptimizeTarget(null);
-    try {
-      const res = await api.runBacktest({ symbols: selectedSymbols, profile_id: profileId, duration: btDuration });
-      if (res.ok) {
-        setStatus('✅ Backtest terminé — rapport généré.');
-        setReport(res.result as Record<string, unknown>);
-        setLastResult(res.result as BacktestResult);
-        const btResult = res.result as BacktestResult;
-        if (Array.isArray(res.trades) && btResult.id) {
-          setTradesMap(prev => ({ ...prev, [btResult.id]: res.trades as SimulatedTrade[] }));
-        }
-        if (res.data_warning && btResult.id) {
-          setDataWarningsMap(prev => ({ ...prev, [btResult.id]: res.data_warning as string }));
-        }
-        reload();
-      } else {
-        setStatus(`❌ Erreur: ${String(res.reason)}`);
-      }
-    } catch (e) {
-      setStatus(`❌ ${e instanceof Error ? e.message : 'Erreur inconnue'}`);
-    } finally {
-      setRunning(false);
-    }
-  };
-
-  const toggleCompare = (id: number) => {
-    setCompareIds(prev => {
-      if (prev[0] === id) return [null, prev[1]];
-      if (prev[1] === id) return [prev[0], null];
-      if (prev[0] === null) return [id, prev[1]];
-      if (prev[1] === null) return [prev[0], id];
-      return [id, prev[1]];
-    });
-  };
-
-  const toggleOptimizeId = (id: number) => {
-    setOptimizeIds(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-    setShowMultiOptimize(false);
-  };
-
-  const compareA = rows.find(r => r.id === compareIds[0]) ?? null;
-  const compareB = rows.find(r => r.id === compareIds[1]) ?? null;
-  const optimizeIdList = Array.from(optimizeIds);
 
   return (
-    <section>
-      <div className="page-header-row">
-        <div>
-          <h2 style={{ margin: 0 }}>Backtests</h2>
-          <p className="page-description">Simulation historique de votre stratégie SMC/Wyckoff</p>
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button
-            className="btn btn-primary"
-            onClick={() => setShowWorkshop(v => !v)}
-            style={{
-              background: showWorkshop
-                ? 'rgba(139,92,246,0.2)'
-                : 'linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%)',
-              borderColor: '#7c3aed',
-              fontSize: 13, padding: '8px 18px', fontWeight: 700,
-              display: 'flex', alignItems: 'center', gap: 8,
-            }}
-          >
-            <span>🧬</span>
-            {showWorkshop ? 'Fermer le Workshop' : 'Optimiser avec IA'}
-          </button>
-        </div>
+    <div style={{ padding: '24px 28px', maxWidth: 1200, margin: '0 auto' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+        <h1 style={{ margin: 0, fontSize: 22, color: 'var(--text-primary)', fontWeight: 800 }}>Backtests</h1>
+        <button onClick={reload} style={{ padding: '6px 14px', borderRadius: 6, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.15)', color: 'var(--text-muted)', fontSize: 12, cursor: 'pointer' }}>
+          Rafraîchir
+        </button>
       </div>
 
-      <div className="grid-4" style={{ marginBottom: 20 }}>
-        <div className={`stat-card ${avgWR >= 0.5 ? 'stat-card-accent-green' : 'stat-card-accent-red'}`}>
-          <div className="stat-num" style={{ color: avgWR >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-            {(avgWR * 100).toFixed(1)}%
-          </div>
-          <div className="stat-lbl">
-            <Tooltip text="Pourcentage de trades gagnants sur l'ensemble de tous vos backtests. Au dessus de 50% = bonne sélection. Un bon système peut être profitable avec 40% si le R/R est bon.">
-              Win rate moyen
-            </Tooltip>
-          </div>
+      <LaunchForm onLaunched={reload} />
+
+      {compareQueue.length === 1 && (
+        <div style={{ padding: '8px 14px', marginBottom: 12, background: 'rgba(234,179,8,0.1)', border: '1px solid rgba(234,179,8,0.3)', borderRadius: 6, color: '#eab308', fontSize: 12 }}>
+          Cliquez sur "Comparer" d'un second backtest pour voir la comparaison.
         </div>
-        <div className={`stat-card ${avgPF >= 1.2 ? 'stat-card-accent-green' : 'stat-card-accent-yellow'}`}>
-          <div className="stat-num" style={{ color: avgPF >= 1.2 ? 'var(--accent-green)' : 'var(--accent-yellow)' }}>
-            {avgPF.toFixed(2)}
-          </div>
-          <div className="stat-lbl">
-            <Tooltip text="Profit Factor = gains bruts / pertes brutes. Au dessus de 1.0 = rentable. Au dessus de 1.5 = excellent. En dessous de 1.0 = perd de l'argent.">
-              Profit factor moyen
-            </Tooltip>
-          </div>
-        </div>
-        <div className={`stat-card ${avgDD <= 0.1 ? 'stat-card-accent-green' : avgDD <= 0.2 ? 'stat-card-accent-yellow' : 'stat-card-accent-red'}`}>
-          <div className="stat-num" style={{ color: avgDD <= 0.1 ? 'var(--accent-green)' : avgDD <= 0.2 ? 'var(--accent-yellow)' : 'var(--accent-red)' }}>
-            {(avgDD * 100).toFixed(1)}%
-          </div>
-          <div className="stat-lbl">
-            <Tooltip text="Drawdown = perte maximale depuis un sommet avant de remonter. C'est la mesure du pire scénario que vous auriez vécu. Moins de 10% = excellent, 10-20% = acceptable, +20% = dangereux.">
-              Drawdown moyen
-            </Tooltip>
-          </div>
-        </div>
-        <div className="stat-card stat-card-accent-blue">
-          <div className="stat-num" style={{ color: 'var(--accent)' }}>{rows.length}</div>
-          <div className="stat-lbl">Rapports stockés</div>
-        </div>
-      </div>
-
-      <div className="grid-2">
-        <div className="card">
-          {/* ── Bot status banner ─────────────────────────────────── */}
-          {procs && procs.total_running > 0 && (
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14,
-              padding: '9px 12px', borderRadius: 7,
-              background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.3)',
-            }}>
-              <span style={{ width: 9, height: 9, borderRadius: '50%', background: 'var(--accent-green)', flexShrink: 0, boxShadow: '0 0 6px var(--accent-green)' }} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--accent-green)' }}>
-                  Bot {(procs.mode as string).toUpperCase()} actif
-                </div>
-                {(procs.processes as Array<Record<string,unknown>>).map((p, i) => (
-                  <div key={i} style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>
-                    {String(p.detail ?? '')}
-                  </div>
-                ))}
-              </div>
-              <button
-                onClick={stopBot}
-                disabled={stopping}
-                style={{
-                  padding: '5px 12px', borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: stopping ? 'default' : 'pointer',
-                  background: stopping ? 'rgba(239,68,68,0.1)' : 'rgba(239,68,68,0.18)',
-                  border: '1px solid rgba(239,68,68,0.5)',
-                  color: 'var(--accent-red)', flexShrink: 0,
-                  opacity: stopping ? 0.6 : 1,
-                }}
-              >
-                {stopping ? 'Arrêt…' : '⏹ Arrêter'}
-              </button>
-            </div>
-          )}
-          {procs && procs.total_running === 0 && (
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14,
-              padding: '7px 12px', borderRadius: 7,
-              background: 'rgba(100,116,139,0.08)', border: '1px solid rgba(100,116,139,0.2)',
-            }}>
-              <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--text-muted)', flexShrink: 0 }} />
-              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Bot inactif</span>
-            </div>
-          )}
-
-          <div style={{ display: 'flex', gap: 0, marginBottom: 16, borderBottom: '1px solid var(--border)' }}>
-            {([
-              ['sim', 'Backtest simulé'],
-              ['real', 'Test réel (yfinance)'],
-            ] as ['sim' | 'real', string][]).map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => setLeftTab(key)}
-                style={{
-                  flex: 1, padding: '10px 0', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-                  background: 'transparent', border: 'none',
-                  color: leftTab === key ? (key === 'real' ? '#34d399' : 'var(--accent)') : 'var(--text-muted)',
-                  borderBottom: leftTab === key ? `2px solid ${key === 'real' ? '#34d399' : 'var(--accent)'}` : '2px solid transparent',
-                  transition: 'all 0.2s',
-                }}
-              >
-                {key === 'real' ? '📊 ' : '▶ '}{label}
-              </button>
-            ))}
-          </div>
-
-          {leftTab === 'sim' && (
-            <>
-              {!hasData && loadedData !== undefined && (
-                <div style={{
-                  background: 'rgba(255,165,0,0.10)', border: '1px solid rgba(255,165,0,0.4)',
-                  borderRadius: 8, padding: '14px 16px', marginBottom: 16,
-                }}>
-                  <div style={{ fontWeight: 700, color: 'var(--accent-yellow)', marginBottom: 6 }}>
-                    Aucune donnée chargée en base
-                  </div>
-                  <div className="muted" style={{ fontSize: 13, marginBottom: 12 }}>
-                    Charge d'abord des bougies pour au moins une crypto avant de lancer un backtest.
-                  </div>
-                  {onNavigate && (
-                    <button
-                      className="btn btn-primary"
-                      style={{ fontSize: 12 }}
-                      onClick={() => onNavigate('Données de marché')}
-                    >
-                      Aller charger des données →
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {hasData && (
-                <>
-                  <div className="form-group">
-                    <label>Cryptos à tester</label>
-                    {/* Quote filter tabs (from DB candle data) */}
-                    {btQuotes.length > 1 && (
-                      <div style={{ display: 'flex', gap: 5, marginBottom: 8 }}>
-                        {btQuotes.map(q => (
-                          <button key={q} onClick={() => { setBtQuote(q); setSelectedSymbols([]); }} style={{
-                            padding: '2px 10px', borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: 'pointer',
-                            border: `1px solid ${btQuote === q ? 'var(--accent)' : 'var(--border)'}`,
-                            background: btQuote === q ? 'rgba(59,130,246,0.15)' : 'var(--surface2)',
-                            color: btQuote === q ? 'var(--accent)' : 'var(--text-muted)',
-                          }}>{q}</button>
-                        ))}
-                      </div>
-                    )}
-                    {/* Selection count + clear */}
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span>{selectedSymbols.length} sélectionnée(s) sur {btUniverse.length}</span>
-                      {selectedSymbols.length > 0 && (
-                        <button onClick={() => setSelectedSymbols([])} style={{ fontSize: 10, color: 'var(--accent-red)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
-                          tout décocher
-                        </button>
-                      )}
-                      <button onClick={() => setSelectedSymbols([...btUniverse])} style={{ fontSize: 10, color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, marginLeft: 'auto' }}>
-                        tout sélectionner
-                      </button>
-                    </div>
-                    {/* Symbol grid with date range */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 240, overflowY: 'auto' }}>
-                      {btUniverse.map(s => {
-                        const sel = selectedSymbols.includes(s);
-                        const entry = loadedEntries.find(e => e.symbol === s) as { symbol: string; quote: string; total: number; min_ts: string | null; max_ts: string | null } | undefined;
-                        const minDate = entry?.min_ts ? new Date(entry.min_ts).toLocaleDateString('fr-FR', { month: 'short', year: 'numeric' }) : null;
-                        const maxDate = entry?.max_ts ? new Date(entry.max_ts).toLocaleDateString('fr-FR', { month: 'short', year: 'numeric' }) : null;
-                        const candles = entry?.total;
-                        return (
-                          <label key={s} style={{
-                            display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px',
-                            borderRadius: 6, cursor: 'pointer', userSelect: 'none',
-                            background: sel ? 'rgba(59,130,246,0.12)' : 'var(--surface2)',
-                            border: `1px solid ${sel ? 'var(--accent)' : 'var(--border)'}`,
-                          }}>
-                            <input type="checkbox" checked={sel} style={{ width: 'auto', margin: 0 }}
-                              onChange={() => setSelectedSymbols(prev => sel ? prev.filter(x => x !== s) : [...prev, s])} />
-                            <span style={{ fontWeight: 700, fontSize: 13, color: sel ? 'var(--accent)' : 'var(--text)' }}>
-                              {fmtSym(s)}
-                            </span>
-                            {minDate && maxDate && (
-                              <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 'auto' }}>
-                                {minDate} → {maxDate}
-                                {candles !== undefined && (
-                                  <span style={{ marginLeft: 5, color: 'var(--accent-green)', fontWeight: 600 }}>
-                                    {candles >= 1000 ? `${(candles / 1000).toFixed(1)}k` : candles} bougies
-                                  </span>
-                                )}
-                              </span>
-                            )}
-                          </label>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Duration selector */}
-                  <div className="form-group">
-                    <label>Période d'analyse</label>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 4 }}>
-                      {([
-                        ['1d', '1j'], ['1w', '1S'], ['1m', '1M'], ['3m', '3M'], ['6m', '6M'],
-                        ['1y', '1A'], ['2y', '2A'], ['4y', '4A'], ['all', 'Tout'],
-                      ] as [string, string][]).map(([val, label]) => (
-                        <button key={val} onClick={() => setBtDuration(val)} style={{
-                          padding: '4px 0', borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: 'pointer',
-                          border: `1px solid ${btDuration === val ? 'var(--accent)' : 'var(--border)'}`,
-                          background: btDuration === val ? 'rgba(59,130,246,0.2)' : 'var(--surface2)',
-                          color: btDuration === val ? 'var(--accent)' : 'var(--text-muted)',
-                        }}>{label}</button>
-                      ))}
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {!hasData && loadedData === undefined && (
-                <div className="muted" style={{ fontSize: 13, marginBottom: 12 }}>Chargement…</div>
-              )}
-              <div className="form-group">
-                <label>
-                  <Tooltip text="Le profil stratégie contient tous les paramètres de votre système (Spring, UTAD, BOS, Fib, RSI, Volume). Créez des profils dans la page Stratégie.">
-                    Profil stratégie
-                  </Tooltip>
-                </label>
-                <select value={profileId ?? ''} onChange={e => setProfileId(e.target.value ? Number(e.target.value) : null)}>
-                  <option value="">default-smc</option>
-                  {(profiles?.rows as Array<Record<string, unknown>> | undefined)?.map(p => (
-                    <option key={String(p.id)} value={String(p.id)}>{String(p.name)}</option>
-                  ))}
-                </select>
-              </div>
-              <button className="btn btn-primary" onClick={runBacktest} disabled={running} style={{ width: '100%' }}>
-                {running ? 'Calcul en cours…' : '▶ Lancer le backtest'}
-              </button>
-              {status && (
-                <div style={{ marginTop: 12, padding: 10, borderRadius: 6, background: 'var(--surface2)', fontSize: 13 }}>
-                  {status}
-                </div>
-              )}
-
-              {report && (
-                <div style={{ marginTop: 16 }}>
-                  <h3>Résultats</h3>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                    {([
-                      ['Win rate',      pct(Number(report.win_rate)),      'Trades gagnants / total trades'],
-                      ['Profit factor', num(Number(report.profit_factor)), 'Gains bruts / pertes brutes (>1.2 = rentable)'],
-                      ['Drawdown',      pct(Number(report.drawdown)),      'Perte max depuis un sommet (moins = mieux)'],
-                      ['Expectancy',    num(Number(report.expectancy), 4), 'Gain moyen par trade en unités de risque (R)'],
-                      ['R multiple',    num(Number(report.r_multiple)) + 'R', 'Rendement total exprimé en multiples du risque initial'],
-                      ['Stratégie',     String(report.strategy_version),  'Profil stratégie utilisé pour ce backtest'],
-                    ] as [string, string, string][]).map(([label, value, tip]) => (
-                      <div key={label} style={{ padding: '8px 10px', background: 'var(--surface2)', borderRadius: 6 }}>
-                        <div style={{ fontSize: 11, opacity: 0.6, marginBottom: 2 }}>
-                          <Tooltip text={tip}>{label}</Tooltip>
-                        </div>
-                        <div style={{ fontWeight: 700, fontSize: 15 }}>{value}</div>
-                      </div>
-                    ))}
-                  </div>
-                  {lastResult && (
-                    <button
-                      className="btn btn-secondary"
-                      style={{ width: '100%', marginTop: 12, borderColor: 'rgba(88,166,255,0.4)', color: 'var(--accent)' }}
-                      onClick={() => setOptimizeTarget(lastResult)}
-                    >
-                      🤖 Optimiser cette stratégie avec l'IA
-                    </button>
-                  )}
-                </div>
-              )}
-            </>
-          )}
-
-          {leftTab === 'real' && (
-            <>
-              {!wfResult && !wfRunning && (
-                <>
-                  <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
-                    Telecharge des donnees OHLCV reelles via yfinance, analyse chaque fenetre avec le moteur SMC/Wyckoff 7 etapes, et simule les trades en paper.
-                  </div>
-                  <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-                    <div className="form-group" style={{ flex: 1, margin: 0, minWidth: 140 }}>
-                      <label style={{ fontSize: 11 }}>Symbole</label>
-                      <select value={wfSymbol} onChange={e => setWfSymbol(e.target.value)} style={{ fontSize: 13 }}>
-                        {WF_SYMBOLS.map(s => <option key={s} value={s}>{fmtSym(s)}</option>)}
-                      </select>
-                    </div>
-                    <div className="form-group" style={{ flex: 1, margin: 0, minWidth: 120 }}>
-                      <label style={{ fontSize: 11 }}>Duree</label>
-                      <select value={wfYears} onChange={e => setWfYears(Number(e.target.value))} style={{ fontSize: 13 }}>
-                        <option value={1}>1 an</option>
-                        <option value={2}>2 ans</option>
-                        <option value={3}>3 ans</option>
-                        <option value={4}>4 ans</option>
-                      </select>
-                    </div>
-                    <div className="form-group" style={{ flex: 1, margin: 0, minWidth: 100 }}>
-                      <label style={{ fontSize: 11 }}>Timeframe</label>
-                      <select value={wfTimeframe} onChange={e => setWfTimeframe(e.target.value)} style={{ fontSize: 13 }}>
-                        <option value="15m">15m</option>
-                        <option value="1h">1H</option>
-                        <option value="4h">4H</option>
-                        <option value="1d">1D</option>
-                      </select>
-                    </div>
-                    <div className="form-group" style={{ flex: 1, margin: 0, minWidth: 140 }}>
-                      <label style={{ fontSize: 11 }}>Profil strategie</label>
-                      <select value={wfProfileId ?? ''} onChange={e => setWfProfileId(e.target.value ? Number(e.target.value) : null)} style={{ fontSize: 13 }}>
-                        <option value="">SMC-Wyckoff (defaut)</option>
-                        {(profiles?.rows as Array<Record<string, unknown>> | undefined)?.map(p => <option key={String(p.id)} value={String(p.id)}>{String(p.name)}</option>)}
-                      </select>
-                    </div>
-                  </div>
-
-                  <div style={{ padding: 10, borderRadius: 6, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', fontSize: 12, marginBottom: 16, color: 'var(--text-muted)' }}>
-                    Le calcul peut prendre 30-60 secondes selon la quantite de donnees.
-                    {wfTimeframe === '15m' && (
-                      <span style={{ color: '#fbbf24', display: 'block', marginTop: 4 }}>
-                        Yahoo Finance limite les donnees 15m a ~60 jours.
-                      </span>
-                    )}
-                    {(wfTimeframe === '1h' || wfTimeframe === '4h') && wfYears > 2 && (
-                      <span style={{ color: '#fbbf24', display: 'block', marginTop: 4 }}>
-                        Yahoo Finance limite les donnees {wfTimeframe} a ~730 jours (~2 ans). Pour 4 ans complets, utilisez 1D.
-                      </span>
-                    )}
-                  </div>
-
-                  {wfError && (
-                    <div style={{ marginBottom: 12, padding: 10, borderRadius: 6, background: 'rgba(248,81,73,0.1)', color: 'var(--accent-red)', fontSize: 13 }}>
-                      {wfError}
-                    </div>
-                  )}
-
-                  <button
-                    className="btn btn-primary"
-                    onClick={runWalkForward}
-                    style={{
-                      width: '100%', fontSize: 14, padding: '12px 0', fontWeight: 700,
-                      background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                      borderColor: '#10b981',
-                    }}
-                  >
-                    Lancer le test reel {wfYears} an{wfYears > 1 ? 's' : ''}
-                  </button>
-                </>
-              )}
-
-              {wfRunning && (
-                <div style={{ textAlign: 'center', padding: 48 }}>
-                  <div style={{ fontSize: 48, marginBottom: 12 }}>📊</div>
-                  <div style={{ fontWeight: 700, marginBottom: 6 }}>Telechargement et analyse en cours...</div>
-                  <div className="muted" style={{ fontSize: 13 }}>
-                    {fmtSym(wfSymbol)} {wfTimeframe} sur {wfYears} an{wfYears > 1 ? 's' : ''}...
-                  </div>
-                  <div style={{ marginTop: 16, height: 4, background: 'var(--surface2)', borderRadius: 2, overflow: 'hidden' }}>
-                    <div style={{
-                      height: '100%', borderRadius: 2,
-                      background: 'linear-gradient(90deg, #10b981, #059669)',
-                      animation: 'pulse 2s ease-in-out infinite', width: '70%',
-                    }} />
-                  </div>
-                </div>
-              )}
-
-              {wfResult && (
-                <div>
-                  <h3 style={{ color: '#34d399', marginBottom: 12 }}>Résultats</h3>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8, marginBottom: 12 }}>
-                    {([
-                      ['Signaux', String(wfResult.metrics.total_signals), '#34d399'],
-                      ['Win rate', pct(wfResult.metrics.win_rate), wfResult.metrics.win_rate >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)'],
-                      ['Profit factor', num(wfResult.metrics.profit_factor), wfResult.metrics.profit_factor >= 1.2 ? 'var(--accent-green)' : 'var(--accent-yellow)'],
-                      ['Max DD', pct(wfResult.metrics.max_drawdown), wfResult.metrics.max_drawdown <= 0.1 ? 'var(--accent-green)' : 'var(--accent-red)'],
-                    ] as [string, string, string][]).map(([label, value, color]) => (
-                      <div key={label} style={{ padding: '8px 10px', borderRadius: 6, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.15)', textAlign: 'center' }}>
-                        <div style={{ fontSize: 18, fontWeight: 800, color }}>{value}</div>
-                        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{label}</div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8, marginBottom: 12 }}>
-                    {([
-                      ['Wins', String(wfResult.metrics.wins), 'var(--accent-green)'],
-                      ['Losses', String(wfResult.metrics.losses), 'var(--accent-red)'],
-                      ['En cours', String(wfResult.metrics.pending), 'var(--accent-yellow)'],
-                      ['Total R', wfResult.metrics.total_r + 'R', wfResult.metrics.total_r >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'],
-                    ] as [string, string, string][]).map(([label, value, color]) => (
-                      <div key={label} style={{ padding: '6px 8px', borderRadius: 6, background: 'var(--surface2)', textAlign: 'center' }}>
-                        <div style={{ fontSize: 15, fontWeight: 700, color }}>{value}</div>
-                        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 1 }}>{label}</div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div style={{ padding: 8, borderRadius: 6, background: 'var(--surface2)', fontSize: 11, marginBottom: 12, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                    <span className="muted">Bougies : <strong style={{ color: 'var(--text)' }}>{wfResult.candles_downloaded.toLocaleString()}</strong></span>
-                    <span className="muted">Periode : <strong style={{ color: 'var(--text)' }}>{wfResult.period_start?.slice(0, 10)}</strong> → <strong style={{ color: 'var(--text)' }}>{wfResult.period_end?.slice(0, 10)}</strong></span>
-                  </div>
-
-                  {wfSortedSignals.length > 0 && (
-                    <div style={{ maxHeight: 350, overflowY: 'auto', marginBottom: 12 }}>
-                      <table>
-                        <thead>
-                          <tr>
-                            <WfSortTh col="timestamp">Date</WfSortTh>
-                            <WfSortTh col="direction">Dir</WfSortTh>
-                            <th>Entree</th>
-                            <WfSortTh col="result">Res</WfSortTh>
-                            <WfSortTh col="r_multiple">R</WfSortTh>
-                            <th>Etapes</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {wfSortedSignals.map((sig, idx) => {
-                            const isExpanded = wfExpandedIdx === idx;
-                            const resultColor = sig.result === 'TP' ? 'var(--accent-green)' : sig.result === 'SL' ? 'var(--accent-red)' : 'var(--accent-yellow)';
-                            const dirColor = sig.direction === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)';
-                            const stepKeys = ['liquidity_zone', 'sweep', 'displacement', 'bos', 'expansion', 'fib_match'];
-                            const wyckoff = sig.steps.spring === true || sig.steps.utad === true;
-                            const stepsValid = stepKeys.filter(k => sig.steps[k] === true).length + (wyckoff ? 1 : 0);
-                            return (
-                              <tr key={idx} style={{ cursor: 'pointer', background: isExpanded ? 'rgba(16,185,129,0.08)' : 'transparent' }} onClick={() => setWfExpandedIdx(isExpanded ? null : idx)}>
-                                <td style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{sig.timestamp.slice(0, 10)}</td>
-                                <td><span style={{ fontWeight: 700, color: dirColor, fontSize: 11 }}>{sig.direction}</span></td>
-                                <td style={{ fontFamily: 'monospace', fontSize: 11 }}>${sig.entry_price.toLocaleString()}</td>
-                                <td><span style={{ fontWeight: 700, color: resultColor, fontSize: 11 }}>{sig.result === 'TP' ? 'TP' : sig.result === 'SL' ? 'SL' : 'Open'}</span></td>
-                                <td style={{ fontWeight: 700, fontSize: 11, color: sig.r_multiple >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>{sig.r_multiple > 0 ? '+' : ''}{sig.r_multiple}R</td>
-                                <td>
-                                  <span style={{ fontSize: 10, padding: '2px 5px', borderRadius: 4, background: stepsValid >= 7 ? 'rgba(63,185,80,0.15)' : 'rgba(255,165,0,0.15)', color: stepsValid >= 7 ? 'var(--accent-green)' : 'var(--accent-yellow)' }}>
-                                    {stepsValid}/7 {isExpanded ? '▲' : '▼'}
-                                  </span>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-
-                  {wfExpandedIdx !== null && wfSortedSignals[wfExpandedIdx] && (
-                    <div style={{ padding: 12, borderRadius: 8, background: 'var(--surface2)', border: '1px solid rgba(16,185,129,0.2)', marginBottom: 12 }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 8, color: '#34d399' }}>
-                        Etapes — {wfSortedSignals[wfExpandedIdx].timestamp.slice(0, 16).replace('T', ' ')}
-                      </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 6 }}>
-                        {Object.entries(STEP_LABELS).map(([key, label]) => {
-                          const val = wfSortedSignals[wfExpandedIdx].steps[key];
-                          const passed = val === true;
-                          return (
-                            <div key={key} style={{
-                              padding: '6px 8px', borderRadius: 6,
-                              background: passed ? 'rgba(63,185,80,0.1)' : 'rgba(248,81,73,0.06)',
-                              border: `1px solid ${passed ? 'rgba(63,185,80,0.3)' : 'rgba(248,81,73,0.2)'}`,
-                            }}>
-                              <span style={{ fontSize: 12, marginRight: 4 }}>{passed ? 'V' : 'X'}</span>
-                              <span style={{ fontSize: 11, color: passed ? 'var(--accent-green)' : 'var(--accent-red)' }}>{label}</span>
-                            </div>
-                          );
-                        })}
-                        {wfSortedSignals[wfExpandedIdx].steps.atr !== undefined && (
-                          <div style={{ padding: '6px 8px', borderRadius: 6, background: 'var(--surface)', border: '1px solid var(--border)' }}>
-                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>ATR: </span>
-                            <span style={{ fontSize: 11, fontWeight: 700 }}>{Number(wfSortedSignals[wfExpandedIdx].steps.atr).toFixed(2)}</span>
-                          </div>
-                        )}
-                        {wfSortedSignals[wfExpandedIdx].steps.fib_retracement !== undefined && (
-                          <div style={{ padding: '6px 8px', borderRadius: 6, background: 'var(--surface)', border: '1px solid var(--border)' }}>
-                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Fib: </span>
-                            <span style={{ fontSize: 11, fontWeight: 700 }}>{String(wfSortedSignals[wfExpandedIdx].steps.fib_retracement)}</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  {wfSortedSignals.length === 0 && (
-                    <div style={{ textAlign: 'center', padding: 24, color: 'var(--text-muted)' }}>
-                      <div style={{ fontSize: 28, marginBottom: 8 }}>📭</div>
-                      <p style={{ fontSize: 12 }}>Aucun signal SMC/Wyckoff detecte. Essayez un autre timeframe ou une duree plus longue.</p>
-                    </div>
-                  )}
-
-                  <button
-                    className="btn btn-secondary"
-                    style={{ width: '100%', marginTop: 8 }}
-                    onClick={() => { setWfResult(null); setWfExpandedIdx(null); }}
-                  >
-                    Nouvelle analyse
-                  </button>
-                </div>
-              )}
-            </>
-          )}
-        </div>
-
-        <div className="card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <h3 style={{ margin: 0 }}>Historique des backtests</h3>
-            {optimizeIds.size >= 2 && (
-              <button
-                className="btn btn-primary"
-                style={{
-                  fontSize: 12, padding: '6px 14px',
-                  background: 'linear-gradient(135deg, #7c3aed, #4f46e5)',
-                  borderColor: '#7c3aed', display: 'flex', alignItems: 'center', gap: 6,
-                }}
-                onClick={() => setShowMultiOptimize(true)}
-              >
-                🧠 Créer stratégie optimisée ({optimizeIds.size})
-              </button>
-            )}
-          </div>
-
-          {optimizeIds.size === 1 && (
-            <div style={{ marginBottom: 10, padding: 8, borderRadius: 6, background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.2)', fontSize: 12, color: '#a78bfa' }}>
-              ✦ Sélectionnez au moins 1 autre backtest dans la colonne 🧠 pour créer une stratégie optimisée
-            </div>
-          )}
-          {compareIds[0] !== null && compareIds[1] === null && (
-            <div style={{ marginBottom: 10, padding: 8, borderRadius: 6, background: 'rgba(88,166,255,0.1)', fontSize: 12 }}>
-              Sélectionnez un 2e backtest dans Cmp pour comparer
-            </div>
-          )}
-
-          {/* ── Filters ──────────────────────────────────────────────── */}
-          {rows.length > 0 && (
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12, padding: '10px 12px', background: 'var(--surface2)', borderRadius: 8 }}>
-              <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)' }}>Filtres</span>
-              <select value={filterSymbol} onChange={e => setFilterSymbol(e.target.value)}
-                style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 12, flex: 1, minWidth: 100 }}>
-                <option value="">Tous les symboles</option>
-                {historySymbols.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-              <select value={filterTF} onChange={e => setFilterTF(e.target.value)}
-                style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 12, minWidth: 80 }}>
-                <option value="">Tous les TF</option>
-                {historyTFs.map(t => <option key={t} value={t}>{t}</option>)}
-              </select>
-              <input type="number" placeholder="PF min" value={filterMinPF} onChange={e => setFilterMinPF(e.target.value)}
-                min="0" step="0.1"
-                style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 12, width: 80 }} />
-              <input type="number" placeholder="WR min %" value={filterMinWR} onChange={e => setFilterMinWR(e.target.value)}
-                min="0" max="100" step="1"
-                style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 12, width: 80 }} />
-              {(filterSymbol || filterTF || filterMinPF || filterMinWR) && (
-                <button className="btn btn-secondary" style={{ fontSize: 11, padding: '4px 10px' }}
-                  onClick={() => { setFilterSymbol(''); setFilterTF(''); setFilterMinPF(''); setFilterMinWR(''); }}>
-                  ✕ Réinitialiser
-                </button>
-              )}
-              {(filterSymbol || filterTF || filterMinPF || filterMinWR) && (
-                <span className="muted" style={{ fontSize: 11 }}>{filteredRows.length}/{rows.length} résultats</span>
-              )}
-            </div>
-          )}
-
-          {rows.length > 0 && (
-            <div style={{ maxHeight: 400, overflowY: 'auto' }}>
-              <table>
-                <thead>
-                  <tr>
-                    <th style={{ width: 28 }}>
-                      <Tooltip text="Cochez 2 backtests pour les comparer côte à côte">Cmp</Tooltip>
-                    </th>
-                    <th style={{ width: 28 }}>
-                      <Tooltip text="Cochez 2+ backtests pour créer une stratégie optimisée par IA">🧠</Tooltip>
-                    </th>
-                    <HistoryTh col="id">#</HistoryTh>
-                    <HistoryTh col="symbol">Symbole</HistoryTh>
-                    <HistoryTh col="timeframe">TF</HistoryTh>
-                    <HistoryTh col="win_rate"><Tooltip text="Win Rate — % de trades gagnants">WR</Tooltip></HistoryTh>
-                    <HistoryTh col="profit_factor"><Tooltip text="Profit Factor — gains/pertes (>1.2 = rentable)">PF</Tooltip></HistoryTh>
-                    <HistoryTh col="drawdown"><Tooltip text="Drawdown — perte maximale depuis un pic">DD</Tooltip></HistoryTh>
-                    <th>IA</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedHistory.map(r => {
-                    const isSelected = compareIds[0] === r.id || compareIds[1] === r.id;
-                    const isA = compareIds[0] === r.id;
-                    const isOptimize = optimizeIds.has(r.id);
-                    const isExpanded = expandedRow === r.id;
-                    return (
-                      <React.Fragment key={r.id}>
-                        <tr
-                          style={{
-                            background: isExpanded
-                              ? 'rgba(59,130,246,0.12)'
-                              : isOptimize
-                              ? 'rgba(139,92,246,0.1)'
-                              : isSelected
-                              ? isA ? 'rgba(88,166,255,0.15)' : 'rgba(63,185,80,0.12)'
-                              : optimizeTarget?.id === r.id ? 'rgba(88,166,255,0.08)' : 'transparent',
-                            cursor: 'pointer',
-                          }}
-                          onClick={() => setExpandedRow(isExpanded ? null : r.id)}
-                        >
-                          <td onClick={e => e.stopPropagation()}>
-                            <input type="checkbox" checked={isSelected} onChange={() => toggleCompare(r.id)}
-                              style={{ width: 'auto', cursor: 'pointer' }} />
-                          </td>
-                          <td onClick={e => e.stopPropagation()}>
-                            <input
-                              type="checkbox"
-                              checked={isOptimize}
-                              onChange={() => toggleOptimizeId(r.id)}
-                              style={{ width: 'auto', cursor: 'pointer', accentColor: '#7c3aed' }}
-                            />
-                          </td>
-                          <td className="muted">{r.id}</td>
-                          <td><strong style={{ fontSize: 12 }}>{fmtSym(r.symbol)}</strong></td>
-                          <td><span className="tag">{r.timeframe}</span></td>
-                          <td className={r.win_rate >= 0.5 ? 'green' : 'red'}>{pct(r.win_rate)}</td>
-                          <td className={r.profit_factor >= 1.2 ? 'green' : 'yellow'}>{num(r.profit_factor)}</td>
-                          <td className={r.drawdown <= 0.1 ? 'green' : r.drawdown <= 0.2 ? 'yellow' : 'red'}>{pct(r.drawdown)}</td>
-                          <td onClick={e => e.stopPropagation()}>
-                            <button
-                              className="btn btn-secondary"
-                              style={{ fontSize: 10, padding: '2px 6px', opacity: 0.8 }}
-                              onClick={() => setOptimizeTarget(optimizeTarget?.id === r.id ? null : r)}
-                            >
-                              {optimizeTarget?.id === r.id ? '▼' : '🤖'}
-                            </button>
-                          </td>
-                        </tr>
-                        {isExpanded && (
-                          <tr>
-                            <td colSpan={9} style={{ padding: 0, border: 'none' }}>
-                              <BacktestDetailPanel r={r} simulatedTrades={tradesMap[r.id]} dataWarning={dataWarningsMap[r.id]} />
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-          {rows.length === 0 && (
-            <div style={{ textAlign: 'center', padding: 32, opacity: 0.5 }}>
-              <div style={{ fontSize: 28, marginBottom: 8 }}>🔬</div>
-              <p>Aucun backtest encore — lancez votre premier à gauche.</p>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {showWorkshop && (
-        <AiWorkshopPanel
-          availableSymbols={btUniverse}
-          profiles={(profiles?.rows as Array<Record<string, unknown>> | undefined) ?? []}
-          onClose={() => setShowWorkshop(false)}
-          onProfilesCreated={() => reloadProfiles()}
-        />
       )}
 
-      {compareA && compareB && <ComparePanel a={compareA} b={compareB} />}
-      {optimizeTarget && <OptimizePanel result={optimizeTarget} onClose={() => setOptimizeTarget(null)} onProfileCreated={reloadProfiles} />}
-
-      {showMultiOptimize && optimizeIds.size >= 2 && (
-        <MultiOptimizePanel
-          backtestIds={optimizeIdList}
-          rows={rows}
-          onClose={() => setShowMultiOptimize(false)}
-          onProfileCreated={() => {
-            reloadProfiles();
-            setOptimizeIds(new Set());
-            setShowMultiOptimize(false);
-          }}
-        />
+      {rows.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: 48, color: 'var(--text-muted)', fontSize: 13 }}>
+          Aucun backtest enregistré. Lancez un premier backtest ci-dessus.
+        </div>
+      ) : (
+        <div style={{ background: 'var(--bg-card)', border: '1px solid rgba(59,130,246,0.15)', borderRadius: 10, overflow: 'hidden' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: 'rgba(59,130,246,0.07)', color: 'var(--text-muted)', fontSize: 11 }}>
+                <th style={{ padding: '10px 8px', textAlign: 'left', width: 28 }}></th>
+                <th style={{ padding: '10px 8px', textAlign: 'left' }}>Symboles</th>
+                <th style={{ padding: '10px 8px', textAlign: 'left' }}>Période</th>
+                <th style={{ padding: '10px 8px', textAlign: 'center' }}>Signaux</th>
+                <th style={{ padding: '10px 8px', textAlign: 'center' }}>WR%</th>
+                <th style={{ padding: '10px 8px', textAlign: 'center' }}>PF</th>
+                <th style={{ padding: '10px 8px', textAlign: 'center' }}>DD%</th>
+                <th style={{ padding: '10px 8px', textAlign: 'center' }}>Qualité</th>
+                <th style={{ padding: '10px 8px', textAlign: 'right' }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => (
+                <BacktestRow
+                  key={r.id}
+                  r={r}
+                  selected={compareQueue.includes(r.id)}
+                  onSelect={() => handleCompare(r)}
+                  onOptimize={() => setOptimize(r)}
+                  onCompare={() => handleCompare(r)}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
-    </section>
+
+      {compareA && compareB && (
+        <ComparePanel a={compareA} b={compareB} onClose={() => { setCompareA(null); setCompareB(null); }} />
+      )}
+      {optimizeTarget && (
+        <OptimizePanel result={optimizeTarget} onClose={() => setOptimize(null)} />
+      )}
+    </div>
   );
 }

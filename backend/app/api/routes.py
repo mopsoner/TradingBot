@@ -14,6 +14,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select, func
+from sqlalchemy import update
 
 from backend.app.core.config import AppConfig, config
 from backend.app.db.models import (
@@ -1414,6 +1415,14 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
     top_rejects = sorted(reject_counts.items(), key=lambda x: -x[1])[:5]
 
     with Session(engine) as s:
+        # ── T2 : unifier tous les pipeline_run_id sur wf_run_id ──────────────
+        if all_sig_ids:
+            s.exec(  # type: ignore[call-overload]
+                update(Signal)
+                .where(Signal.id.in_(all_sig_ids))
+                .values(pipeline_run_id=wf_run_id)
+            )
+
         result = BacktestResult(
             symbol=symbols_label,
             timeframe="MTF",
@@ -2055,6 +2064,22 @@ def _run_live_scan(
     - Tous les résultats (acceptés ET rejetés) persistés en DB
     - TradeJournal loggé pour chaque décision
     """
+    # ── En mode backtest, surcharge via config.backtest.overrides ─────────────
+    bt_ov = config.backtest.overrides
+    if is_backtest and bt_ov.enabled:
+        _bt_defaults = {
+            "displacement_threshold":    bt_ov.displacement_threshold,
+            "displacement_atr_min":      bt_ov.displacement_atr_min,
+            "displacement_vol_min":      bt_ov.displacement_vol_min,
+            "bos_sensitivity":           bt_ov.bos_sensitivity,
+            "bos_close_confirmation":    bt_ov.bos_close_confirmation,
+            "volume_multiplier_active":  bt_ov.volume_multiplier_active,
+            "volume_multiplier_offpeak": bt_ov.volume_multiplier_offpeak,
+            "use_5m_refinement":         bt_ov.use_5m_refinement,
+            "allow_weekend_trading":     bt_ov.allow_weekend_trading,
+        }
+        profile_params = {**_bt_defaults, **profile_params}
+
     disp_threshold  = float(profile_params.get("displacement_threshold", config.strategy.displacement_threshold))
     bos_sens        = int(profile_params.get("bos_sensitivity", config.strategy.bos_sensitivity))
     htf_required    = bool(profile_params.get("htf_alignment_required", config.strategy.htf_alignment_required))
@@ -2070,9 +2095,7 @@ def _run_live_scan(
     use_5m_refine   = bool(profile_params.get("use_5m_refinement", config.strategy.use_5m_refinement))
     bos_close_conf  = bool(profile_params.get("bos_close_confirmation", config.strategy.bos_close_confirmation))
     fib_split       = bool(profile_params.get("fib_entry_split", config.strategy.fib_entry_split))
-
-    if is_backtest:
-        allow_weekend = True
+    wyckoff_lookback = bt_ov.wyckoff_lookback if (is_backtest and bt_ov.enabled) else 5
 
     rng = random.Random()
     now = datetime.now(timezone.utc)
@@ -2166,7 +2189,8 @@ def _run_live_scan(
                 _persist_reject(symbol, timeframe, reason_htf, current_session, tf4h, tf1h, pipeline_run_id=pipeline_run_id, profile_name=profile_name)
                 continue
 
-            if not tf1h_valid:
+            _skip_htf1h = is_backtest and bt_ov.enabled and bt_ov.skip_htf_1h_validation
+            if not tf1h_valid and not _skip_htf1h:
                 reject(f"Multi-TF invalide: {tf4h} (4H) ↔ {tf1h}")
                 with Session(engine) as s:
                     s.add(Signal(
@@ -2221,7 +2245,10 @@ def _run_live_scan(
             enable_spring = bool(profile_params.get("enable_spring", True))
             enable_utad   = bool(profile_params.get("enable_utad", True))
             spring, utad, direction, wyckoff_event = ta.detect_wyckoff(
-                candles_15m, tf4h, enable_spring=enable_spring, enable_utad=enable_utad
+                candles_15m, tf4h,
+                enable_spring=enable_spring,
+                enable_utad=enable_utad,
+                lookback=wyckoff_lookback,
             )
             wyckoff_ok  = spring or utad
             fake_breakout = wyckoff_ok  # Spring/UTAD IS a fake breakout by definition

@@ -123,12 +123,10 @@ export const api = {
   systemProcesses: ()                         => get<{ processes: ProcessStatus[]; total_running: number; mode: string; timestamp: string }>('/api/system/processes'),
   dashboard:  ()                              => get<Dashboard>('/api/dashboard'),
   signals:    (params = '')                   => get<{ total: number; rows: Signal[] }>(`/api/signals${params}`),
-  signalsForBacktest: (pipeline_run_id: string | null | undefined, symbol: string, walkForward = false) =>
+  signalsForBacktest: (pipeline_run_id: string | null | undefined, symbol: string) =>
     pipeline_run_id
-      ? walkForward
-        ? get<{ total: number; rows: Signal[] }>(`/api/signals?run_prefix=${encodeURIComponent(pipeline_run_id)}&accepted=true&limit=1000`)
-        : get<{ total: number; rows: Signal[] }>(`/api/signals?pipeline_run_id=${encodeURIComponent(pipeline_run_id)}&limit=500`)
-      : get<{ total: number; rows: Signal[] }>(`/api/signals?symbol=${encodeURIComponent(symbol)}&limit=200`),
+      ? get<{ total: number; rows: Signal[] }>(`/api/signals?pipeline_run_id=${encodeURIComponent(pipeline_run_id)}&accepted=true&limit=1000`)
+      : get<{ total: number; rows: Signal[] }>(`/api/signals?symbol=${encodeURIComponent(symbol)}&accepted=true&limit=200`),
   trades:     (params = '')                   => get<{ total: number; rows: Trade[] }>(`/api/trades${params}`),
   positions:  ()                              => get<Position[]>('/api/positions'),
   backtests:  (params = '')                   => get<{ total: number; rows: BacktestResult[] }>(`/api/backtests${params}`),
