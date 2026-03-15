@@ -93,20 +93,9 @@ class SessionSettings(BaseModel):
 
 
 class DataSettings(BaseModel):
-    enrichment_cron: str = Field("0 1 * * *", description="Cron d'enrichissement quotidien")
-    candles_5m:  int = Field(2016, description="Bougies générées en 5m (2016 = 7 jours)")
-    candles_15m: int = Field(672,  description="Bougies générées en 15m (672 = 7 jours)")
-    candles_1h:  int = Field(720,  description="Bougies générées en 1h (720 = 30 jours)")
-    candles_4h:  int = Field(540,  description="Bougies générées en 4h (540 = 90 jours)")
-    symbol_prices: dict[str, float] = Field(
-        default_factory=lambda: {
-            "BTCUSDT": 65000, "ETHUSDT": 3500,  "SOLUSDT": 140,  "BNBUSDT": 550,   "AVAXUSDT": 35,
-            "XRPUSDT": 0.55,  "ADAUSDT": 0.45,  "DOGEUSDT": 0.12, "DOTUSDT": 7.5,  "MATICUSDT": 0.85,
-            "LINKUSDT": 14,   "UNIUSDT": 8,     "LTCUSDT": 80,   "ATOMUSDT": 8.5,  "NEARUSDT": 5.5,
-            "AAVEUSDT": 95,   "FILUSDT": 5,     "APTUSDT": 8,    "ARBUSDT": 0.95,  "OPUSDT": 1.8,
-            "SUIUSDT": 1.2,   "INJUSDT": 25,    "TIAUSDT": 6,    "SEIUSDT": 0.4,   "WLDUSDT": 2.5,
-        },
-        description="Prix de référence par symbole pour la génération de bougies",
+    candle_source: str = Field(
+        "yfinance",
+        description="Source de données bougies : 'binance' (API Binance), 'yfinance' (Yahoo Finance)",
     )
 
 

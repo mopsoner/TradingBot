@@ -45,6 +45,7 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
     ("position", "total_asset_value",   "REAL DEFAULT 0.0"),
     ("position", "total_debt_value",    "REAL DEFAULT 0.0"),
     ("strategyprofile", "enable_auto_borrow_repay", "BOOLEAN DEFAULT 0"),
+    ("strategyprofile", "description",              "TEXT"),
 ]
 
 
@@ -103,9 +104,56 @@ def save_app_config(cfg) -> None:
 
 # ── Public init ───────────────────────────────────────────────────────────────
 
+def _patch_profiles_missing_fields() -> None:
+    """
+    One-time data patch: profiles created by the AI Workshop may not have
+    all strategy fields in their parameters JSON (e.g. allow_weekend_trading
+    was added after some profiles were created).  This ensures every profile
+    has the full set of fields with safe defaults so profile_params.get()
+    always finds the value and never falls back to the global config.
+    """
+    from backend.app.db.models import StrategyProfile
+
+    DEFAULTS: dict[str, object] = {
+        "allow_weekend_trading": False,
+        "use_5m_refinement": False,
+        "require_equal_highs_lows": True,
+        "bos_close_confirmation": True,
+        "fib_entry_split": True,
+        "htf_alignment_required": True,
+        "volume_adaptive": True,
+        "rsi_divergence_only": True,
+    }
+
+    try:
+        with Session(engine) as s:
+            profiles = s.exec(select(StrategyProfile)).all()
+            patched = 0
+            for prof in profiles:
+                try:
+                    params: dict = json.loads(prof.parameters or "{}")
+                except Exception:
+                    params = {}
+                changed = False
+                for key, default_val in DEFAULTS.items():
+                    if key not in params:
+                        params[key] = default_val
+                        changed = True
+                if changed:
+                    prof.parameters = json.dumps(params)
+                    s.add(prof)
+                    patched += 1
+            if patched:
+                s.commit()
+                logger.info("Profile data patch: added missing fields to %d profile(s)", patched)
+    except Exception as exc:
+        logger.warning("Profile data patch failed: %s", exc)
+
+
 def init_db() -> None:
     SQLModel.metadata.create_all(engine)
     _apply_migrations()
+    _patch_profiles_missing_fields()
 
 
 def get_session() -> Session:

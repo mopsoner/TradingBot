@@ -22,7 +22,7 @@ export default function App() {
       case 'Tableau de bord':   return <DashboardPage />;
       case 'Données de marché': return <DataManagerPage onNavigate={setPage} />;
       case 'Stratégie':         return <StrategySettingsPage onNavigate={setPage} />;
-      case 'Backtests':         return <BacktestsPage />;
+      case 'Backtests':         return <BacktestsPage onNavigate={setPage} />;
       case 'Workshop IA':       return <AiWorkshopPage />;
       case 'Pipeline Live':     return <PipelinePage />;
       case 'Signaux':           return <SignalsPage />;

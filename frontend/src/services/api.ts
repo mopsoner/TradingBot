@@ -16,8 +16,11 @@ const send = async <T>(path: string, method: 'POST' | 'PUT', body: unknown): Pro
 
 const post = async <T>(path: string, body: unknown): Promise<T> => send(path, 'POST', body);
 const put  = async <T>(path: string, body: unknown): Promise<T> => send(path, 'PUT', body);
-const del  = async <T>(path: string): Promise<T> => {
-  const r = await fetch(path, { method: 'DELETE' });
+const del  = async <T>(path: string, body?: unknown): Promise<T> => {
+  const r = await fetch(path, {
+    method: 'DELETE',
+    ...(body !== undefined ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+  });
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
   return r.json();
 };
@@ -54,6 +57,14 @@ export type BacktestResult = {
   expectancy: number; drawdown: number; r_multiple: number;
 };
 
+export type SimulatedTrade = {
+  index: number;
+  direction: string;
+  outcome: string;
+  r_multiple: number;
+  timestamp: string;
+};
+
 export type Log = {
   id: number; timestamp: string; level: string; message: string;
 };
@@ -68,6 +79,8 @@ export type Dashboard = {
 export const api = {
   dashboard:  ()                              => get<Dashboard>('/api/dashboard'),
   signals:    (params = '')                   => get<{ total: number; rows: Signal[] }>(`/api/signals${params}`),
+  signalsForBacktest: (symbol: string, timeframe: string) =>
+    get<{ total: number; rows: Signal[] }>(`/api/signals?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=500`),
   trades:     (params = '')                   => get<{ total: number; rows: Trade[] }>(`/api/trades${params}`),
   positions:  ()                              => get<Position[]>('/api/positions'),
   backtests:  (params = '')                   => get<{ total: number; rows: BacktestResult[] }>(`/api/backtests${params}`),
@@ -75,6 +88,9 @@ export const api = {
   logs:       (params = '')                   => get<{ total: number; rows: Log[] }>(`/api/logs${params}`),
   symbols:    ()                              => get<string[]>('/api/symbols'),
   isolatedSymbols: ()                         => get<string[]>('/api/symbols/isolated'),
+  symbolsByQuote:  ()                          => get<Record<string, string[]>>('/api/symbols/by-quote'),
+  symbolPrices:    ()                          => get<Record<string, number>>('/api/symbols/prices'),
+  loadedSymbols:   ()                          => get<{ symbol: string; timeframes: Record<string, number>; total: number }[]>('/api/symbols/loaded'),
   config:     ()                              => get<Record<string, unknown>>('/api/config'),
   updateConfig:(body: Record<string, unknown>)=> put<Record<string, unknown>>('/api/config', body),
   marginEndpoints: ()                         => get<Record<string, unknown>>('/api/execution/endpoints'),
@@ -95,9 +111,13 @@ export const api = {
   startBot:   (body: Record<string, unknown>) => post<Record<string, unknown>>('/api/bot/start', body),
   dataStats:  ()                              => get<Record<string, unknown>>('/api/data/stats'),
   candles:    (params = '')                   => get<{ total: number; rows: Record<string, unknown>[] }>(`/api/data/candles${params}`),
-  ingestData: (body: Record<string, unknown>[]) => post<Record<string, unknown>>('/api/data/ingest', body),
-  enrichDaily:(symbols: string[])             => post<Record<string, unknown>>('/api/data/enrich/daily', symbols),
-  enrich:     (body: { symbols: string[]; timeframe: string }) => post<Record<string, unknown>>('/api/data/enrich', body),
+  ingestData:    (body: Record<string, unknown>[]) => post<Record<string, unknown>>('/api/data/ingest', body),
+  fetchCandles:  (body: { symbols: string[]; timeframe: string; days: number; source?: string }) =>
+    post<Record<string, unknown>>('/api/data/fetch', body),
+  importCsv:     (body: { symbol: string; timeframe: string; csv_text: string }) =>
+    post<Record<string, unknown>>('/api/data/import/csv', body),
+  deleteCandles: (body: { symbol: string; timeframe?: string }) =>
+    del<Record<string, unknown>>('/api/data/candles', body),
   services:   () => get<{ services: ServiceStatus[]; refreshed_at: string; mode: string }>('/api/services'),
   optimizeBacktest: (id: number) => post<Record<string, unknown>>(`/api/backtest/${id}/optimize`, {}),
   multiOptimize: (backtest_ids: number[]) => post<Record<string, unknown>>('/api/backtest/multi-optimize', { backtest_ids }),
@@ -110,6 +130,12 @@ export const api = {
   runPipeline: (body: { symbols: string[]; timeframe: string; profile_id?: number | null }) =>
     post<Record<string, unknown>>('/api/pipeline/run', body),
   journal: (params = '') => get<JournalResponse>(`/api/journal${params}`),
+  autonomousStart: (body: { symbols: string[]; timeframe: string; profile_id?: number | null; interval_minutes: number }) =>
+    post<Record<string, unknown>>('/api/autonomous/start', body),
+  autonomousStop: () => post<Record<string, unknown>>('/api/autonomous/stop', {}),
+  autonomousStatus: () => get<Record<string, unknown>>('/api/autonomous/status'),
+  runWalkforward: (body: { symbol: string; years: number; timeframe: string; profile_id?: number | null }) =>
+    post<Record<string, unknown>>('/api/backtest/walkforward', body),
 };
 
 export type MarginAsset = {

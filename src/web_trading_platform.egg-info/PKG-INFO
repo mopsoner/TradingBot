@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: web-trading-platform
+Version: 1.0.0
+Summary: Standalone modular web trading platform inspired by OpenClaw architecture
+Requires-Python: >=3.11
+Requires-Dist: fastapi>=0.115.0
+Requires-Dist: uvicorn[standard]>=0.30.0
+Requires-Dist: pydantic>=2.8.0
+Requires-Dist: sqlmodel>=0.0.22
+Requires-Dist: httpx>=0.27.0
+Requires-Dist: pytest>=9.0.2
+Requires-Dist: yfinance>=0.2.0
+Requires-Dist: pandas>=2.0.0

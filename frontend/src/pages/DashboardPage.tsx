@@ -5,57 +5,36 @@ import { fmtDate, fmtDateTime, fmtTimeSec } from '../utils/dateUtils';
 
 function fmt(n: number, dec = 2) { return n.toFixed(dec); }
 
-function StatusBadge({ status }: { status: string }) {
-  const cls =
-    status === 'CLOSED_WIN'  ? 'badge badge-green' :
-    status === 'CLOSED_LOSS' ? 'badge badge-red'   :
-    status === 'OPEN'        ? 'badge badge-blue'   : 'badge badge-gray';
-  return <span className={cls}>{status.replace('CLOSED_', '')}</span>;
-}
-
-const SERVICE_STATUS_STYLE: Record<string, { dot: string; label: string }> = {
-  running:   { dot: '#22c55e', label: 'En ligne'   },
-  scheduled: { dot: '#3b82f6', label: 'Programmé'  },
-  idle:      { dot: '#f59e0b', label: 'En attente' },
-  stopped:   { dot: '#ef4444', label: 'Arrêté'     },
+const SVC_STYLE: Record<string, { dot: string; pill: string; label: string }> = {
+  running:   { dot: '#22c55e', pill: 'pill-green',  label: 'En ligne'   },
+  scheduled: { dot: '#3b82f6', pill: 'pill-blue',   label: 'Programmé'  },
+  idle:      { dot: '#eab308', pill: 'pill-yellow',  label: 'En attente' },
+  stopped:   { dot: '#ef4444', pill: 'pill-red',    label: 'Arrêté'     },
 };
 
-function ServiceRow({ svc }: { svc: ServiceStatus }) {
-  const style = SERVICE_STATUS_STYLE[svc.status] ?? SERVICE_STATUS_STYLE.idle;
+function ServiceCard({ svc }: { svc: ServiceStatus }) {
+  const s = SVC_STYLE[svc.status] ?? SVC_STYLE.idle;
   return (
-    <tr>
-      <td style={{ width: 10, padding: '6px 8px' }}>
-        <span style={{
-          display: 'inline-block', width: 9, height: 9, borderRadius: '50%',
-          background: style.dot,
-          boxShadow: svc.status === 'running' ? `0 0 6px ${style.dot}` : 'none',
-        }} />
-      </td>
-      <td style={{ padding: '6px 8px', fontWeight: 500, fontSize: 13 }}>
-        {svc.name}
-      </td>
-      <td style={{ padding: '6px 8px' }}>
-        <span style={{
-          fontSize: 11, fontWeight: 600, padding: '2px 7px', borderRadius: 999,
-          background: svc.status === 'running'   ? 'rgba(34,197,94,.15)'   :
-                      svc.status === 'scheduled' ? 'rgba(59,130,246,.15)'  :
-                      svc.status === 'idle'      ? 'rgba(245,158,11,.15)'  :
-                                                   'rgba(239,68,68,.15)',
-          color: style.dot,
-        }}>
-          {svc.status_label}
+    <div className="service-row">
+      <span
+        className="service-dot"
+        style={{
+          background: s.dot,
+          boxShadow: svc.status === 'running' ? `0 0 7px ${s.dot}` : 'none',
+          animation: svc.status === 'running' ? 'pulse 2s infinite' : 'none',
+        }}
+      />
+      <span style={{ flex: 1, fontWeight: 600, fontSize: 13 }}>{svc.name}</span>
+      <span className={`pill ${s.pill}`}>{svc.status_label}</span>
+      {svc.detail && (
+        <span className="muted" style={{ fontSize: 11, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {svc.detail}
         </span>
-      </td>
-      <td className="muted" style={{ padding: '6px 8px', fontSize: 12 }}>
-        {svc.detail}
-      </td>
-      <td className="muted" style={{ padding: '6px 8px', fontSize: 11, whiteSpace: 'nowrap' }}>
-        {svc.last_activity ? `Dernière activité: ${svc.last_activity}` : '—'}
-      </td>
-      <td className="muted" style={{ padding: '6px 8px', fontSize: 11, whiteSpace: 'nowrap' }}>
-        {svc.next_run ? `⏳ ${svc.next_run}` : ''}
-      </td>
-    </tr>
+      )}
+      {svc.next_run && (
+        <span className="pill" style={{ fontSize: 10, whiteSpace: 'nowrap' }}>⏳ {svc.next_run}</span>
+      )}
+    </div>
   );
 }
 
@@ -65,10 +44,7 @@ function ServicesPanel() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   async function refresh() {
-    try {
-      const res = await api.services();
-      setData(res);
-    } catch (_) {}
+    try { setData(await api.services()); } catch (_) {}
     setLoading(false);
   }
 
@@ -78,152 +54,184 @@ function ServicesPanel() {
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, []);
 
-  const running   = data?.services.filter(s => s.status === 'running').length ?? 0;
-  const scheduled = data?.services.filter(s => s.status === 'scheduled').length ?? 0;
-  const stopped   = data?.services.filter(s => s.status === 'stopped').length ?? 0;
-  const idle      = data?.services.filter(s => s.status === 'idle').length ?? 0;
+  const counts = {
+    running:   data?.services.filter(s => s.status === 'running').length   ?? 0,
+    scheduled: data?.services.filter(s => s.status === 'scheduled').length ?? 0,
+    idle:      data?.services.filter(s => s.status === 'idle').length       ?? 0,
+    stopped:   data?.services.filter(s => s.status === 'stopped').length   ?? 0,
+  };
 
   return (
     <div className="card" style={{ marginBottom: 16 }}>
-      <div className="flex items-center justify-between mb-16" style={{ marginBottom: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <h3 style={{ margin: 0 }}>Services &amp; tâches en arrière-plan</h3>
-          <div style={{ display: 'flex', gap: 6 }}>
-            {running > 0 && (
-              <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 999, background: 'rgba(34,197,94,.15)', color: '#22c55e', fontWeight: 600 }}>
-                {running} en ligne
-              </span>
-            )}
-            {scheduled > 0 && (
-              <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 999, background: 'rgba(59,130,246,.15)', color: '#3b82f6', fontWeight: 600 }}>
-                {scheduled} programmé{scheduled > 1 ? 's' : ''}
-              </span>
-            )}
-            {idle > 0 && (
-              <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 999, background: 'rgba(245,158,11,.15)', color: '#f59e0b', fontWeight: 600 }}>
-                {idle} en attente
-              </span>
-            )}
-            {stopped > 0 && (
-              <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 999, background: 'rgba(239,68,68,.15)', color: '#ef4444', fontWeight: 600 }}>
-                {stopped} arrêté{stopped > 1 ? 's' : ''}
-              </span>
-            )}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <h3 style={{ margin: 0, fontSize: 14 }}>Services back-end</h3>
+          <div style={{ display: 'flex', gap: 5 }}>
+            {counts.running   > 0 && <span className="pill pill-green">{counts.running} en ligne</span>}
+            {counts.scheduled > 0 && <span className="pill pill-blue">{counts.scheduled} programmé{counts.scheduled > 1 ? 's' : ''}</span>}
+            {counts.idle      > 0 && <span className="pill pill-yellow">{counts.idle} en attente</span>}
+            {counts.stopped   > 0 && <span className="pill pill-red">{counts.stopped} arrêté{counts.stopped > 1 ? 's' : ''}</span>}
           </div>
         </div>
         <span className="muted" style={{ fontSize: 11 }}>
-          {loading ? 'Chargement…' : `Actualisé à ${data ? fmtTimeSec(data.refreshed_at) : '—'} · auto ⟳ 10s`}
+          {loading ? 'Chargement…' : `${data ? fmtTimeSec(data.refreshed_at) : '—'} · ⟳ 10s`}
         </span>
       </div>
 
       {loading ? (
-        <p className="muted" style={{ fontSize: 13 }}>Chargement des services…</p>
+        <p className="muted" style={{ fontSize: 13, padding: '12px 0' }}>Chargement des services…</p>
+      ) : (data?.services ?? []).length === 0 ? (
+        <p className="muted" style={{ fontSize: 13 }}>Aucun service détecté.</p>
       ) : (
-        <table style={{ borderCollapse: 'collapse', width: '100%' }}>
-          <thead>
-            <tr style={{ borderBottom: '1px solid var(--border)' }}>
-              <th style={{ padding: '4px 8px', width: 20 }}></th>
-              <th style={{ padding: '4px 8px', textAlign: 'left' }}>Service</th>
-              <th style={{ padding: '4px 8px', textAlign: 'left' }}>Statut</th>
-              <th style={{ padding: '4px 8px', textAlign: 'left' }}>Détails</th>
-              <th style={{ padding: '4px 8px', textAlign: 'left' }}>Activité</th>
-              <th style={{ padding: '4px 8px', textAlign: 'left' }}>Prochaine exéc.</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(data?.services ?? []).map(svc => (
-              <ServiceRow key={svc.id} svc={svc} />
-            ))}
-          </tbody>
-        </table>
+        <div>
+          {(data?.services ?? []).map(svc => <ServiceCard key={svc.id} svc={svc} />)}
+        </div>
       )}
     </div>
+  );
+}
+
+function TradeRow({ t }: { t: Trade }) {
+  return (
+    <tr style={{ borderBottom: '1px solid var(--border)' }}>
+      <td style={{ padding: '10px 12px', fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+        {fmtDateTime(t.timestamp)}
+      </td>
+      <td style={{ padding: '10px 12px', fontWeight: 700, fontSize: 13 }}>{t.symbol}</td>
+      <td style={{ padding: '10px 12px' }}>
+        <span style={{
+          display: 'inline-block', padding: '2px 9px', borderRadius: 6,
+          fontSize: 11, fontWeight: 800,
+          background: t.side === 'LONG' ? 'rgba(34,197,94,0.14)' : 'rgba(239,68,68,0.14)',
+          color: t.side === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)',
+        }}>
+          {t.side}
+        </span>
+      </td>
+      <td style={{ padding: '10px 12px', fontWeight: 600, fontSize: 13 }}>{fmt(t.entry)}</td>
+      <td style={{ padding: '10px 12px', color: 'var(--accent-red)', fontWeight: 600, fontSize: 13 }}>{fmt(t.stop)}</td>
+      <td style={{ padding: '10px 12px', color: 'var(--accent-green)', fontWeight: 600, fontSize: 13 }}>{fmt(t.target)}</td>
+      <td style={{ padding: '10px 12px' }}>
+        <span className={`badge ${t.status === 'CLOSED_WIN' ? 'badge-green' : t.status === 'CLOSED_LOSS' ? 'badge-red' : t.status === 'OPEN' ? 'badge-blue' : 'badge-gray'}`}>
+          {t.status.replace('CLOSED_', '')}
+        </span>
+      </td>
+    </tr>
   );
 }
 
 export function DashboardPage() {
   const { data, loading, error } = useApi(() => api.dashboard());
 
-  if (loading) return <section><h2>Tableau de bord</h2><p className="muted">Chargement…</p></section>;
-  if (error)   return <section><h2>Tableau de bord</h2><p className="red">Erreur: {error}</p></section>;
-  if (!data)   return null;
+  if (loading) return (
+    <section>
+      <div className="page-header-row">
+        <div><h2>Tableau de bord</h2></div>
+      </div>
+      <div className="card"><p className="muted" style={{ padding: '24px 0' }}>Chargement…</p></div>
+    </section>
+  );
+  if (error) return (
+    <section>
+      <div className="page-header-row"><div><h2>Tableau de bord</h2></div></div>
+      <div className="card"><p className="red" style={{ padding: '16px 0' }}>Erreur: {error}</p></div>
+    </section>
+  );
+  if (!data) return null;
 
   const acceptance = data.total_signals > 0
     ? ((data.accepted_signals / data.total_signals) * 100).toFixed(1)
     : '0';
 
+  const winColor  = data.win_rate >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)';
+  const pnlColor  = data.total_pnl >= 0   ? 'var(--accent-green)' : 'var(--accent-red)';
+
   return (
     <section>
-      <div className="flex items-center justify-between mb-16">
-        <h2 style={{ margin: 0 }}>Tableau de bord</h2>
-        <span className={`badge ${data.mode === 'live' ? 'badge-green' : 'badge-yellow'}`}>
+      <div className="page-header-row">
+        <div>
+          <h2 style={{ margin: 0 }}>Tableau de bord</h2>
+          <p className="page-description">Vue en temps réel de votre activité de trading</p>
+        </div>
+        <span className={`badge ${data.mode === 'live' ? 'badge-green' : 'badge-yellow'}`} style={{ fontSize: 12, padding: '5px 14px' }}>
           {data.mode.toUpperCase()} MODE
         </span>
       </div>
 
-      <div className="grid-4 mb-16">
-        <div className="card">
-          <div className="stat-value blue">{data.total_signals.toLocaleString()}</div>
-          <div className="stat-label">Signaux scannés</div>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-            {acceptance}% taux d'acceptation
+      {/* ── KPI CARDS ──────────────────────────────────────────── */}
+      <div className="grid-4" style={{ marginBottom: 20 }}>
+        <div className="stat-card stat-card-accent-blue">
+          <div className="stat-num" style={{ color: 'var(--accent)' }}>
+            {data.total_signals.toLocaleString()}
+          </div>
+          <div className="stat-lbl">Signaux scannés</div>
+          <div className="stat-sub">
+            <span style={{ color: 'var(--accent)' }}>{acceptance}%</span>
+            taux d'acceptation
           </div>
         </div>
-        <div className="card">
-          <div className={`stat-value ${data.win_rate >= 0.5 ? 'green' : 'red'}`}>
+
+        <div className="stat-card" style={{ borderLeft: `3px solid ${winColor}` }}>
+          <div className="stat-num" style={{ color: winColor }}>
             {(data.win_rate * 100).toFixed(1)}%
           </div>
-          <div className="stat-label">Win rate</div>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-            {data.wins}W / {data.losses}L
+          <div className="stat-lbl">Win rate</div>
+          <div className="stat-sub">
+            <span style={{ color: 'var(--accent-green)' }}>{data.wins}W</span>
+            &nbsp;/&nbsp;
+            <span style={{ color: 'var(--accent-red)' }}>{data.losses}L</span>
           </div>
         </div>
-        <div className="card">
-          <div className="stat-value">{data.open_positions}</div>
-          <div className="stat-label">Positions ouvertes</div>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-            {data.open_trades} trades actifs
+
+        <div className="stat-card stat-card-accent-yellow">
+          <div className="stat-num" style={{ color: 'var(--accent-yellow)' }}>
+            {data.open_positions}
+          </div>
+          <div className="stat-lbl">Positions ouvertes</div>
+          <div className="stat-sub">
+            {data.open_trades} trade{data.open_trades !== 1 ? 's' : ''} actif{data.open_trades !== 1 ? 's' : ''}
           </div>
         </div>
-        <div className="card">
-          <div className={`stat-value ${data.total_pnl >= 0 ? 'green' : 'red'}`}>
-            {data.total_pnl >= 0 ? '+' : ''}{fmt(data.total_pnl)} USD
+
+        <div className="stat-card" style={{ borderLeft: `3px solid ${pnlColor}` }}>
+          <div className="stat-num" style={{ color: pnlColor, fontSize: 26 }}>
+            {data.total_pnl >= 0 ? '+' : ''}{fmt(data.total_pnl)}
           </div>
-          <div className="stat-label">PnL non réalisé</div>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-            sur {data.open_positions} positions
-          </div>
+          <div className="stat-lbl">PnL non réalisé (USD)</div>
+          <div className="stat-sub">sur {data.open_positions} position{data.open_positions !== 1 ? 's' : ''}</div>
         </div>
       </div>
 
       <ServicesPanel />
 
-      <div className="card">
-        <h3>Trades récents</h3>
+      {/* ── RECENT TRADES ─────────────────────────────────────── */}
+      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{ padding: '16px 20px 12px', borderBottom: '1px solid var(--border)' }}>
+          <h3 style={{ margin: 0, fontSize: 14 }}>Trades récents</h3>
+        </div>
         {data.recent_trades.length === 0 ? (
-          <p className="muted" style={{ fontSize: 13 }}>Aucun trade pour l'instant.</p>
+          <div className="empty-state">
+            <div className="empty-state-icon">📋</div>
+            <div className="empty-state-title">Aucun trade pour l'instant</div>
+            <div className="empty-state-desc">Les trades apparaîtront ici une fois que le scanner aura détecté des setups.</div>
+          </div>
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Date</th><th>Symbole</th><th>Sens</th>
-                <th>Entrée</th><th>Stop</th><th>Target</th><th>Statut</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.recent_trades.map((t: Trade) => (
-                <tr key={t.id}>
-                  <td className="muted" style={{ whiteSpace: 'nowrap' }}>{fmtDateTime(t.timestamp)}</td>
-                  <td>{t.symbol}</td>
-                  <td className={t.side === 'LONG' ? 'green' : 'red'}>{t.side}</td>
-                  <td>{fmt(t.entry)}</td>
-                  <td className="red">{fmt(t.stop)}</td>
-                  <td className="green">{fmt(t.target)}</td>
-                  <td><StatusBadge status={t.status} /></td>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                  {['Date', 'Symbole', 'Sens', 'Entrée', 'Stop', 'Target', 'Statut'].map(h => (
+                    <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)' }}>
+                      {h}
+                    </th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {data.recent_trades.map((t: Trade) => <TradeRow key={t.id} t={t} />)}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </section>
