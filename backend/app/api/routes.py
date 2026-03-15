@@ -1328,12 +1328,15 @@ def _autonomous_worker() -> None:
 
         # ── Run scan ──────────────────────────────────────────────────────────
         profile_params: dict = {}
+        profile_name: str = "SMC/Wyckoff"
         if pid is not None:
             try:
                 with Session(engine) as s:
                     prof = s.get(StrategyProfile, pid)
-                    if prof and prof.parameters:
-                        profile_params = json.loads(prof.parameters)
+                    if prof:
+                        profile_name = prof.name
+                        if prof.parameters:
+                            profile_params = json.loads(prof.parameters)
             except Exception:
                 pass
 
@@ -1360,7 +1363,7 @@ def _autonomous_worker() -> None:
         except Exception:
             pass
         try:
-            _run_live_scan(symbols, tf, profile_params, auto_run_id)
+            _run_live_scan(symbols, tf, profile_params, auto_run_id, profile_name)
         except Exception as exc:
             results = [{"symbol": sym, "status": "ERROR", "signal": "—",
                         "session": "?", "details": str(exc), "ts": run_now.isoformat()}
@@ -1533,7 +1536,7 @@ def _set_step(symbol: str, idx: int, status: str, detail: str = "") -> None:
             step["detail"] = detail
 
 
-def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pipeline_run_id: str | None = None) -> None:
+def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pipeline_run_id: str | None = None, profile_name: str = "SMC/Wyckoff") -> None:
     """
     Pipeline live SMC/Wyckoff conforme au cahier des charges.
     - Séquence en 7 étapes strictes et obligatoires
@@ -1604,7 +1607,7 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
                 with Session(engine) as s:
                     s.add(Signal(
                         symbol=symbol, timeframe=timeframe,
-                        setup_type="SMC/Wyckoff", liquidity_zone="N/A",
+                        setup_type=profile_name, liquidity_zone="N/A",
                         sweep_level=0, bos_level=0, fib_zone="N/A",
                         accepted=False, reject_reason=session_reason,
                         session_name=current_session,
@@ -1629,7 +1632,7 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
             if htf_required and tf4h == "Neutre / Range":
                 reason_htf = "4H Neutre/Range — pas de biais directionnel clair"
                 reject(reason_htf)
-                _persist_reject(symbol, timeframe, reason_htf, current_session, tf4h, tf1h, pipeline_run_id=pipeline_run_id)
+                _persist_reject(symbol, timeframe, reason_htf, current_session, tf4h, tf1h, pipeline_run_id=pipeline_run_id, profile_name=profile_name)
                 continue
 
             if not tf1h_valid:
@@ -1637,7 +1640,7 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
                 with Session(engine) as s:
                     s.add(Signal(
                         symbol=symbol, timeframe=timeframe,
-                        setup_type="SMC/Wyckoff", liquidity_zone="N/A",
+                        setup_type=profile_name, liquidity_zone="N/A",
                         sweep_level=0, bos_level=0, fib_zone="N/A",
                         accepted=False,
                         reject_reason=f"1H diverge du 4H ({tf4h})",
@@ -1657,7 +1660,7 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
                       f"Zone {zone_type} identifiée ({tf4h})" if liq_ok else "Aucune zone de liquidité notable")
             if not liq_ok:
                 reject("Pas de zone de liquidité identifiable")
-                _persist_reject(symbol, timeframe, "Pas de zone de liquidité", current_session, tf4h, tf1h, pipeline_run_id=pipeline_run_id)
+                _persist_reject(symbol, timeframe, "Pas de zone de liquidité", current_session, tf4h, tf1h, pipeline_run_id=pipeline_run_id, profile_name=profile_name)
                 continue
 
             # ── Step 1 — Sweep (avec détection equal highs/lows) ────────────
@@ -1672,7 +1675,7 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
                       f"{sweep_type} confirmé" if sweep_ok else "Pas de sweep détecté")
             if not sweep_ok:
                 reject("Sweep liquidity absent")
-                _persist_reject(symbol, timeframe, "Sweep liquidity absent", current_session, tf4h, tf1h, pipeline_run_id=pipeline_run_id)
+                _persist_reject(symbol, timeframe, "Sweep liquidity absent", current_session, tf4h, tf1h, pipeline_run_id=pipeline_run_id, profile_name=profile_name)
                 continue
 
             # ── Step 2 — Spring / UTAD + fake breakout + alignement HTF ── IA opt ①
@@ -1693,7 +1696,7 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
             _set_step(symbol, 2, "passed" if wyckoff_ok else "failed", detail_wyk)
             if not wyckoff_ok:
                 reject("Aucun événement Wyckoff (Spring bullish ou UTAD bearish)")
-                _persist_reject(symbol, timeframe, "Aucun événement Wyckoff", current_session, tf4h, tf1h, pipeline_run_id=pipeline_run_id)
+                _persist_reject(symbol, timeframe, "Aucun événement Wyckoff", current_session, tf4h, tf1h, pipeline_run_id=pipeline_run_id, profile_name=profile_name)
                 continue
 
             # Filtre HTF alignement directionnel : LONG seulement si 4H Bullish, SHORT seulement si 4H Bearish
@@ -1704,7 +1707,7 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
                     reason_align = f"HTF conflit: {direction} contre structure 4H {tf4h}"
                     _set_step(symbol, 2, "failed", reason_align)
                     reject(reason_align)
-                    _persist_reject(symbol, timeframe, reason_align, current_session, tf4h, tf1h, wyckoff_event=wyckoff_event, pipeline_run_id=pipeline_run_id)
+                    _persist_reject(symbol, timeframe, reason_align, current_session, tf4h, tf1h, wyckoff_event=wyckoff_event, pipeline_run_id=pipeline_run_id, profile_name=profile_name)
                     continue
 
             # ── Step 3 — Displacement ATR-adaptatif ── IA opt ②③
@@ -1729,7 +1732,7 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
             if not disp_ok:
                 reason_disp = f"Displacement insuffisant (force={disp_val:.2f}, ATR={atr_ratio:.2f}×, vol={disp_vol:.2f}×)"
                 reject(reason_disp)
-                _persist_reject(symbol, timeframe, reason_disp, current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, pipeline_run_id=pipeline_run_id)
+                _persist_reject(symbol, timeframe, reason_disp, current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, pipeline_run_id=pipeline_run_id, profile_name=profile_name)
                 continue
 
             # ── Step 4 — BOS (Break Of Structure) — sensibilité {bos_sens}/10 ── IA opt ②
@@ -1745,7 +1748,7 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
                       else f"BOS invalide (sens.{bos_sens}/10) — clôture insuffisante ou swing ambigu")
             if not bos_ok:
                 reject("BOS non confirmé — structure intacte")
-                _persist_reject(symbol, timeframe, "BOS non confirmé", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, pipeline_run_id=pipeline_run_id)
+                _persist_reject(symbol, timeframe, "BOS non confirmé", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, pipeline_run_id=pipeline_run_id, profile_name=profile_name)
                 continue
 
             # ── Step 5 (pré) — Volume adaptatif à la session ── IA opt ⑤
@@ -1754,7 +1757,7 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
             vol_ratio = round(rng.uniform(0.7, 3.2), 2)
             vol_ok = not vol_adaptive or vol_ratio >= eff_vol_mult
             if not vol_ok:
-                _persist_reject(symbol, timeframe, f"Volume insuffisant ({vol_ratio:.2f}×SMA50 < {eff_vol_mult:.2f}×)", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, pipeline_run_id=pipeline_run_id)
+                _persist_reject(symbol, timeframe, f"Volume insuffisant ({vol_ratio:.2f}×SMA50 < {eff_vol_mult:.2f}×)", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, pipeline_run_id=pipeline_run_id, profile_name=profile_name)
                 reject(f"Volume insuffisant ({vol_ratio:.2f}×SMA50 < {eff_vol_mult:.2f}× requis session {current_session})")
                 continue
 
@@ -1769,7 +1772,7 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
                       else f"Pas d'extension claire vers la prochaine liquidité ({next_liq})")
             if not expansion_ok:
                 reject(f"Expansion vers liquidité absente — pas de cible claire ({next_liq})")
-                _persist_reject(symbol, timeframe, "Expansion vers liquidité absente", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, pipeline_run_id=pipeline_run_id)
+                _persist_reject(symbol, timeframe, "Expansion vers liquidité absente", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, pipeline_run_id=pipeline_run_id, profile_name=profile_name)
                 continue
 
             # ── Step 6 — Fibonacci Retracement (0.5 / 0.618 / 0.786) — split 60/40 ── IA opt ③
@@ -1789,7 +1792,7 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
 
             if not fib_ok:
                 reject(f"Retracement Fib {fib_val} non autorisé — niveaux valides: {allowed_fib}")
-                _persist_reject(symbol, timeframe, f"Fib {fib_val} non autorisé", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, fib_val=fib_val, pipeline_run_id=pipeline_run_id)
+                _persist_reject(symbol, timeframe, f"Fib {fib_val} non autorisé", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, fib_val=fib_val, pipeline_run_id=pipeline_run_id, profile_name=profile_name)
                 continue
 
             # ── Refinement 5m (optionnel — activable par profil) ─────────────
@@ -1811,7 +1814,7 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
                 _pipeline[symbol]["steps"][6]["message"] = current_note + f" | Refinement {refine_msg}"
                 if not m5_ok:
                     reject(f"Refinement 5m échoué — {refine_msg}")
-                    _persist_reject(symbol, timeframe, f"5m refinement échoué ({refine_msg})", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, fib_val=fib_val, pipeline_run_id=pipeline_run_id)
+                    _persist_reject(symbol, timeframe, f"5m refinement échoué ({refine_msg})", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, fib_val=fib_val, pipeline_run_id=pipeline_run_id, profile_name=profile_name)
                     continue
 
             # ── Séquence complète — vérification risk manager ────────────────
@@ -1830,7 +1833,7 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
 
             if not risk_ok:
                 reject(f"Risk manager: {risk_reason}")
-                _persist_reject(symbol, timeframe, f"Risk: {risk_reason}", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, fib_val=fib_val, pipeline_run_id=pipeline_run_id)
+                _persist_reject(symbol, timeframe, f"Risk: {risk_reason}", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, fib_val=fib_val, pipeline_run_id=pipeline_run_id, profile_name=profile_name)
                 continue
 
             # ── Signal accepté — persistance DB + journal ────────────────────
@@ -1845,7 +1848,7 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
             with Session(engine) as s:
                 sig = Signal(
                     symbol=symbol, timeframe=timeframe,
-                    setup_type=f"SMC/Wyckoff {direction}",
+                    setup_type=f"{profile_name} — {direction}",
                     liquidity_zone=zone_type,
                     sweep_level=round(fib_val * 100, 2),
                     bos_level=bos_level,
@@ -1873,7 +1876,7 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict, pip
                 timestamp=now,
                 symbol=symbol,
                 timeframe=timeframe,
-                setup_type=f"SMC/Wyckoff {direction}",
+                setup_type=f"{profile_name} — {direction}",
                 direction=direction,
                 accepted=True,
                 reject_reason=None,
@@ -1940,13 +1943,14 @@ def _persist_reject(
     bos_level: float = 0.0,
     fib_val: float = 0.0,
     pipeline_run_id: str | None = None,
+    profile_name: str = "SMC/Wyckoff",
 ) -> None:
     """Persiste les setups rejetés en DB avec tous les détails structurels."""
     try:
         with Session(engine) as s:
             s.add(Signal(
                 symbol=symbol, timeframe=timeframe,
-                setup_type="SMC/Wyckoff", liquidity_zone="N/A",
+                setup_type=profile_name, liquidity_zone="N/A",
                 sweep_level=round(fib_val * 100, 2),
                 bos_level=bos_level,
                 fib_zone=str(fib_val) if fib_val else "N/A",
@@ -1963,7 +1967,7 @@ def _persist_reject(
         journal.log(SetupJournalEntry(
             timestamp=datetime.now(timezone.utc),
             symbol=symbol, timeframe=timeframe,
-            setup_type="SMC/Wyckoff",
+            setup_type=profile_name,
             direction=None, accepted=False, reject_reason=reason,
             liquidity_zone="N/A", sweep_level=0,
             fake_breakout=False, equal_highs_lows=False,
@@ -2036,11 +2040,14 @@ def get_pipeline_run(run_id: str) -> dict:
 @router.post("/pipeline/run")
 def run_pipeline(req: PipelineRunRequest) -> dict:
     profile_params: dict = {}
+    profile_name: str = "SMC/Wyckoff"
     if req.profile_id:
         with Session(engine) as s:
             prof = s.get(StrategyProfile, req.profile_id)
-            if prof and prof.parameters:
-                profile_params = json.loads(prof.parameters)
+            if prof:
+                profile_name = prof.name
+                if prof.parameters:
+                    profile_params = json.loads(prof.parameters)
 
     with Session(engine) as s:
         run = PipelineRun(
@@ -2062,7 +2069,7 @@ def run_pipeline(req: PipelineRunRequest) -> dict:
 
     t = threading.Thread(
         target=_run_live_scan,
-        args=(req.symbols, req.timeframe, profile_params, run_id),
+        args=(req.symbols, req.timeframe, profile_params, run_id, profile_name),
         daemon=True,
     )
     t.start()
