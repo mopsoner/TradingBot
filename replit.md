@@ -36,7 +36,7 @@ Preferred communication style: Simple, everyday language.
 - **Framework:** FastAPI (Python)
 - **Entry point:** `backend/app/main.py` — mounts the API router under `/api` and initializes the database on startup
 - **Database:** SQLite via SQLModel ORM (`trading_platform.db`). The engine is created in `backend/app/db/session.py`.
-  - Tables: `Signal`, `Trade`, `Position`, `BacktestResult`, `Log`, `MarketCandle`, `BotJob`, `ScanSchedule`, `StrategyProfile`
+  - Tables: `Signal`, `Trade`, `Position`, `BacktestResult`, `Log`, `MarketCandle`, `BotJob`, `ScanSchedule`, `StrategyProfile`, `PipelineRun`
   - Note: SQLite is used for simplicity. If Postgres is needed, only the connection string in `session.py` needs to change.
 - **Configuration:** Pydantic models in `backend/app/core/config.py` — covers strategy, risk, system, and trading settings. A global `config` singleton is used throughout.
 

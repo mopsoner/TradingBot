@@ -46,6 +46,7 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
     ("position", "total_debt_value",    "REAL DEFAULT 0.0"),
     ("strategyprofile", "enable_auto_borrow_repay", "BOOLEAN DEFAULT 0"),
     ("strategyprofile", "description",              "TEXT"),
+    ("signal", "pipeline_run_id", "TEXT"),
 ]
 
 

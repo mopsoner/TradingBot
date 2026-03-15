@@ -4,6 +4,7 @@ import { api } from '../services/api';
 import type { PipelineState, Signal } from '../services/api';
 import { fmtDateTime, fmtSym } from '../utils/dateUtils';
 import { useSortable } from '../hooks/useSortable';
+import { PipelineRunDetailModal } from '../components/PipelineRunDetail';
 
 const STEPS = [
   { id: 1, label: 'Liquidité',     desc: 'Zone de liquidité identifiée' },
@@ -163,6 +164,7 @@ export function SignalsPage() {
   const [selected, setSelected] = useState<Signal | null>(null);
   const [pipelineData, setPipelineData] = useState<PipelineState | null>(null);
   const pollRef = useRef<number | null>(null);
+  const [detailRunId, setDetailRunId] = useState<string | null>(null);
 
   const params =
     filter === 'accepted' ? '?accepted=true' :
@@ -190,6 +192,7 @@ export function SignalsPage() {
   return (
     <section>
       {selected && <SignalDetailModal signal={selected} onClose={() => setSelected(null)} />}
+      {detailRunId && <PipelineRunDetailModal runId={detailRunId} onClose={() => setDetailRunId(null)} />}
 
       {/* ── Page header ───────────────────────────────────── */}
       <div className="page-header-row">
@@ -389,7 +392,9 @@ export function SignalsPage() {
                               {s.accepted ? 'Accepté' : 'Rejeté'}
                             </span>
                           </td>
-                          <td style={{ padding: '10px 14px' }}>
+                          <td style={{ padding: '10px 14px' }} onClick={e => {
+                            if (s.pipeline_run_id) { e.stopPropagation(); setDetailRunId(s.pipeline_run_id); }
+                          }}>
                             {pActive && (
                               <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                                 <div style={{
@@ -412,7 +417,15 @@ export function SignalsPage() {
                                 ))}
                               </div>
                             )}
-                            {!pEntry && (
+                            {!pEntry && s.pipeline_run_id && (
+                              <span
+                                style={{ fontSize: 10, color: 'var(--accent)', cursor: 'pointer', textDecoration: 'underline', fontWeight: 600 }}
+                                title="Voir le run pipeline"
+                              >
+                                Run
+                              </span>
+                            )}
+                            {!pEntry && !s.pipeline_run_id && (
                               <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>—</span>
                             )}
                           </td>

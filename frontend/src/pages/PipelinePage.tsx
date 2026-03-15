@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
-import type { PipelineEntry, PipelineStep } from '../services/api';
+import type { PipelineEntry, PipelineStep, PipelineRunRecord } from '../services/api';
 import { TIMEFRAMES } from '../constants';
-import { nowTime, fmtSym } from '../utils/dateUtils';
+import { nowTime, fmtSym, fmtDateTime } from '../utils/dateUtils';
+import { PipelineRunDetailModal } from '../components/PipelineRunDetail';
 
 const STEP_LABELS_SHORT = ['LIQ', 'SWEEP', 'WYK', 'DISP', 'BOS', 'EXP', 'FIB'];
 const STEP_FULL = [
@@ -170,6 +171,11 @@ export function PipelinePage() {
   const [liveStatus, setLiveStatus]           = useState<string | null>(null);
   const [liveSubmitting, setLiveSubmitting]   = useState(false);
 
+  const [history, setHistory]           = useState<PipelineRunRecord[]>([]);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyOpen, setHistoryOpen]   = useState(false);
+  const [detailRunId, setDetailRunId]   = useState<string | null>(null);
+
   const profileRows = (profiles?.rows as Array<Record<string, unknown>> | undefined) ?? [];
 
   useEffect(() => {
@@ -194,6 +200,7 @@ export function PipelinePage() {
       if (res.in_progress === 0 && res.total > 0) {
         setRunning(false);
         stopPolling();
+        fetchHistory();
         if (mode === 'live' && res.accepted > 0) setLiveConfirm(true);
       }
     } catch { /* network hiccup */ }
@@ -240,6 +247,15 @@ export function PipelinePage() {
       setLiveConfirm(false);
     }
   };
+
+  const fetchHistory = () => {
+    api.pipelineRuns('?limit=20').then(data => {
+      setHistory(data.rows);
+      setHistoryTotal(data.total);
+    }).catch(() => {});
+  };
+
+  useEffect(() => { fetchHistory(); }, []);
 
   useEffect(() => () => stopPolling(), []);
 
@@ -550,6 +566,82 @@ export function PipelinePage() {
             .map(entry => <SymbolRow key={entry.symbol} entry={entry} />)}
         </div>
       )}
+
+      {detailRunId && <PipelineRunDetailModal runId={detailRunId} onClose={() => setDetailRunId(null)} />}
+
+      {/* Historique */}
+      <div className="card" style={{ marginTop: 20, padding: 0, overflow: 'hidden' }}>
+        <div
+          onClick={() => setHistoryOpen(!historyOpen)}
+          style={{
+            padding: '12px 16px', cursor: 'pointer', display: 'flex',
+            alignItems: 'center', justifyContent: 'space-between',
+            borderBottom: historyOpen ? '1px solid var(--border)' : 'none',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontWeight: 700, fontSize: 14 }}>Historique des runs</span>
+            <span className="tag" style={{ fontSize: 10 }}>{historyTotal}</span>
+          </div>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)', transition: 'transform 0.2s', transform: historyOpen ? 'rotate(180deg)' : 'none' }}>▼</span>
+        </div>
+        {historyOpen && (
+          <div style={{ maxHeight: 350, overflowY: 'auto' }}>
+            {history.length === 0 ? (
+              <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>
+                Aucun run enregistré
+              </div>
+            ) : (
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border-mid)' }}>
+                    {['DATE', 'TF', 'SYMBOLES', 'ACCEPTÉS', 'REJETÉS', 'DURÉE'].map(h => (
+                      <th key={h} style={{ padding: '7px 12px', fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textAlign: 'left', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {history.map(r => {
+                    let syms: string[] = [];
+                    try { syms = JSON.parse(r.symbols_json); } catch { /**/ }
+                    const dur = r.completed_at
+                      ? Math.round((new Date(r.completed_at).getTime() - new Date(r.started_at).getTime()) / 1000)
+                      : null;
+                    return (
+                      <tr
+                        key={r.run_id}
+                        onClick={() => setDetailRunId(r.run_id)}
+                        style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', transition: 'background 0.12s' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = 'rgba(59,130,246,0.04)')}
+                        onMouseLeave={e => (e.currentTarget.style.background = '')}
+                      >
+                        <td style={{ padding: '8px 12px', fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{fmtDateTime(r.started_at)}</td>
+                        <td style={{ padding: '8px 12px' }}><span className="tag" style={{ fontSize: 10 }}>{r.timeframe}</span></td>
+                        <td style={{ padding: '8px 12px', fontSize: 12, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {syms.map(s => fmtSym(s)).join(', ')}
+                        </td>
+                        <td style={{ padding: '8px 12px' }}>
+                          <span style={{ fontWeight: 700, color: r.accepted_count > 0 ? 'var(--accent-green)' : 'var(--text-muted)' }}>
+                            {r.accepted_count}
+                          </span>
+                        </td>
+                        <td style={{ padding: '8px 12px' }}>
+                          <span style={{ fontWeight: 700, color: r.rejected_count > 0 ? 'var(--accent-red)' : 'var(--text-muted)' }}>
+                            {r.rejected_count}
+                          </span>
+                        </td>
+                        <td style={{ padding: '8px 12px', fontSize: 12, color: 'var(--text-muted)' }}>
+                          {dur !== null ? `${dur}s` : '—'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Légende */}
       <div style={{ marginTop: 20, padding: 14, borderRadius: 8, background: 'var(--surface2)', fontSize: 12 }}>

@@ -1,11 +1,33 @@
 from datetime import datetime, timezone
 from typing import Optional
+import uuid
 
 from sqlmodel import Field, SQLModel
 
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _uuid() -> str:
+    return str(uuid.uuid4())
+
+
+class PipelineRun(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    run_id: str = Field(default_factory=_uuid, index=True)
+    started_at: datetime = Field(default_factory=_now_utc)
+    completed_at: Optional[datetime] = None
+    mode: str = "paper"
+    source: str = "manual"
+    symbols_json: str = "[]"
+    timeframe: str = "1h"
+    profile_id: Optional[int] = None
+    accepted_count: int = 0
+    rejected_count: int = 0
+    error_count: int = 0
+    total_count: int = 0
+    results_json: str = "{}"
 
 
 class Signal(SQLModel, table=True):
@@ -29,6 +51,7 @@ class Signal(SQLModel, table=True):
     session_name: Optional[str] = None
     displacement_force: Optional[float] = None
     wyckoff_event: Optional[str] = None
+    pipeline_run_id: Optional[str] = None
 
 
 class Trade(SQLModel, table=True):

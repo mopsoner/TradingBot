@@ -39,6 +39,24 @@ export type Signal = {
   tf_1h_validation?: string | null;
   session_name?: string | null;
   displacement_force?: number | null;
+  pipeline_run_id?: string | null;
+};
+
+export type PipelineRunRecord = {
+  id: number;
+  run_id: string;
+  started_at: string;
+  completed_at: string | null;
+  mode: string;
+  source: string;
+  symbols_json: string;
+  timeframe: string;
+  profile_id: number | null;
+  accepted_count: number;
+  rejected_count: number;
+  error_count: number;
+  total_count: number;
+  results_json: string;
 };
 
 export type Trade = {
@@ -129,6 +147,8 @@ export const api = {
   getPipeline: () => get<PipelineState>('/api/pipeline'),
   runPipeline: (body: { symbols: string[]; timeframe: string; profile_id?: number | null }) =>
     post<Record<string, unknown>>('/api/pipeline/run', body),
+  pipelineRuns: (params = '') => get<{ total: number; rows: PipelineRunRecord[] }>(`/api/pipeline/runs${params}`),
+  pipelineRun: (runId: string) => get<{ run: PipelineRunRecord; signals: Signal[] }>(`/api/pipeline/runs/${runId}`),
   journal: (params = '') => get<JournalResponse>(`/api/journal${params}`),
   autonomousStart: (body: { symbols: string[]; timeframe: string; profile_id?: number | null; interval_minutes: number }) =>
     post<Record<string, unknown>>('/api/autonomous/start', body),
