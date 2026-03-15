@@ -3,6 +3,7 @@ import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
 import type { BacktestResult } from '../services/api';
 import { useSortable } from '../hooks/useSortable';
+import { fmtSym } from '../utils/dateUtils';
 
 function pct(n: number) { return (n * 100).toFixed(1) + '%'; }
 function num(n: number, d = 2) { return n.toFixed(d); }
@@ -22,26 +23,38 @@ type SingleAnalysis = {
   suggestions: Suggestion[];
 };
 
-type WorkshopResult = {
+type WorkshopSuggestion = {
+  titre: string;
+  probleme: string;
+  action: string;
+  impact: 'haut' | 'moyen' | 'faible';
+};
+
+type WorkshopEntry = {
   symbol: string;
-  profile_name: string;
-  ai_score: number;
-  win_rate: number;
-  profit_factor: number;
-  drawdown: number;
-  insights: string[];
-  created_profile_id?: number;
+  status: 'running' | 'done' | 'error';
+  ai_score: number | null;
+  verdict?: string;
+  synthesis?: string;
+  suggestions?: WorkshopSuggestion[];
+  profile?: { id: number; name: string };
+  win_rate?: number;
+  profit_factor?: number;
+  drawdown?: number;
+  error?: string | null;
 };
 
 type WorkshopStatus = {
+  ok: boolean;
+  reason?: string;
   status: 'running' | 'done' | 'error';
-  progress: number;
-  current_symbol?: string;
-  results: WorkshopResult[];
-  error?: string;
+  total: number;
+  done: number;
+  current: string | null;
+  results: WorkshopEntry[];
+  error: string | null;
 };
 
-const SYMBOL_OPTIONS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'ADAUSDT', 'DOTUSDT', 'AVAXUSDT', 'LINKUSDT', 'MATICUSDT'];
 const TF_OPTIONS = ['15m', '1h', '4h'];
 
 // ── Single backtest analyze panel ─────────────────────────────────────────────
@@ -148,7 +161,7 @@ function SingleAnalyzePanel({ rows }: { rows: BacktestResult[] }) {
                   onClick={() => analyze(r)}
                 >
                   <td className="muted">{r.id}</td>
-                  <td><strong style={{ fontSize: 12 }}>{r.symbol.replace('USDT', '')}</strong></td>
+                  <td><strong style={{ fontSize: 12 }}>{fmtSym(r.symbol)}</strong></td>
                   <td><span className="tag">{r.timeframe}</span></td>
                   <td className={r.win_rate >= 0.5 ? 'green' : 'red'}>{pct(r.win_rate)}</td>
                   <td className={r.profit_factor >= 1.2 ? 'green' : 'yellow'}>{num(r.profit_factor)}</td>
@@ -206,7 +219,7 @@ function SingleAnalyzePanel({ rows }: { rows: BacktestResult[] }) {
               </div>
               <div>
                 <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>
-                  #{selected.id} · {selected.symbol.replace('USDT', '')} {selected.timeframe}
+                  #{selected.id} · {fmtSym(selected.symbol)} {selected.timeframe}
                   {profileSrcName && <span className="tag" style={{ marginLeft: 8 }}>{profileSrcName}</span>}
                 </div>
                 <div style={{ fontSize: 13, fontStyle: 'italic', color: 'var(--text-muted)' }}>"{analysis.verdict}"</div>
@@ -260,12 +273,17 @@ function SingleAnalyzePanel({ rows }: { rows: BacktestResult[] }) {
 
 // ── Multi-crypto workshop panel ───────────────────────────────────────────────
 function WorkshopPanel({ profiles }: { profiles: Array<Record<string, unknown>> }) {
-  const [symbols, setSymbols]   = useState<string[]>(['BTCUSDT', 'ETHUSDT', 'SOLUSDT']);
+  const { data: byQuote } = useApi(() => api.symbolsByQuote());
+  const [quote, setQuote]       = useState('USDT');
+  const quotes                  = Object.keys(byQuote ?? { USDT: [] });
+  const universe                = (byQuote ?? {})[quote] ?? [];
+  const [symbols, setSymbols]   = useState<string[]>([]);
   const [timeframe, setTf]      = useState('1h');
   const [days, setDays]         = useState(30);
   const [profileId, setProfileId] = useState<string>('');
   const [jobId, setJobId]       = useState('');
   const [wsStatus, setWsStatus] = useState<WorkshopStatus | null>(null);
+  const progress = wsStatus ? Math.round((wsStatus.done / Math.max(wsStatus.total, 1)) * 100) : 0;
   const [running, setRunning]   = useState(false);
   const [error, setError]       = useState('');
   const pollRef                 = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -302,9 +320,13 @@ function WorkshopPanel({ profiles }: { profiles: Array<Record<string, unknown>> 
     if (pollRef.current) clearInterval(pollRef.current);
     pollRef.current = setInterval(async () => {
       try {
-        const res = await api.getAiWorkshopStatus(jobId);
-        const st = res as WorkshopStatus & { ok?: boolean; reason?: string };
-        if (!st.ok && st.reason) { setError(String(st.reason)); setRunning(false); clearInterval(pollRef.current!); return; }
+        const st = await api.getAiWorkshopStatus(jobId) as WorkshopStatus;
+        if (!st.ok && st.reason) {
+          setError(String(st.reason));
+          setRunning(false);
+          clearInterval(pollRef.current!);
+          return;
+        }
         setWsStatus(st);
         if (st.status === 'done' || st.status === 'error') {
           setRunning(false);
@@ -343,11 +365,22 @@ function WorkshopPanel({ profiles }: { profiles: Array<Record<string, unknown>> 
         </div>
 
         <div style={{ marginBottom: 14 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text-muted)' }}>
-            Cryptos analysées ({symbols.length} sélectionnées)
+          <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+            {quotes.map(q => (
+              <button key={q} onClick={() => { setQuote(q); setSymbols([]); }}
+                style={{
+                  padding: '4px 12px', borderRadius: 6, fontSize: 12, fontWeight: 700,
+                  border: `1px solid ${quote === q ? 'var(--accent)' : 'var(--border)'}`,
+                  background: quote === q ? 'rgba(88,166,255,0.15)' : 'var(--surface2)',
+                  color: quote === q ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer',
+                }}>{q}</button>
+            ))}
           </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {SYMBOL_OPTIONS.map(s => {
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text-muted)' }}>
+            Cryptos analysées ({symbols.length} sélectionnées sur {universe.length})
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 160, overflowY: 'auto' }}>
+            {universe.map(s => {
               const on = symbols.includes(s);
               return (
                 <button key={s} onClick={() => toggleSymbol(s)}
@@ -358,7 +391,7 @@ function WorkshopPanel({ profiles }: { profiles: Array<Record<string, unknown>> 
                     color: on ? 'var(--accent)' : 'var(--text-muted)',
                     transition: 'all 0.15s',
                   }}>
-                  {s.replace('USDT', '')}
+                  {fmtSym(s)}
                 </button>
               );
             })}
@@ -394,7 +427,7 @@ function WorkshopPanel({ profiles }: { profiles: Array<Record<string, unknown>> 
             </h3>
             {running && wsStatus && (
               <span className="muted" style={{ fontSize: 12 }}>
-                {wsStatus.progress}% · {wsStatus.current_symbol ? `Analyse ${wsStatus.current_symbol}…` : ''}
+                {progress}% ({wsStatus.done}/{wsStatus.total}) · {wsStatus.current ? `Analyse ${fmtSym(wsStatus.current)}…` : ''}
               </span>
             )}
           </div>
@@ -403,7 +436,7 @@ function WorkshopPanel({ profiles }: { profiles: Array<Record<string, unknown>> 
             <div style={{ height: 6, background: 'var(--surface2)', borderRadius: 3, overflow: 'hidden', marginBottom: 16 }}>
               <div style={{
                 height: '100%',
-                width: `${wsStatus?.progress ?? 10}%`,
+                width: `${progress || 5}%`,
                 background: 'linear-gradient(90deg, #7c3aed, #4f46e5)',
                 borderRadius: 3,
                 transition: 'width 0.5s ease',
@@ -414,42 +447,79 @@ function WorkshopPanel({ profiles }: { profiles: Array<Record<string, unknown>> 
           {/* Results grid */}
           {wsStatus && wsStatus.results.length > 0 && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12 }}>
-              {wsStatus.results.map(r => (
-                <div key={r.symbol} style={{
-                  padding: 14, borderRadius: 10,
-                  background: 'var(--surface2)',
-                  border: `1px solid ${r.ai_score >= 70 ? 'rgba(63,185,80,0.3)' : r.ai_score >= 50 ? 'rgba(248,166,0,0.3)' : 'rgba(248,81,73,0.25)'}`,
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
-                    <div>
-                      <strong style={{ fontSize: 15 }}>{r.symbol.replace('USDT', '')}</strong>
-                      {r.profile_name && <div className="muted" style={{ fontSize: 10, marginTop: 1 }}>{r.profile_name}</div>}
+              {wsStatus.results.map(r => {
+                const isDone  = r.status === 'done';
+                const score   = r.ai_score ?? null;
+                const borderColor = score === null ? 'var(--border)'
+                  : score >= 70 ? 'rgba(63,185,80,0.3)'
+                  : score >= 50 ? 'rgba(248,166,0,0.3)'
+                  : 'rgba(248,81,73,0.25)';
+                return (
+                  <div key={r.symbol} style={{
+                    padding: 14, borderRadius: 10,
+                    background: 'var(--surface2)',
+                    border: `1px solid ${borderColor}`,
+                    opacity: isDone ? 1 : 0.6,
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+                      <div>
+                        <strong style={{ fontSize: 15 }}>{fmtSym(r.symbol)}</strong>
+                        {r.profile?.name && <div className="muted" style={{ fontSize: 10, marginTop: 1 }}>{r.profile.name}</div>}
+                      </div>
+                      <div style={{
+                        fontSize: 22, fontWeight: 900,
+                        color: score === null ? 'var(--text-muted)'
+                          : score >= 70 ? 'var(--accent-green)'
+                          : score >= 50 ? 'var(--accent-yellow)'
+                          : 'var(--accent-red)',
+                      }}>
+                        {isDone && score !== null ? <>{score}<span style={{ fontSize: 10, fontWeight: 400 }}>/100</span></> : '…'}
+                      </div>
                     </div>
-                    <div style={{
-                      fontSize: 22, fontWeight: 900,
-                      color: r.ai_score >= 70 ? 'var(--accent-green)' : r.ai_score >= 50 ? 'var(--accent-yellow)' : 'var(--accent-red)',
-                    }}>
-                      {r.ai_score}<span style={{ fontSize: 10, fontWeight: 400 }}>/100</span>
-                    </div>
+
+                    {isDone ? (
+                      <>
+                        <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+                          {r.win_rate !== undefined && (
+                            <span style={{ fontSize: 12, color: r.win_rate >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                              WR {pct(r.win_rate)}
+                            </span>
+                          )}
+                          {r.profit_factor !== undefined && (
+                            <span style={{ fontSize: 12, color: r.profit_factor >= 1.2 ? 'var(--accent-green)' : 'var(--accent-yellow)' }}>
+                              PF {num(r.profit_factor)}
+                            </span>
+                          )}
+                          {r.drawdown !== undefined && (
+                            <span style={{ fontSize: 12, color: r.drawdown <= 0.1 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                              DD {pct(r.drawdown)}
+                            </span>
+                          )}
+                        </div>
+                        {r.verdict && (
+                          <div style={{ fontSize: 11, fontStyle: 'italic', color: 'var(--text-muted)', marginBottom: 6 }}>
+                            "{r.verdict}"
+                          </div>
+                        )}
+                        {(r.suggestions ?? []).slice(0, 2).map((s, i) => (
+                          <div key={i} style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 2 }}>
+                            • {s.titre}
+                          </div>
+                        ))}
+                      </>
+                    ) : r.status === 'error' ? (
+                      <div style={{ fontSize: 11, color: 'var(--accent-red)' }}>
+                        ❌ {r.error ?? 'Erreur analyse'}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ animation: 'pulse 1.2s ease-in-out infinite', display: 'inline-block' }}>🤖</span>
+                        Analyse IA en cours…
+                      </div>
+                    )}
                   </div>
-                  <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                    <span style={{ fontSize: 12, color: r.win_rate >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-                      WR {pct(r.win_rate)}
-                    </span>
-                    <span style={{ fontSize: 12, color: r.profit_factor >= 1.2 ? 'var(--accent-green)' : 'var(--accent-yellow)' }}>
-                      PF {num(r.profit_factor)}
-                    </span>
-                    <span style={{ fontSize: 12, color: r.drawdown <= 0.1 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-                      DD {pct(r.drawdown)}
-                    </span>
-                  </div>
-                  {r.insights.slice(0, 2).map((ins, i) => (
-                    <div key={i} style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 2 }}>
-                      • {ins}
-                    </div>
-                  ))}
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -470,28 +540,28 @@ export function AiWorkshopPage() {
 
   return (
     <section>
-      <div style={{ marginBottom: 24 }}>
-        <h2 style={{ margin: 0, marginBottom: 4 }}>Workshop IA</h2>
-        <div className="muted" style={{ fontSize: 13 }}>
-          Analyse IA de vos backtests · Génération de profils optimisés · Workshop multi-crypto
+      <div className="page-header-row">
+        <div>
+          <h2 style={{ margin: 0 }}>Workshop IA</h2>
+          <p className="page-description">Analyse GPT-4o · Optimisation de profils · Workshop multi-crypto</p>
         </div>
-      </div>
-
-      {/* Tab selector */}
-      <div style={{ display: 'flex', gap: 0, borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border)', marginBottom: 20, width: 'fit-content' }}>
-        {([
-          { key: 'single',   label: '🔬 Analyser un backtest' },
-          { key: 'workshop', label: '🚀 Workshop multi-crypto' },
-        ] as const).map(t => (
-          <button key={t.key} onClick={() => setTab(t.key)}
-            style={{
-              padding: '9px 20px', fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer',
-              background: tab === t.key ? 'linear-gradient(135deg, #7c3aed, #4f46e5)' : 'var(--surface)',
-              color: tab === t.key ? '#fff' : 'var(--text-muted)',
-            }}>
-            {t.label}
-          </button>
-        ))}
+        {/* Tab selector */}
+        <div style={{ display: 'flex', background: 'var(--surface2)', borderRadius: 10, padding: 3, gap: 2, border: '1px solid var(--border)' }}>
+          {([
+            { key: 'single',   label: '🔬 Analyser un backtest' },
+            { key: 'workshop', label: '🚀 Workshop multi-crypto' },
+          ] as const).map(t => (
+            <button key={t.key} onClick={() => setTab(t.key)}
+              style={{
+                padding: '7px 18px', fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer',
+                borderRadius: 8,
+                background: tab === t.key ? 'linear-gradient(135deg, #7c3aed, #4f46e5)' : 'transparent',
+                color: tab === t.key ? '#fff' : 'var(--text-muted)',
+              }}>
+              {t.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {tab === 'single' && <SingleAnalyzePanel rows={rows} />}

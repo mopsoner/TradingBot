@@ -1,12 +1,16 @@
 from datetime import datetime, timedelta, timezone
 import json
+import logging
 import os
 import random
 import threading
 import time
 from typing import Optional
 
+logger = logging.getLogger(__name__)
+
 from fastapi import APIRouter, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select, func
 
@@ -87,6 +91,8 @@ def get_signals(
     limit: int = Query(100, le=500),
     offset: int = 0,
     accepted: Optional[bool] = None,
+    symbol: Optional[str] = None,
+    timeframe: Optional[str] = None,
 ) -> dict:
     with Session(engine) as s:
         q = select(Signal).order_by(Signal.timestamp.desc())
@@ -94,6 +100,12 @@ def get_signals(
         if accepted is not None:
             q = q.where(Signal.accepted == accepted)
             count_q = count_q.where(Signal.accepted == accepted)
+        if symbol is not None:
+            q = q.where(Signal.symbol == symbol)
+            count_q = count_q.where(Signal.symbol == symbol)
+        if timeframe is not None:
+            q = q.where(Signal.timeframe == timeframe)
+            count_q = count_q.where(Signal.timeframe == timeframe)
         total = s.exec(count_q).one()
         rows = s.exec(q.offset(offset).limit(limit)).all()
     return {"total": total, "rows": [r.model_dump() for r in rows]}
@@ -226,6 +238,36 @@ def symbols() -> list[str]:
 def isolated_symbols() -> list[str]:
     return market_data.load_symbols()
 
+@router.get("/symbols/by-quote")
+def symbols_by_quote(response: Response) -> dict[str, list[str]]:
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return market_data.load_symbols_by_quote()
+
+
+@router.get("/symbols/loaded")
+def symbols_loaded() -> list[dict]:
+    """Return distinct symbols that have candle data in the database, with counts per timeframe."""
+    with Session(engine) as s:
+        rows = s.exec(
+            select(MarketCandle.symbol, MarketCandle.timeframe, func.count(MarketCandle.id).label("count"))
+            .group_by(MarketCandle.symbol, MarketCandle.timeframe)
+            .order_by(MarketCandle.symbol, MarketCandle.timeframe)
+        ).all()
+    result: dict[str, dict] = {}
+    for symbol, timeframe, count in rows:
+        if symbol not in result:
+            result[symbol] = {"symbol": symbol, "timeframes": {}, "total": 0}
+        result[symbol]["timeframes"][timeframe] = count
+        result[symbol]["total"] += count
+    return list(result.values())
+
+
+@router.get("/symbols/prices")
+def symbols_prices(response: Response) -> dict[str, float]:
+    """Real-time prices via cached Binance ticker (5 min TTL, thread-safe)."""
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return market_data.load_prices()
+
 
 @router.get("/config")
 def get_config() -> dict:
@@ -256,6 +298,14 @@ def update_config(new_config: AppConfig) -> dict:
     with Session(engine) as s:
         s.add(Log(level="INFO", message=f"Configuration updated and persisted — mode={config.system.mode}"))
         s.commit()
+
+    if config.system.mode == "paper":
+        _auto_start_for_paper()
+    else:
+        with _auto_lock:
+            if _auto_state["running"]:
+                _auto_state["running"] = False
+        _auto_stop.set()
 
     return {"ok": True, "config": config.model_dump()}
 
@@ -343,7 +393,7 @@ class MultiScanRequest(BaseModel):
 
 
 class StartBotRequest(BaseModel):
-    symbols: list[str] = Field(default_factory=lambda: ["ETHUSDT", "BTCUSDT"], min_length=1)
+    symbols: list[str] = Field(min_length=1)
     timeframe: str = "15m"
     mode: str = "paper"
     risk_approved: bool = False
@@ -356,6 +406,7 @@ class StartBotRequest(BaseModel):
 class StrategyProfileIn(BaseModel):
     name: str
     mode: str = "research"
+    description: Optional[str] = None
     parameters: dict[str, object] = Field(default_factory=dict)
     enable_auto_borrow_repay: bool = False
 
@@ -614,12 +665,22 @@ def backtest_strategy_profile(profile_id: int) -> dict:
         if not profile:
             return {"ok": False, "reason": "profile_not_found"}
 
+        # Pick the richest symbol+timeframe available in DB, fallback to BTCUSDT/1h
+        row = s.exec(
+            select(MarketCandle.symbol, MarketCandle.timeframe, func.count(MarketCandle.id).label("n"))
+            .group_by(MarketCandle.symbol, MarketCandle.timeframe)
+            .order_by(func.count(MarketCandle.id).desc())
+        ).first()
+        bt_symbol = row[0] if row else "BTCUSDT"
+        bt_tf     = row[1] if row else "1h"
+
         candles = s.exec(
             select(MarketCandle)
+            .where(MarketCandle.symbol == bt_symbol, MarketCandle.timeframe == bt_tf)
             .order_by(MarketCandle.timestamp.desc())
             .limit(500)
         ).all()
-        outcomes = _simulate_outcomes(profile, "BTCUSDT", "1h", 30, candles)
+        outcomes = _simulate_outcomes(profile, bt_symbol, bt_tf, 30, candles)
         metrics = backtesting.run(outcomes)
         profile.last_backtest_win_rate = metrics.win_rate
         profile.last_backtest_profit_factor = metrics.profit_factor
@@ -627,7 +688,7 @@ def backtest_strategy_profile(profile_id: int) -> dict:
         profile.approved_for_live = metrics.profit_factor >= config.backtest.approved_pf_threshold and metrics.drawdown <= config.backtest.approved_dd_threshold
         profile.mode = "research"
         bt_result = BacktestResult(
-            symbol="BTCUSDT", timeframe="1h",
+            symbol=bt_symbol, timeframe=bt_tf,
             strategy_version=profile.name,
             win_rate=metrics.win_rate, profit_factor=metrics.profit_factor,
             expectancy=metrics.expectancy, drawdown=metrics.drawdown,
@@ -757,6 +818,7 @@ def start_bot(req: StartBotRequest) -> dict:
                     utad=not spring,
                     displacement=True,
                     bos=True,
+                    expansion_to_next_liquidity=True,
                     fib_retracement=0.618,
                 )
             )
@@ -885,101 +947,103 @@ def ingest_data(payload: list[CandleIn]) -> dict:
     return {"ok": True, "inserted": len(payload)}
 
 
-TF_SECONDS: dict[str, int] = {"5m": 5 * 60, "15m": 15 * 60, "1h": 3600, "4h": 4 * 3600}
-
-
-class EnrichRequest(BaseModel):
+class FetchRequest(BaseModel):
     symbols: list[str] = Field(min_length=1)
     timeframe: str = "1h"
+    days: int = Field(default=365, ge=1, le=1460)
+    source: str | None = Field(default=None, description="Override source for this request (binance/yfinance). Falls back to config.")
 
 
-@router.post("/data/enrich")
-def enrich_data(req: EnrichRequest) -> dict:
-    import random
-    tf = req.timeframe if req.timeframe in TF_SECONDS else "1h"
-    interval_seconds = TF_SECONDS[tf]
-    n_candles = {"5m": config.data.candles_5m, "15m": config.data.candles_15m, "1h": config.data.candles_1h, "4h": config.data.candles_4h}.get(tf, config.data.candles_1h)
-    now = datetime.now(timezone.utc)
-    rows_added = 0
+@router.post("/data/fetch")
+def fetch_candles(req: FetchRequest) -> dict:
+    """
+    Download real candles from Binance or yfinance and store in DB.
+    Source: req.source if provided, else config.data.candle_source.
+    """
+    from backend.app.services.candle_importer import import_candles
+
+    source = req.source or config.data.candle_source
+    if source not in ("binance", "yfinance"):
+        return {"ok": False, "reason": f"unknown source '{source}'. Use 'binance' or 'yfinance'."}
+
+    tf = req.timeframe if req.timeframe in ("5m", "15m", "1h", "4h", "1d") else "1h"
+
+    results = []
+    total_inserted = 0
+    for symbol in req.symbols:
+        try:
+            r = import_candles(symbol=symbol, timeframe=tf, days=req.days, source=source)
+            results.append(r)
+            total_inserted += r.get("inserted", 0)
+        except Exception as exc:
+            logger.warning("fetch_candles failed %s: %s", symbol, exc)
+            results.append({"ok": False, "symbol": symbol, "error": str(exc)})
 
     with Session(engine) as s:
-        for symbol in req.symbols:
-            base = config.data.symbol_prices.get(symbol, 100.0)
-            volatility = base * 0.012
-            price = base
-            for i in range(n_candles, 0, -1):
-                ts = now - timedelta(seconds=interval_seconds * i)
-                change = random.gauss(0, volatility)
-                price = max(price + change, base * 0.5)
-                high  = price + abs(random.gauss(0, volatility * 0.5))
-                low   = price - abs(random.gauss(0, volatility * 0.5))
-                open_ = price - random.gauss(0, volatility * 0.3)
-                vol   = base * random.uniform(0.8, 3.0) * 100
-                s.add(MarketCandle(
-                    symbol=symbol, timeframe=tf, timestamp=ts,
-                    open=round(open_, 6), high=round(high, 6),
-                    low=round(low, 6), close=round(price, 6),
-                    volume=round(vol, 2), source="enrich",
-                ))
-                rows_added += 1
-
-        s.add(Log(level="INFO", message=f"Enrich {tf}: {rows_added} candles pour {len(req.symbols)} symboles"))
+        s.add(Log(level="INFO", message=f"Fetch {tf}/{source}: {total_inserted} bougies insérées pour {len(req.symbols)} symbole(s)"))
         s.commit()
 
-    return {"ok": True, "symbols": req.symbols, "timeframe": tf, "rows_added": rows_added, "candles_per_symbol": n_candles}
+    return {"ok": True, "source": source, "timeframe": tf, "results": results, "total_inserted": total_inserted}
 
 
-@router.post("/data/enrich/daily")
-def daily_enrichment(symbols: list[str]) -> dict:
-    if not symbols:
-        symbols = ["ETHUSDT", "BTCUSDT"]
+class CsvImportRequest(BaseModel):
+    symbol: str
+    timeframe: str = "1h"
+    csv_text: str = Field(description="Contenu du fichier CSV (timestamp,open,high,low,close,volume)")
 
-    now = datetime.now(timezone.utc)
-    rows_added = 0
+
+@router.post("/data/import/csv")
+def import_csv(req: CsvImportRequest) -> dict:
+    """
+    Import candles from CSV text (parsed on backend with pandas).
+    CSV format: timestamp,open,high,low,close,volume
+    timestamp can be ISO string, Unix seconds, or Unix ms.
+    """
+    from backend.app.services.candle_importer import parse_csv, save_candles_to_db
+
+    tf = req.timeframe if req.timeframe in ("5m", "15m", "1h", "4h", "1d") else "1h"
+    try:
+        candles = parse_csv(req.csv_text, req.symbol, tf)
+    except ValueError as exc:
+        return {"ok": False, "reason": str(exc)}
+    except Exception as exc:
+        return {"ok": False, "reason": f"CSV parse error: {exc}"}
+
+    if not candles:
+        return {"ok": False, "reason": "CSV produced 0 valid candles — check format and data."}
+
+    inserted = save_candles_to_db(candles, req.symbol, tf, source="csv")
+
     with Session(engine) as s:
-        for symbol in symbols:
-            base = 100 if symbol == "ETHUSDT" else 180
-            for i in range(24):
-                close = base + i * 0.4
-                candle = MarketCandle(
-                    symbol=symbol,
-                    timeframe="1h",
-                    timestamp=now - timedelta(hours=i),
-                    open=close - 0.6,
-                    high=close + 0.8,
-                    low=close - 1,
-                    close=close,
-                    volume=1000 + i * 15,
-                    source="daily-enrichment",
-                )
-                s.add(candle)
-                rows_added += 1
-
-            s.add(BotJob(
-                symbol=symbol,
-                timeframe="1h",
-                session_name=resolve_session(now),
-                mode="research",
-                status="DB_ENRICHED",
-                details="Daily enrichment stored for backtesting",
-            ))
-
-        schedule = s.exec(select(ScanSchedule).where(ScanSchedule.name == "daily_enrichment")).first()
-        if not schedule:
-            schedule = ScanSchedule(name="daily_enrichment", cron="0 1 * * *", enabled=True, task_type="enrichment")
-            s.add(schedule)
-        schedule.last_run = now
-        schedule.next_run = now + timedelta(days=1)
-
-        s.add(Log(level="INFO", message=f"Daily enrichment completed for {len(symbols)} symbols ({rows_added} candles)"))
+        s.add(Log(level="INFO", message=f"CSV import {req.symbol}/{tf}: {inserted} bougies insérées"))
         s.commit()
 
     return {
-        "ok": True,
-        "symbols": symbols,
-        "rows_added": rows_added,
-        "next_daily_run": now + timedelta(days=1),
+        "ok": True, "symbol": req.symbol, "timeframe": tf, "source": "csv",
+        "parsed": len(candles), "inserted": inserted, "skipped": len(candles) - inserted,
+        "period_start": candles[0].timestamp.date().isoformat(),
+        "period_end": candles[-1].timestamp.date().isoformat(),
     }
+
+
+class DeleteCandlesRequest(BaseModel):
+    symbol: str
+    timeframe: str | None = None
+
+
+@router.delete("/data/candles")
+def delete_candles(req: DeleteCandlesRequest) -> dict:
+    """Delete all candles for a symbol (and optionally a timeframe)."""
+    with Session(engine) as s:
+        q = select(MarketCandle).where(MarketCandle.symbol == req.symbol)
+        if req.timeframe:
+            q = q.where(MarketCandle.timeframe == req.timeframe)
+        rows = s.exec(q).all()
+        for row in rows:
+            s.delete(row)
+        s.add(Log(level="INFO", message=f"Deleted {len(rows)} candles for {req.symbol}/{req.timeframe or 'all TF'}"))
+        s.commit()
+    return {"ok": True, "deleted": len(rows), "symbol": req.symbol, "timeframe": req.timeframe}
 
 
 
@@ -1094,12 +1158,96 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
         s.commit()
         s.refresh(result)
 
-    return {"ok": True, "result": result.model_dump(), "report": report}
+    now = datetime.now(timezone.utc)
+    n_trades = len(outcomes)
+    interval = timedelta(days=req.horizon_days) / max(n_trades, 1)
+    trades = []
+    for i, r_val in enumerate(outcomes):
+        direction = random.choice(["LONG", "SHORT"])
+        trades.append({
+            "index": i + 1,
+            "direction": direction,
+            "outcome": "win" if r_val > 0 else "loss",
+            "r_multiple": round(r_val, 4),
+            "timestamp": (now - timedelta(days=req.horizon_days) + interval * i).isoformat(),
+        })
+
+    return {"ok": True, "result": result.model_dump(), "report": report, "trades": trades}
 
 
 @router.post("/backtest")
 def run_backtest(outcomes_r: list[float]) -> dict:
     return backtesting.run(outcomes_r).__dict__
+
+
+class WalkForwardRequest(BaseModel):
+    symbol: str = Field("ETHUSDT", min_length=3, max_length=20)
+    years: int = Field(4, ge=1, le=5)
+    timeframe: str = Field("1h", pattern=r"^(15m|1h|4h|1d)$")
+    profile_id: int | None = None
+
+
+@router.post("/backtest/walkforward")
+def run_walkforward(req: WalkForwardRequest) -> dict:
+    from backend.app.services.walkforward import run_walkforward as _run_wf
+    import json as _json
+
+    fib_levels = [0.5, 0.618, 0.705]
+    rr_ratio = 2.0
+
+    if req.profile_id:
+        with Session(engine) as s:
+            profile = s.get(StrategyProfile, req.profile_id)
+            if not profile:
+                return {"ok": False, "reason": "profile_not_found"}
+            try:
+                params = _json.loads(profile.parameters) if isinstance(profile.parameters, str) else profile.parameters
+                fib_levels = params.get("fib_levels", fib_levels)
+                rr_ratio = float(params.get("take_profit_rr", rr_ratio))
+            except Exception:
+                pass
+
+    result = _run_wf(
+        symbol=req.symbol,
+        years=req.years,
+        timeframe=req.timeframe,
+        fib_levels=fib_levels,
+        rr_ratio=rr_ratio,
+    )
+
+    with Session(engine) as s:
+        s.add(Log(level="INFO", message=f"Walk-forward {req.symbol} {req.timeframe} {req.years}y: {result.total_signals} signals, WR {result.win_rate:.2%}, PF {result.profit_factor:.2f}"))
+        s.commit()
+
+    return {
+        "ok": True,
+        "signals": [
+            {
+                "timestamp": sig.timestamp,
+                "direction": sig.direction,
+                "entry_price": sig.entry_price,
+                "tp_price": sig.tp_price,
+                "sl_price": sig.sl_price,
+                "result": sig.result,
+                "r_multiple": sig.r_multiple,
+                "steps": sig.steps,
+            }
+            for sig in result.signals
+        ],
+        "metrics": {
+            "total_signals": result.total_signals,
+            "wins": result.wins,
+            "losses": result.losses,
+            "pending": result.pending,
+            "win_rate": result.win_rate,
+            "profit_factor": result.profit_factor,
+            "max_drawdown": result.max_drawdown,
+            "total_r": result.total_r,
+        },
+        "candles_downloaded": result.candles_downloaded,
+        "period_start": result.period_start,
+        "period_end": result.period_end,
+    }
 
 
 # ── Live Pipeline Tracker ─────────────────────────────────────────────────────
@@ -1128,6 +1276,225 @@ PIPELINE_STEPS = [
 
 _pipeline: dict[str, dict] = {}
 _pipeline_lock = threading.Lock()
+
+# ── Autonomous scanner state ───────────────────────────────────────────────────
+_auto_lock  = threading.Lock()
+_auto_stop  = threading.Event()
+_auto_thread: threading.Thread | None = None
+_auto_state: dict = {
+    "running":          False,
+    "symbols":          [],
+    "timeframe":        "1h",
+    "profile_id":       None,
+    "interval_minutes": 15,
+    "next_run_at":      None,
+    "last_run_at":      None,
+    "run_count":        0,
+    "last_signals":     0,
+    "last_run_results": [],
+}
+
+
+def _autonomous_worker() -> None:
+    """
+    Background daemon: runs the bot-scan every `interval_minutes` minutes.
+    Signals are persisted to DB as normal BotJobs; no orders are submitted.
+    """
+    import copy
+    while not _auto_stop.is_set():
+        with _auto_lock:
+            symbols   = list(_auto_state["symbols"])
+            tf        = _auto_state["timeframe"]
+            pid       = _auto_state["profile_id"]
+            interval  = _auto_state["interval_minutes"]
+            next_at   = _auto_state["next_run_at"]
+
+        now = datetime.now(timezone.utc)
+
+        # Wait until next_run_at
+        if next_at:
+            next_dt = datetime.fromisoformat(next_at)
+            wait_sec = (next_dt - now).total_seconds()
+            if wait_sec > 0:
+                _auto_stop.wait(timeout=wait_sec)
+                if _auto_stop.is_set():
+                    break
+
+        if _auto_stop.is_set():
+            break
+
+        # ── Run scan ──────────────────────────────────────────────────────────
+        profile_params: dict = {}
+        if pid is not None:
+            try:
+                with Session(engine) as s:
+                    prof = s.get(StrategyProfile, pid)
+                    if prof and prof.parameters:
+                        profile_params = json.loads(prof.parameters)
+            except Exception:
+                pass
+
+        results: list[dict] = []
+        signals_detected = 0
+        run_now = datetime.now(timezone.utc)
+
+        # ── Full 7-step SMC/Wyckoff pipeline with 4H→1H→15m hierarchy ────────
+        try:
+            _run_live_scan(symbols, tf, profile_params)
+        except Exception as exc:
+            results = [{"symbol": sym, "status": "ERROR", "signal": "—",
+                        "session": "?", "details": str(exc), "ts": run_now.isoformat()}
+                       for sym in symbols]
+
+        if not results:
+            for symbol in symbols:
+                with _pipeline_lock:
+                    state = dict(_pipeline.get(symbol, {}))
+                direction = state.get("final_direction")
+                session   = state.get("session", "off-session")
+                reason    = state.get("final_reason") or ""
+                is_signal = direction is not None
+                if is_signal:
+                    signals_detected += 1
+                status_str = "SIGNAL_DETECTED" if is_signal else "NO_SETUP"
+                detail_str = (f"{direction} — {reason}" if is_signal
+                              else reason or "Aucun setup SMC/Wyckoff valide")
+
+                with Session(engine) as s:
+                    job = BotJob(
+                        symbol=symbol, timeframe=tf,
+                        session_name=session, mode="paper",
+                        status=status_str, signal=direction, details=detail_str[:200],
+                    )
+                    s.add(job)
+                    s.commit()
+
+                results.append({
+                    "symbol": symbol, "status": status_str,
+                    "signal": direction or "—", "session": session,
+                    "details": detail_str[:80], "ts": run_now.isoformat(),
+                })
+
+        # ── Update state ──────────────────────────────────────────────────────
+        next_run = (run_now + timedelta(minutes=interval)).isoformat()
+        with _auto_lock:
+            if not _auto_state["running"]:
+                break
+            _auto_state["last_run_at"]      = run_now.isoformat()
+            _auto_state["next_run_at"]      = next_run
+            _auto_state["run_count"]        += 1
+            _auto_state["last_signals"]     = signals_detected
+            _auto_state["last_run_results"] = results
+
+    with _auto_lock:
+        _auto_state["running"]      = False
+        _auto_state["next_run_at"]  = None
+
+
+def _auto_start_for_paper(interval_minutes: int = 5, timeframe: str = "15m") -> bool:
+    """
+    Auto-start the autonomous scanner when switching to paper mode.
+    Reads all distinct symbols that have candle data in the DB.
+    Returns True if scanner was started, False if already running or no data.
+    """
+    global _auto_thread, _auto_stop
+    with _auto_lock:
+        if _auto_state["running"]:
+            return False
+
+    with Session(engine) as s:
+        rows = s.exec(
+            select(MarketCandle.symbol).where(
+                MarketCandle.timeframe == timeframe
+            ).distinct()
+        ).all()
+        symbols = list(rows)
+
+    if not symbols:
+        with Session(engine) as s:
+            rows = s.exec(select(MarketCandle.symbol).distinct()).all()
+            symbols = list(rows)
+
+    if not symbols:
+        return False
+
+    profile_id: int | None = None
+    with Session(engine) as s:
+        first_profile = s.exec(select(StrategyProfile)).first()
+        if first_profile:
+            profile_id = first_profile.id
+
+    with _auto_lock:
+        _auto_state["running"]          = True
+        _auto_state["symbols"]          = symbols
+        _auto_state["timeframe"]        = timeframe
+        _auto_state["profile_id"]       = profile_id
+        _auto_state["interval_minutes"] = interval_minutes
+        _auto_state["run_count"]        = 0
+        _auto_state["last_signals"]     = 0
+        _auto_state["last_run_results"] = []
+        _auto_state["last_run_at"]      = None
+        _auto_state["next_run_at"]      = datetime.now(timezone.utc).isoformat()
+
+    _auto_stop.clear()
+    _auto_thread = threading.Thread(target=_autonomous_worker, daemon=True)
+    _auto_thread.start()
+    return True
+
+
+class AutonomousStartRequest(BaseModel):
+    symbols:          list[str] = Field(min_length=1)
+    timeframe:        str       = "1h"
+    profile_id:       int | None = None
+    interval_minutes: int       = Field(default=15, ge=1, le=1440)
+
+
+@router.post("/autonomous/start")
+def autonomous_start(req: AutonomousStartRequest) -> dict:
+    global _auto_thread, _auto_stop
+    with _auto_lock:
+        if _auto_state["running"]:
+            return {"ok": False, "reason": "already_running"}
+        _auto_state["running"]          = True
+        _auto_state["symbols"]          = list(req.symbols)
+        _auto_state["timeframe"]        = req.timeframe
+        _auto_state["profile_id"]       = req.profile_id
+        _auto_state["interval_minutes"] = req.interval_minutes
+        _auto_state["run_count"]        = 0
+        _auto_state["last_signals"]     = 0
+        _auto_state["last_run_results"] = []
+        _auto_state["last_run_at"]      = None
+        _auto_state["next_run_at"]      = datetime.now(timezone.utc).isoformat()
+
+    _auto_stop.clear()
+    _auto_thread = threading.Thread(target=_autonomous_worker, daemon=True)
+    _auto_thread.start()
+    return {"ok": True, "interval_minutes": req.interval_minutes, "symbols": req.symbols}
+
+
+@router.post("/autonomous/stop")
+def autonomous_stop() -> dict:
+    with _auto_lock:
+        if not _auto_state["running"]:
+            return {"ok": False, "reason": "not_running"}
+        _auto_state["running"] = False
+    _auto_stop.set()
+    return {"ok": True}
+
+
+@router.get("/autonomous/status")
+def autonomous_status() -> dict:
+    with _auto_lock:
+        state = dict(_auto_state)
+    now = datetime.now(timezone.utc)
+    seconds_to_next: int | None = None
+    if state["next_run_at"] and state["running"]:
+        try:
+            diff = (datetime.fromisoformat(state["next_run_at"]) - now).total_seconds()
+            seconds_to_next = max(0, int(diff))
+        except Exception:
+            pass
+    return {**state, "seconds_to_next": seconds_to_next}
 
 
 class PipelineRunRequest(BaseModel):
@@ -2026,7 +2393,28 @@ Réponds UNIQUEMENT en JSON valide:
 
             # ③ Auto-create profile per crypto
             p_name   = ai_data.get("suggested_name", f"{sym.replace('USDT','')}-SMC-IA-v1")
-            p_params = ai_data.get("suggested_params", {})
+            # Merge AI suggestions onto a full default set so no field is ever missing
+            _param_defaults = {
+                "allow_weekend_trading": False,
+                "use_5m_refinement": False,
+                "require_equal_highs_lows": True,
+                "bos_close_confirmation": True,
+                "fib_entry_split": True,
+                "htf_alignment_required": True,
+                "volume_adaptive": True,
+                "rsi_divergence_only": True,
+                "displacement_threshold": 0.55,
+                "displacement_atr_min": 1.2,
+                "bos_sensitivity": 7,
+                "fib_levels": [0.5, 0.618, 0.786],
+                "volume_multiplier_active": 1.8,
+                "volume_multiplier_offpeak": 1.25,
+                "stop_logic": "structure",
+                "risk_per_trade": 0.01,
+                "take_profit_rr": 2.5,
+            }
+            _param_defaults.update(ai_data.get("suggested_params", {}))
+            p_params = _param_defaults
             with Session(engine) as s:
                 existing = s.exec(select(StrategyProfile).where(StrategyProfile.name == p_name)).first()
                 if existing:

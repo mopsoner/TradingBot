@@ -71,3 +71,16 @@ export function fmtRelative(ts: string | null | undefined): string {
 export function nowTime(): string {
   return new Date().toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
+
+/**
+ * Format a symbol as BASE/QUOTE so USDT, USDC and BTC pairs are unambiguous.
+ * ETHUSDT → ETH/USDT · ETHUSDC → ETH/USDC · ETHBTC → ETH/BTC
+ */
+export function fmtSym(symbol: string): string {
+  for (const quote of ['USDT', 'USDC', 'BTC']) {
+    if (symbol.endsWith(quote)) {
+      return `${symbol.slice(0, -quote.length)}/${quote}`;
+    }
+  }
+  return symbol;
+}

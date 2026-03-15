@@ -40,7 +40,7 @@ class SessionFilter:
         """
         if self.is_weekend(timestamp) and not allow_weekend:
             day = timestamp.astimezone(timezone.utc).strftime("%A")
-            return False, f"Week-end ({day}) — trading désactivé ce profil"
+            return False, f"Week-end ({day}) — activez « Trading week-end » dans le profil sélectionné"
 
         hour = timestamp.astimezone(timezone.utc).hour
         sess = self.session_name(timestamp, session_cfg)

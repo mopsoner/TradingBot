@@ -1,13 +1,215 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
-import type { BacktestResult } from '../services/api';
+import type { BacktestResult, Signal, SimulatedTrade } from '../services/api';
 import { TIMEFRAMES } from '../constants';
+import { fmtSym } from '../utils/dateUtils';
 import { Tooltip } from '../components/Tooltip';
 import { useSortable } from '../hooks/useSortable';
 
 function pct(n: number) { return (n * 100).toFixed(1) + '%'; }
 function num(n: number, d = 2) { return n.toFixed(d); }
+
+function qualityBadge(wr: number, pf: number, dd: number): { label: string; color: string; bg: string } {
+  const score = (wr >= 0.55 ? 2 : wr >= 0.45 ? 1 : 0) +
+                (pf >= 1.5 ? 2 : pf >= 1.1 ? 1 : 0) +
+                (dd <= 0.08 ? 2 : dd <= 0.15 ? 1 : 0);
+  if (score >= 5) return { label: 'Excellent', color: '#22c55e', bg: 'rgba(34,197,94,0.12)' };
+  if (score >= 3) return { label: 'Bon',       color: '#3b82f6', bg: 'rgba(59,130,246,0.12)' };
+  if (score >= 2) return { label: 'Attention',  color: '#eab308', bg: 'rgba(234,179,8,0.12)' };
+  return                  { label: 'Insuffisant', color: '#ef4444', bg: 'rgba(239,68,68,0.12)' };
+}
+
+function BacktestDetailPanel({ r, simulatedTrades }: { r: BacktestResult; simulatedTrades?: SimulatedTrade[] }) {
+  const [signals, setSignals] = useState<Signal[]>([]);
+  const [loadingSigs, setLoadingSigs] = useState(true);
+  const [sigError, setSigError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingSigs(true);
+    setSigError('');
+    setSignals([]);
+    api.signalsForBacktest(r.symbol, r.timeframe)
+      .then(res => { if (!cancelled) setSignals(res.rows); })
+      .catch(err => { if (!cancelled) setSigError(String(err)); })
+      .finally(() => { if (!cancelled) setLoadingSigs(false); });
+    return () => { cancelled = true; };
+  }, [r.symbol, r.timeframe]);
+
+  const hasSimulatedTrades = simulatedTrades && simulatedTrades.length > 0;
+  const showSimulated = !loadingSigs && signals.length === 0 && hasSimulatedTrades;
+
+  const q = qualityBadge(r.win_rate, r.profit_factor, r.drawdown);
+
+  const metrics: [string, string, string][] = [
+    ['Win Rate',      pct(r.win_rate),                        r.win_rate >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)'],
+    ['Profit Factor', num(r.profit_factor),                   r.profit_factor >= 1.2 ? 'var(--accent-green)' : r.profit_factor >= 1.0 ? 'var(--accent-yellow)' : 'var(--accent-red)'],
+    ['Drawdown',      pct(r.drawdown),                        r.drawdown <= 0.1 ? 'var(--accent-green)' : r.drawdown <= 0.2 ? 'var(--accent-yellow)' : 'var(--accent-red)'],
+    ['Expectancy',    num(r.expectancy, 4),                   r.expectancy > 0 ? 'var(--accent-green)' : 'var(--accent-red)'],
+    ['R Multiple',    num(r.r_multiple) + 'R',                r.r_multiple > 0 ? 'var(--accent-green)' : 'var(--accent-red)'],
+  ];
+
+  return (
+    <div style={{
+      padding: '16px 18px', background: 'rgba(59,130,246,0.04)',
+      borderBottom: '2px solid rgba(59,130,246,0.15)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+        <span style={{
+          padding: '3px 10px', borderRadius: 5, fontSize: 11, fontWeight: 700,
+          background: q.bg, color: q.color, letterSpacing: 0.3,
+        }}>{q.label}</span>
+        <span style={{ fontSize: 13, fontWeight: 700 }}>
+          {fmtSym(r.symbol)} <span className="tag" style={{ marginLeft: 4 }}>{r.timeframe}</span>
+        </span>
+        <span className="muted" style={{ fontSize: 11, marginLeft: 'auto' }}>
+          Stratégie : <strong style={{ color: 'var(--text)' }}>{r.strategy_version || 'default-smc'}</strong>
+          &nbsp;·&nbsp;{new Date(r.timestamp).toLocaleString('fr-FR')}
+        </span>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+        <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 60, textAlign: 'right' }}>Win Rate</span>
+        <div style={{ flex: 1, height: 10, borderRadius: 5, background: 'var(--surface2)', overflow: 'hidden', position: 'relative' }}>
+          <div style={{
+            height: '100%', width: `${Math.min(r.win_rate * 100, 100)}%`, borderRadius: 5,
+            background: r.win_rate >= 0.5
+              ? `linear-gradient(90deg, #22c55e, #4ade80)`
+              : `linear-gradient(90deg, #ef4444, #f87171)`,
+            transition: 'width 0.4s ease',
+          }} />
+          <div style={{
+            position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1,
+            background: 'rgba(255,255,255,0.2)',
+          }} />
+        </div>
+        <span style={{ fontSize: 12, fontWeight: 700, minWidth: 44, color: r.win_rate >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+          {pct(r.win_rate)}
+        </span>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, marginBottom: 16 }}>
+        {metrics.map(([label, value, color]) => (
+          <div key={label} style={{ padding: '8px 10px', borderRadius: 8, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 3, textTransform: 'uppercase', letterSpacing: 0.5 }}>{label}</div>
+            <div style={{ fontWeight: 700, fontSize: 15, color }}>{value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+          <span style={{ fontSize: 13, fontWeight: 700 }}>
+            {showSimulated ? 'Trades simulés' : 'Signaux liés'}
+          </span>
+          <span className="muted" style={{ fontSize: 11 }}>{fmtSym(r.symbol)} · {r.timeframe}</span>
+          {!loadingSigs && !showSimulated && <span className="muted" style={{ fontSize: 11, marginLeft: 'auto' }}>{signals.length} signal{signals.length !== 1 ? 'x' : ''}</span>}
+          {showSimulated && <span className="muted" style={{ fontSize: 11, marginLeft: 'auto' }}>{simulatedTrades!.length} trade{simulatedTrades!.length !== 1 ? 's' : ''}</span>}
+        </div>
+
+        {loadingSigs ? (
+          <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>Chargement des signaux…</div>
+        ) : sigError && !hasSimulatedTrades ? (
+          <div style={{ padding: 14, textAlign: 'center', fontSize: 12, color: 'var(--accent-red)', background: 'rgba(239,68,68,0.08)', borderRadius: 8 }}>
+            Erreur lors du chargement des signaux
+          </div>
+        ) : showSimulated ? (
+          <div style={{ maxHeight: 300, overflowY: 'auto', borderRadius: 8, border: '1px solid var(--border)' }}>
+            <table style={{ marginBottom: 0 }}>
+              <thead>
+                <tr>
+                  <th style={{ fontSize: 10 }}>#</th>
+                  <th style={{ fontSize: 10 }}>Date</th>
+                  <th style={{ fontSize: 10 }}>Direction</th>
+                  <th style={{ fontSize: 10 }}>Résultat</th>
+                  <th style={{ fontSize: 10 }}>R-Multiple</th>
+                </tr>
+              </thead>
+              <tbody>
+                {simulatedTrades!.map(t => (
+                  <tr key={t.index}>
+                    <td className="muted" style={{ fontSize: 11 }}>{t.index}</td>
+                    <td className="muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{new Date(t.timestamp).toLocaleString('fr-FR')}</td>
+                    <td>
+                      <span style={{
+                        fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4,
+                        background: t.direction === 'LONG' ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
+                        color: t.direction === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)',
+                      }}>{t.direction}</span>
+                    </td>
+                    <td>
+                      <span style={{
+                        fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4,
+                        background: t.outcome === 'win' ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
+                        color: t.outcome === 'win' ? 'var(--accent-green)' : 'var(--accent-red)',
+                      }}>
+                        {t.outcome === 'win' ? 'Win' : 'Loss'}
+                      </span>
+                    </td>
+                    <td style={{
+                      fontSize: 11, fontFamily: 'monospace', fontWeight: 600,
+                      color: t.r_multiple > 0 ? 'var(--accent-green)' : 'var(--accent-red)',
+                    }}>
+                      {t.r_multiple > 0 ? '+' : ''}{t.r_multiple.toFixed(2)}R
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : signals.length === 0 ? (
+          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12, background: 'var(--surface2)', borderRadius: 8 }}>
+            Aucun signal détecté pour {fmtSym(r.symbol)} {r.timeframe}
+          </div>
+        ) : (
+          <div style={{ maxHeight: 240, overflowY: 'auto', borderRadius: 8, border: '1px solid var(--border)' }}>
+            <table style={{ marginBottom: 0 }}>
+              <thead>
+                <tr>
+                  <th style={{ fontSize: 10 }}>Date</th>
+                  <th style={{ fontSize: 10 }}>Type</th>
+                  <th style={{ fontSize: 10 }}>Direction</th>
+                  <th style={{ fontSize: 10 }}>Fib Zone</th>
+                  <th style={{ fontSize: 10 }}>Wyckoff</th>
+                  <th style={{ fontSize: 10 }}>Statut</th>
+                </tr>
+              </thead>
+              <tbody>
+                {signals.map(sig => (
+                  <tr key={sig.id}>
+                    <td className="muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{new Date(sig.timestamp).toLocaleString('fr-FR')}</td>
+                    <td style={{ fontSize: 11 }}>{sig.setup_type}</td>
+                    <td>
+                      {sig.direction ? (
+                        <span style={{
+                          fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4,
+                          background: sig.direction === 'LONG' ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
+                          color: sig.direction === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)',
+                        }}>{sig.direction}</span>
+                      ) : <span className="muted" style={{ fontSize: 10 }}>—</span>}
+                    </td>
+                    <td style={{ fontSize: 11, fontFamily: 'monospace' }}>{sig.fib_zone}</td>
+                    <td style={{ fontSize: 11 }}>{sig.wyckoff_event || '—'}</td>
+                    <td>
+                      <span style={{
+                        fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4,
+                        background: sig.accepted ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
+                        color: sig.accepted ? 'var(--accent-green)' : 'var(--accent-red)',
+                      }}>
+                        {sig.accepted ? 'Accepté' : 'Rejeté'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 const IMPACT_COLOR = { haut: 'var(--accent-red)', moyen: 'var(--accent-yellow)', faible: 'var(--accent-green)' } as const;
 
@@ -363,7 +565,7 @@ function MultiOptimizePanel({
             padding: '6px 12px', borderRadius: 6, fontSize: 12,
             background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.3)',
           }}>
-            <strong>#{r.id}</strong> {r.symbol.replace('USDT', '')} {r.timeframe}
+            <strong>#{r.id}</strong> {fmtSym(r.symbol)} {r.timeframe}
             <span style={{ marginLeft: 6, color: r.win_rate >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
               WR {pct(r.win_rate)}
             </span>
@@ -688,7 +890,7 @@ function AiWorkshopPanel({
                     transition: 'all 0.15s',
                   }}
                 >
-                  {s.replace('USDT', '')}
+                  {fmtSym(s)}
                 </button>
               ))}
             </div>
@@ -747,7 +949,7 @@ function AiWorkshopPanel({
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 13 }}>
             <span>
               {job.current
-                ? <>Analyse en cours : <strong style={{ color: '#c4b5fd' }}>{job.current.replace('USDT', '')}</strong></>
+                ? <>Analyse en cours : <strong style={{ color: '#c4b5fd' }}>{fmtSym(job.current)}</strong></>
                 : 'Initialisation…'
               }
             </span>
@@ -790,7 +992,7 @@ function AiWorkshopPanel({
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 700, fontSize: 14 }}>
-                      {r.symbol.replace('USDT', '')}
+                      {fmtSym(r.symbol)}
                       {r.profile && <span className="tag" style={{ marginLeft: 8, fontSize: 10, background: 'rgba(139,92,246,0.2)', color: '#c4b5fd' }}>{r.profile.name}</span>}
                     </div>
                     {r.status === 'running' && <div className="muted" style={{ fontSize: 12 }}>Backtest + analyse IA en cours…</div>}
@@ -920,12 +1122,60 @@ function AiWorkshopPanel({
   );
 }
 
-export function BacktestsPage() {
+type WFSignal = {
+  timestamp: string;
+  direction: string;
+  entry_price: number;
+  tp_price: number;
+  sl_price: number;
+  result: string;
+  r_multiple: number;
+  steps: Record<string, unknown>;
+};
+
+type WFMetrics = {
+  total_signals: number;
+  wins: number;
+  losses: number;
+  pending: number;
+  win_rate: number;
+  profit_factor: number;
+  max_drawdown: number;
+  total_r: number;
+};
+
+type WFResult = {
+  ok: boolean;
+  signals: WFSignal[];
+  metrics: WFMetrics;
+  candles_downloaded: number;
+  period_start: string;
+  period_end: string;
+};
+
+const WF_SYMBOLS = ['ETHUSDT', 'BTCUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'ADAUSDT', 'AVAXUSDT', 'DOTUSDT', 'LINKUSDT', 'DOGEUSDT', 'LTCUSDT'];
+
+const STEP_LABELS: Record<string, string> = {
+  liquidity_zone: 'Zone de liquidite',
+  sweep: 'Sweep',
+  spring: 'Spring (Wyckoff)',
+  utad: 'UTAD (distribution)',
+  displacement: 'Displacement',
+  bos: 'BOS (Break of Structure)',
+  expansion: 'Expansion',
+  fib_match: 'Fib Retracement',
+};
+
+
+export function BacktestsPage({ onNavigate }: { onNavigate?: (page: import('../types').AdminPage) => void }) {
   const { data, reload } = useApi(() => api.backtests());
   const { data: profiles, reload: reloadProfiles } = useApi(() => api.strategyProfiles());
-  const { data: symbols } = useApi(() => api.isolatedSymbols());
+  const { data: loadedData } = useApi(() => api.loadedSymbols());
 
-  const [symbol, setSymbol]       = useState('ETHUSDT');
+  const loadedEntries = loadedData ?? [];
+  const hasData = loadedEntries.length > 0;
+
+  const [symbol, setSymbol]       = useState('');
   const [timeframe, setTimeframe] = useState('1h');
   const [profileId, setProfileId] = useState<number | null>(null);
   const [report, setReport]       = useState<Record<string, unknown> | null>(null);
@@ -937,6 +1187,90 @@ export function BacktestsPage() {
   const [optimizeIds, setOptimizeIds] = useState<Set<number>>(new Set());
   const [showMultiOptimize, setShowMultiOptimize] = useState(false);
   const [showWorkshop, setShowWorkshop] = useState(false);
+  const [leftTab, setLeftTab] = useState<'sim' | 'real'>('sim');
+  const [expandedRow, setExpandedRow] = useState<number | null>(null);
+  const [tradesMap, setTradesMap] = useState<Record<number, SimulatedTrade[]>>({});
+
+  const [wfSymbol, setWfSymbol] = useState('ETHUSDT');
+  const [wfYears, setWfYears] = useState(4);
+  const [wfTimeframe, setWfTimeframe] = useState('1h');
+  const [wfProfileId, setWfProfileId] = useState<number | null>(null);
+  const [wfRunning, setWfRunning] = useState(false);
+  const [wfResult, setWfResult] = useState<WFResult | null>(null);
+  const [wfError, setWfError] = useState('');
+  const [wfExpandedIdx, setWfExpandedIdx] = useState<number | null>(null);
+  const [wfSortCol, setWfSortCol] = useState<'timestamp' | 'direction' | 'result' | 'r_multiple'>('timestamp');
+  const [wfSortDir, setWfSortDir] = useState<'asc' | 'desc'>('asc');
+
+  const runWalkForward = async () => {
+    setWfRunning(true);
+    setWfError('');
+    setWfResult(null);
+    try {
+      const res = await api.runWalkforward({
+        symbol: wfSymbol,
+        years: wfYears,
+        timeframe: wfTimeframe,
+        profile_id: wfProfileId,
+      }) as WFResult;
+      if (res.ok) {
+        setWfResult(res);
+      } else {
+        setWfError(String((res as Record<string, unknown>).reason ?? 'Erreur inconnue'));
+      }
+    } catch (e) {
+      setWfError(e instanceof Error ? e.message : 'Erreur reseau');
+    } finally {
+      setWfRunning(false);
+    }
+  };
+
+  const wfSortedSignals = useMemo(() => {
+    if (!wfResult) return [];
+    const sigs = [...wfResult.signals];
+    sigs.sort((a, b) => {
+      let cmp = 0;
+      if (wfSortCol === 'timestamp') cmp = a.timestamp.localeCompare(b.timestamp);
+      else if (wfSortCol === 'direction') cmp = a.direction.localeCompare(b.direction);
+      else if (wfSortCol === 'result') cmp = a.result.localeCompare(b.result);
+      else if (wfSortCol === 'r_multiple') cmp = a.r_multiple - b.r_multiple;
+      return wfSortDir === 'asc' ? cmp : -cmp;
+    });
+    return sigs;
+  }, [wfResult, wfSortCol, wfSortDir]);
+
+  const toggleWfSort = (col: typeof wfSortCol) => {
+    if (wfSortCol === col) setWfSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setWfSortCol(col); setWfSortDir('asc'); }
+  };
+
+  const WfSortTh = ({ col, children }: { col: typeof wfSortCol; children: React.ReactNode }) => (
+    <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleWfSort(col)}>
+      {children} {wfSortCol === col ? (wfSortDir === 'asc' ? '▲' : '▼') : ''}
+    </th>
+  );
+
+  // ── Derived from DB-loaded candle data ────────────────────────────────────
+  const availableSymbols = useMemo(() => loadedEntries.map(e => e.symbol), [loadedEntries]);
+
+  const availableTimeframes = useMemo(() => {
+    const entry = loadedEntries.find(e => e.symbol === symbol);
+    return entry ? Object.keys(entry.timeframes).sort() : ['1h'];
+  }, [loadedEntries, symbol]);
+
+  // Auto-select first symbol when data arrives
+  useEffect(() => {
+    if (!symbol && loadedEntries.length > 0) {
+      setSymbol(loadedEntries[0].symbol);
+    }
+  }, [loadedEntries, symbol]);
+
+  // Auto-adjust timeframe if current one isn't available for selected symbol
+  useEffect(() => {
+    if (availableTimeframes.length > 0 && !availableTimeframes.includes(timeframe)) {
+      setTimeframe(availableTimeframes[0]);
+    }
+  }, [availableTimeframes, timeframe]);
 
   // ── History filters (client-side) ─────────────────────────────────────────
   const [filterSymbol, setFilterSymbol] = useState('');
@@ -945,7 +1279,6 @@ export function BacktestsPage() {
   const [filterMinWR,  setFilterMinWR]  = useState('');
 
   const rows = useMemo(() => data?.rows ?? [], [data]);
-  const availableSymbols = useMemo(() => symbols ?? ['ETHUSDT', 'BTCUSDT'], [symbols]);
 
   const filteredRows = useMemo(() => rows.filter(r => {
     if (filterSymbol && r.symbol !== filterSymbol) return false;
@@ -974,6 +1307,10 @@ export function BacktestsPage() {
         setStatus('✅ Backtest terminé — rapport généré.');
         setReport(res.result as Record<string, unknown>);
         setLastResult(res.result as BacktestResult);
+        const btResult = res.result as BacktestResult;
+        if (Array.isArray(res.trades) && btResult.id) {
+          setTradesMap(prev => ({ ...prev, [btResult.id]: res.trades as SimulatedTrade[] }));
+        }
         reload();
       } else {
         setStatus(`❌ Erreur: ${String(res.reason)}`);
@@ -1011,129 +1348,431 @@ export function BacktestsPage() {
 
   return (
     <section>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <h2 style={{ margin: 0 }}>Backtests</h2>
-        <button
-          className="btn btn-primary"
-          onClick={() => setShowWorkshop(v => !v)}
-          style={{
-            background: showWorkshop
-              ? 'rgba(139,92,246,0.2)'
-              : 'linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%)',
-            borderColor: '#7c3aed',
-            fontSize: 13, padding: '8px 18px', fontWeight: 700,
-            display: 'flex', alignItems: 'center', gap: 8,
-          }}
-        >
-          <span>🧬</span>
-          {showWorkshop ? 'Fermer le Workshop' : 'Optimiser avec IA'}
-        </button>
+      <div className="page-header-row">
+        <div>
+          <h2 style={{ margin: 0 }}>Backtests</h2>
+          <p className="page-description">Simulation historique de votre stratégie SMC/Wyckoff</p>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            className="btn btn-primary"
+            onClick={() => setShowWorkshop(v => !v)}
+            style={{
+              background: showWorkshop
+                ? 'rgba(139,92,246,0.2)'
+                : 'linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%)',
+              borderColor: '#7c3aed',
+              fontSize: 13, padding: '8px 18px', fontWeight: 700,
+              display: 'flex', alignItems: 'center', gap: 8,
+            }}
+          >
+            <span>🧬</span>
+            {showWorkshop ? 'Fermer le Workshop' : 'Optimiser avec IA'}
+          </button>
+        </div>
       </div>
 
-      <div className="grid-4 mb-16">
-        <div className="card">
-          <div className={`stat-value ${avgWR >= 0.5 ? 'green' : 'red'}`}>{(avgWR * 100).toFixed(1)}%</div>
-          <div className="stat-label">
+      <div className="grid-4" style={{ marginBottom: 20 }}>
+        <div className={`stat-card ${avgWR >= 0.5 ? 'stat-card-accent-green' : 'stat-card-accent-red'}`}>
+          <div className="stat-num" style={{ color: avgWR >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+            {(avgWR * 100).toFixed(1)}%
+          </div>
+          <div className="stat-lbl">
             <Tooltip text="Pourcentage de trades gagnants sur l'ensemble de tous vos backtests. Au dessus de 50% = bonne sélection. Un bon système peut être profitable avec 40% si le R/R est bon.">
               Win rate moyen
             </Tooltip>
           </div>
         </div>
-        <div className="card">
-          <div className={`stat-value ${avgPF >= 1.2 ? 'green' : 'yellow'}`}>{avgPF.toFixed(2)}</div>
-          <div className="stat-label">
+        <div className={`stat-card ${avgPF >= 1.2 ? 'stat-card-accent-green' : 'stat-card-accent-yellow'}`}>
+          <div className="stat-num" style={{ color: avgPF >= 1.2 ? 'var(--accent-green)' : 'var(--accent-yellow)' }}>
+            {avgPF.toFixed(2)}
+          </div>
+          <div className="stat-lbl">
             <Tooltip text="Profit Factor = gains bruts / pertes brutes. Au dessus de 1.0 = rentable. Au dessus de 1.5 = excellent. En dessous de 1.0 = perd de l'argent.">
               Profit factor moyen
             </Tooltip>
           </div>
         </div>
-        <div className="card">
-          <div className={`stat-value ${avgDD <= 0.1 ? 'green' : avgDD <= 0.2 ? 'yellow' : 'red'}`}>{(avgDD * 100).toFixed(1)}%</div>
-          <div className="stat-label">
+        <div className={`stat-card ${avgDD <= 0.1 ? 'stat-card-accent-green' : avgDD <= 0.2 ? 'stat-card-accent-yellow' : 'stat-card-accent-red'}`}>
+          <div className="stat-num" style={{ color: avgDD <= 0.1 ? 'var(--accent-green)' : avgDD <= 0.2 ? 'var(--accent-yellow)' : 'var(--accent-red)' }}>
+            {(avgDD * 100).toFixed(1)}%
+          </div>
+          <div className="stat-lbl">
             <Tooltip text="Drawdown = perte maximale depuis un sommet avant de remonter. C'est la mesure du pire scénario que vous auriez vécu. Moins de 10% = excellent, 10-20% = acceptable, +20% = dangereux.">
               Drawdown moyen
             </Tooltip>
           </div>
         </div>
-        <div className="card">
-          <div className="stat-value blue">{rows.length}</div>
-          <div className="stat-label">Rapports stockés</div>
+        <div className="stat-card stat-card-accent-blue">
+          <div className="stat-num" style={{ color: 'var(--accent)' }}>{rows.length}</div>
+          <div className="stat-lbl">Rapports stockés</div>
         </div>
       </div>
 
       <div className="grid-2">
         <div className="card">
-          <h3>Lancer un backtest</h3>
-          <div className="form-group">
-            <label>Crypto</label>
-            <select value={symbol} onChange={e => setSymbol(e.target.value)}>
-              {availableSymbols.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
+          <div style={{ display: 'flex', gap: 0, marginBottom: 16, borderBottom: '1px solid var(--border)' }}>
+            {([
+              ['sim', 'Backtest simulé'],
+              ['real', 'Test réel (yfinance)'],
+            ] as ['sim' | 'real', string][]).map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setLeftTab(key)}
+                style={{
+                  flex: 1, padding: '10px 0', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                  background: 'transparent', border: 'none',
+                  color: leftTab === key ? (key === 'real' ? '#34d399' : 'var(--accent)') : 'var(--text-muted)',
+                  borderBottom: leftTab === key ? `2px solid ${key === 'real' ? '#34d399' : 'var(--accent)'}` : '2px solid transparent',
+                  transition: 'all 0.2s',
+                }}
+              >
+                {key === 'real' ? '📊 ' : '▶ '}{label}
+              </button>
+            ))}
           </div>
-          <div className="form-group">
-            <label>
-              <Tooltip text="Le timeframe est l'unité de temps de chaque bougie. 15m = chaque bougie = 15 minutes de données. Plus le TF est court, plus il y a de trades mais plus de bruit. 4h = peu de trades mais plus fiables.">
-                Timeframe
-              </Tooltip>
-            </label>
-            <select value={timeframe} onChange={e => setTimeframe(e.target.value)}>
-              {TIMEFRAMES.map(tf => (
-                <option key={tf.value} value={tf.value}>{tf.label} — {tf.desc}</option>
-              ))}
-            </select>
-          </div>
-          <div className="form-group">
-            <label>
-              <Tooltip text="Le profil stratégie contient tous les paramètres de votre système (Spring, UTAD, BOS, Fib, RSI, Volume). Créez des profils dans la page Stratégie.">
-                Profil stratégie
-              </Tooltip>
-            </label>
-            <select value={profileId ?? ''} onChange={e => setProfileId(e.target.value ? Number(e.target.value) : null)}>
-              <option value="">default-smc</option>
-              {(profiles?.rows as Array<Record<string, unknown>> | undefined)?.map(p => (
-                <option key={String(p.id)} value={String(p.id)}>{String(p.name)}</option>
-              ))}
-            </select>
-          </div>
-          <button className="btn btn-primary" onClick={runBacktest} disabled={running} style={{ width: '100%' }}>
-            {running ? 'Calcul en cours…' : '▶ Lancer le backtest'}
-          </button>
-          {status && (
-            <div style={{ marginTop: 12, padding: 10, borderRadius: 6, background: 'var(--surface2)', fontSize: 13 }}>
-              {status}
-            </div>
+
+          {leftTab === 'sim' && (
+            <>
+              {!hasData && loadedData !== undefined && (
+                <div style={{
+                  background: 'rgba(255,165,0,0.10)', border: '1px solid rgba(255,165,0,0.4)',
+                  borderRadius: 8, padding: '14px 16px', marginBottom: 16,
+                }}>
+                  <div style={{ fontWeight: 700, color: 'var(--accent-yellow)', marginBottom: 6 }}>
+                    Aucune donnée chargée en base
+                  </div>
+                  <div className="muted" style={{ fontSize: 13, marginBottom: 12 }}>
+                    Charge d'abord des bougies pour au moins une crypto avant de lancer un backtest.
+                  </div>
+                  {onNavigate && (
+                    <button
+                      className="btn btn-primary"
+                      style={{ fontSize: 12 }}
+                      onClick={() => onNavigate('Données de marché')}
+                    >
+                      Aller charger des données →
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {hasData && (
+                <>
+                  <div className="form-group">
+                    <label>Crypto ({availableSymbols.length} disponibles en base)</label>
+                    <select value={symbol} onChange={e => setSymbol(e.target.value)}>
+                      {loadedEntries.map(e => {
+                        const totalCandles = e.total;
+                        const tfs = Object.keys(e.timeframes).sort().join(', ');
+                        return (
+                          <option key={e.symbol} value={e.symbol}>
+                            {fmtSym(e.symbol)} — {totalCandles.toLocaleString()} bougies ({tfs})
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label>
+                      <Tooltip text="Seuls les timeframes pour lesquels des données sont chargées sont affichés.">
+                        Timeframe
+                      </Tooltip>
+                    </label>
+                    <select value={timeframe} onChange={e => setTimeframe(e.target.value)}>
+                      {availableTimeframes.map(tf => {
+                        const entry = loadedEntries.find(e => e.symbol === symbol);
+                        const count = entry?.timeframes[tf] ?? 0;
+                        return (
+                          <option key={tf} value={tf}>{tf} — {count.toLocaleString()} bougies</option>
+                        );
+                      })}
+                    </select>
+                  </div>
+                </>
+              )}
+
+              {!hasData && loadedData === undefined && (
+                <div className="muted" style={{ fontSize: 13, marginBottom: 12 }}>Chargement…</div>
+              )}
+              <div className="form-group">
+                <label>
+                  <Tooltip text="Le profil stratégie contient tous les paramètres de votre système (Spring, UTAD, BOS, Fib, RSI, Volume). Créez des profils dans la page Stratégie.">
+                    Profil stratégie
+                  </Tooltip>
+                </label>
+                <select value={profileId ?? ''} onChange={e => setProfileId(e.target.value ? Number(e.target.value) : null)}>
+                  <option value="">default-smc</option>
+                  {(profiles?.rows as Array<Record<string, unknown>> | undefined)?.map(p => (
+                    <option key={String(p.id)} value={String(p.id)}>{String(p.name)}</option>
+                  ))}
+                </select>
+              </div>
+              <button className="btn btn-primary" onClick={runBacktest} disabled={running} style={{ width: '100%' }}>
+                {running ? 'Calcul en cours…' : '▶ Lancer le backtest'}
+              </button>
+              {status && (
+                <div style={{ marginTop: 12, padding: 10, borderRadius: 6, background: 'var(--surface2)', fontSize: 13 }}>
+                  {status}
+                </div>
+              )}
+
+              {report && (
+                <div style={{ marginTop: 16 }}>
+                  <h3>Résultats</h3>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                    {([
+                      ['Win rate',      pct(Number(report.win_rate)),      'Trades gagnants / total trades'],
+                      ['Profit factor', num(Number(report.profit_factor)), 'Gains bruts / pertes brutes (>1.2 = rentable)'],
+                      ['Drawdown',      pct(Number(report.drawdown)),      'Perte max depuis un sommet (moins = mieux)'],
+                      ['Expectancy',    num(Number(report.expectancy), 4), 'Gain moyen par trade en unités de risque (R)'],
+                      ['R multiple',    num(Number(report.r_multiple)) + 'R', 'Rendement total exprimé en multiples du risque initial'],
+                      ['Stratégie',     String(report.strategy_version),  'Profil stratégie utilisé pour ce backtest'],
+                    ] as [string, string, string][]).map(([label, value, tip]) => (
+                      <div key={label} style={{ padding: '8px 10px', background: 'var(--surface2)', borderRadius: 6 }}>
+                        <div style={{ fontSize: 11, opacity: 0.6, marginBottom: 2 }}>
+                          <Tooltip text={tip}>{label}</Tooltip>
+                        </div>
+                        <div style={{ fontWeight: 700, fontSize: 15 }}>{value}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {lastResult && (
+                    <button
+                      className="btn btn-secondary"
+                      style={{ width: '100%', marginTop: 12, borderColor: 'rgba(88,166,255,0.4)', color: 'var(--accent)' }}
+                      onClick={() => setOptimizeTarget(lastResult)}
+                    >
+                      🤖 Optimiser cette stratégie avec l'IA
+                    </button>
+                  )}
+                </div>
+              )}
+            </>
           )}
 
-          {report && (
-            <div style={{ marginTop: 16 }}>
-              <h3>Résultats</h3>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                {([
-                  ['Win rate',      pct(Number(report.win_rate)),      'Trades gagnants / total trades'],
-                  ['Profit factor', num(Number(report.profit_factor)), 'Gains bruts / pertes brutes (>1.2 = rentable)'],
-                  ['Drawdown',      pct(Number(report.drawdown)),      'Perte max depuis un sommet (moins = mieux)'],
-                  ['Expectancy',    num(Number(report.expectancy), 4), 'Gain moyen par trade en unités de risque (R)'],
-                  ['R multiple',    num(Number(report.r_multiple)) + 'R', 'Rendement total exprimé en multiples du risque initial'],
-                  ['Stratégie',     String(report.strategy_version),  'Profil stratégie utilisé pour ce backtest'],
-                ] as [string, string, string][]).map(([label, value, tip]) => (
-                  <div key={label} style={{ padding: '8px 10px', background: 'var(--surface2)', borderRadius: 6 }}>
-                    <div style={{ fontSize: 11, opacity: 0.6, marginBottom: 2 }}>
-                      <Tooltip text={tip}>{label}</Tooltip>
-                    </div>
-                    <div style={{ fontWeight: 700, fontSize: 15 }}>{value}</div>
+          {leftTab === 'real' && (
+            <>
+              {!wfResult && !wfRunning && (
+                <>
+                  <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+                    Telecharge des donnees OHLCV reelles via yfinance, analyse chaque fenetre avec le moteur SMC/Wyckoff 7 etapes, et simule les trades en paper.
                   </div>
-                ))}
-              </div>
-              {lastResult && (
-                <button
-                  className="btn btn-secondary"
-                  style={{ width: '100%', marginTop: 12, borderColor: 'rgba(88,166,255,0.4)', color: 'var(--accent)' }}
-                  onClick={() => setOptimizeTarget(lastResult)}
-                >
-                  🤖 Optimiser cette stratégie avec l'IA
-                </button>
+                  <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+                    <div className="form-group" style={{ flex: 1, margin: 0, minWidth: 140 }}>
+                      <label style={{ fontSize: 11 }}>Symbole</label>
+                      <select value={wfSymbol} onChange={e => setWfSymbol(e.target.value)} style={{ fontSize: 13 }}>
+                        {WF_SYMBOLS.map(s => <option key={s} value={s}>{fmtSym(s)}</option>)}
+                      </select>
+                    </div>
+                    <div className="form-group" style={{ flex: 1, margin: 0, minWidth: 120 }}>
+                      <label style={{ fontSize: 11 }}>Duree</label>
+                      <select value={wfYears} onChange={e => setWfYears(Number(e.target.value))} style={{ fontSize: 13 }}>
+                        <option value={1}>1 an</option>
+                        <option value={2}>2 ans</option>
+                        <option value={3}>3 ans</option>
+                        <option value={4}>4 ans</option>
+                      </select>
+                    </div>
+                    <div className="form-group" style={{ flex: 1, margin: 0, minWidth: 100 }}>
+                      <label style={{ fontSize: 11 }}>Timeframe</label>
+                      <select value={wfTimeframe} onChange={e => setWfTimeframe(e.target.value)} style={{ fontSize: 13 }}>
+                        <option value="15m">15m</option>
+                        <option value="1h">1H</option>
+                        <option value="4h">4H</option>
+                        <option value="1d">1D</option>
+                      </select>
+                    </div>
+                    <div className="form-group" style={{ flex: 1, margin: 0, minWidth: 140 }}>
+                      <label style={{ fontSize: 11 }}>Profil strategie</label>
+                      <select value={wfProfileId ?? ''} onChange={e => setWfProfileId(e.target.value ? Number(e.target.value) : null)} style={{ fontSize: 13 }}>
+                        <option value="">SMC-Wyckoff (defaut)</option>
+                        {(profiles?.rows as Array<Record<string, unknown>> | undefined)?.map(p => <option key={String(p.id)} value={String(p.id)}>{String(p.name)}</option>)}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div style={{ padding: 10, borderRadius: 6, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', fontSize: 12, marginBottom: 16, color: 'var(--text-muted)' }}>
+                    Le calcul peut prendre 30-60 secondes selon la quantite de donnees.
+                    {wfTimeframe === '15m' && (
+                      <span style={{ color: '#fbbf24', display: 'block', marginTop: 4 }}>
+                        Yahoo Finance limite les donnees 15m a ~60 jours.
+                      </span>
+                    )}
+                    {(wfTimeframe === '1h' || wfTimeframe === '4h') && wfYears > 2 && (
+                      <span style={{ color: '#fbbf24', display: 'block', marginTop: 4 }}>
+                        Yahoo Finance limite les donnees {wfTimeframe} a ~730 jours (~2 ans). Pour 4 ans complets, utilisez 1D.
+                      </span>
+                    )}
+                  </div>
+
+                  {wfError && (
+                    <div style={{ marginBottom: 12, padding: 10, borderRadius: 6, background: 'rgba(248,81,73,0.1)', color: 'var(--accent-red)', fontSize: 13 }}>
+                      {wfError}
+                    </div>
+                  )}
+
+                  <button
+                    className="btn btn-primary"
+                    onClick={runWalkForward}
+                    style={{
+                      width: '100%', fontSize: 14, padding: '12px 0', fontWeight: 700,
+                      background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                      borderColor: '#10b981',
+                    }}
+                  >
+                    Lancer le test reel {wfYears} an{wfYears > 1 ? 's' : ''}
+                  </button>
+                </>
               )}
-            </div>
+
+              {wfRunning && (
+                <div style={{ textAlign: 'center', padding: 48 }}>
+                  <div style={{ fontSize: 48, marginBottom: 12 }}>📊</div>
+                  <div style={{ fontWeight: 700, marginBottom: 6 }}>Telechargement et analyse en cours...</div>
+                  <div className="muted" style={{ fontSize: 13 }}>
+                    {fmtSym(wfSymbol)} {wfTimeframe} sur {wfYears} an{wfYears > 1 ? 's' : ''}...
+                  </div>
+                  <div style={{ marginTop: 16, height: 4, background: 'var(--surface2)', borderRadius: 2, overflow: 'hidden' }}>
+                    <div style={{
+                      height: '100%', borderRadius: 2,
+                      background: 'linear-gradient(90deg, #10b981, #059669)',
+                      animation: 'pulse 2s ease-in-out infinite', width: '70%',
+                    }} />
+                  </div>
+                </div>
+              )}
+
+              {wfResult && (
+                <div>
+                  <h3 style={{ color: '#34d399', marginBottom: 12 }}>Résultats</h3>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8, marginBottom: 12 }}>
+                    {([
+                      ['Signaux', String(wfResult.metrics.total_signals), '#34d399'],
+                      ['Win rate', pct(wfResult.metrics.win_rate), wfResult.metrics.win_rate >= 0.5 ? 'var(--accent-green)' : 'var(--accent-red)'],
+                      ['Profit factor', num(wfResult.metrics.profit_factor), wfResult.metrics.profit_factor >= 1.2 ? 'var(--accent-green)' : 'var(--accent-yellow)'],
+                      ['Max DD', pct(wfResult.metrics.max_drawdown), wfResult.metrics.max_drawdown <= 0.1 ? 'var(--accent-green)' : 'var(--accent-red)'],
+                    ] as [string, string, string][]).map(([label, value, color]) => (
+                      <div key={label} style={{ padding: '8px 10px', borderRadius: 6, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.15)', textAlign: 'center' }}>
+                        <div style={{ fontSize: 18, fontWeight: 800, color }}>{value}</div>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{label}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8, marginBottom: 12 }}>
+                    {([
+                      ['Wins', String(wfResult.metrics.wins), 'var(--accent-green)'],
+                      ['Losses', String(wfResult.metrics.losses), 'var(--accent-red)'],
+                      ['En cours', String(wfResult.metrics.pending), 'var(--accent-yellow)'],
+                      ['Total R', wfResult.metrics.total_r + 'R', wfResult.metrics.total_r >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'],
+                    ] as [string, string, string][]).map(([label, value, color]) => (
+                      <div key={label} style={{ padding: '6px 8px', borderRadius: 6, background: 'var(--surface2)', textAlign: 'center' }}>
+                        <div style={{ fontSize: 15, fontWeight: 700, color }}>{value}</div>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 1 }}>{label}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ padding: 8, borderRadius: 6, background: 'var(--surface2)', fontSize: 11, marginBottom: 12, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                    <span className="muted">Bougies : <strong style={{ color: 'var(--text)' }}>{wfResult.candles_downloaded.toLocaleString()}</strong></span>
+                    <span className="muted">Periode : <strong style={{ color: 'var(--text)' }}>{wfResult.period_start?.slice(0, 10)}</strong> → <strong style={{ color: 'var(--text)' }}>{wfResult.period_end?.slice(0, 10)}</strong></span>
+                  </div>
+
+                  {wfSortedSignals.length > 0 && (
+                    <div style={{ maxHeight: 350, overflowY: 'auto', marginBottom: 12 }}>
+                      <table>
+                        <thead>
+                          <tr>
+                            <WfSortTh col="timestamp">Date</WfSortTh>
+                            <WfSortTh col="direction">Dir</WfSortTh>
+                            <th>Entree</th>
+                            <WfSortTh col="result">Res</WfSortTh>
+                            <WfSortTh col="r_multiple">R</WfSortTh>
+                            <th>Etapes</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {wfSortedSignals.map((sig, idx) => {
+                            const isExpanded = wfExpandedIdx === idx;
+                            const resultColor = sig.result === 'TP' ? 'var(--accent-green)' : sig.result === 'SL' ? 'var(--accent-red)' : 'var(--accent-yellow)';
+                            const dirColor = sig.direction === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)';
+                            const stepKeys = ['liquidity_zone', 'sweep', 'displacement', 'bos', 'expansion', 'fib_match'];
+                            const wyckoff = sig.steps.spring === true || sig.steps.utad === true;
+                            const stepsValid = stepKeys.filter(k => sig.steps[k] === true).length + (wyckoff ? 1 : 0);
+                            return (
+                              <tr key={idx} style={{ cursor: 'pointer', background: isExpanded ? 'rgba(16,185,129,0.08)' : 'transparent' }} onClick={() => setWfExpandedIdx(isExpanded ? null : idx)}>
+                                <td style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{sig.timestamp.slice(0, 10)}</td>
+                                <td><span style={{ fontWeight: 700, color: dirColor, fontSize: 11 }}>{sig.direction}</span></td>
+                                <td style={{ fontFamily: 'monospace', fontSize: 11 }}>${sig.entry_price.toLocaleString()}</td>
+                                <td><span style={{ fontWeight: 700, color: resultColor, fontSize: 11 }}>{sig.result === 'TP' ? 'TP' : sig.result === 'SL' ? 'SL' : 'Open'}</span></td>
+                                <td style={{ fontWeight: 700, fontSize: 11, color: sig.r_multiple >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>{sig.r_multiple > 0 ? '+' : ''}{sig.r_multiple}R</td>
+                                <td>
+                                  <span style={{ fontSize: 10, padding: '2px 5px', borderRadius: 4, background: stepsValid >= 7 ? 'rgba(63,185,80,0.15)' : 'rgba(255,165,0,0.15)', color: stepsValid >= 7 ? 'var(--accent-green)' : 'var(--accent-yellow)' }}>
+                                    {stepsValid}/7 {isExpanded ? '▲' : '▼'}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {wfExpandedIdx !== null && wfSortedSignals[wfExpandedIdx] && (
+                    <div style={{ padding: 12, borderRadius: 8, background: 'var(--surface2)', border: '1px solid rgba(16,185,129,0.2)', marginBottom: 12 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 8, color: '#34d399' }}>
+                        Etapes — {wfSortedSignals[wfExpandedIdx].timestamp.slice(0, 16).replace('T', ' ')}
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 6 }}>
+                        {Object.entries(STEP_LABELS).map(([key, label]) => {
+                          const val = wfSortedSignals[wfExpandedIdx].steps[key];
+                          const passed = val === true;
+                          return (
+                            <div key={key} style={{
+                              padding: '6px 8px', borderRadius: 6,
+                              background: passed ? 'rgba(63,185,80,0.1)' : 'rgba(248,81,73,0.06)',
+                              border: `1px solid ${passed ? 'rgba(63,185,80,0.3)' : 'rgba(248,81,73,0.2)'}`,
+                            }}>
+                              <span style={{ fontSize: 12, marginRight: 4 }}>{passed ? 'V' : 'X'}</span>
+                              <span style={{ fontSize: 11, color: passed ? 'var(--accent-green)' : 'var(--accent-red)' }}>{label}</span>
+                            </div>
+                          );
+                        })}
+                        {wfSortedSignals[wfExpandedIdx].steps.atr !== undefined && (
+                          <div style={{ padding: '6px 8px', borderRadius: 6, background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>ATR: </span>
+                            <span style={{ fontSize: 11, fontWeight: 700 }}>{Number(wfSortedSignals[wfExpandedIdx].steps.atr).toFixed(2)}</span>
+                          </div>
+                        )}
+                        {wfSortedSignals[wfExpandedIdx].steps.fib_retracement !== undefined && (
+                          <div style={{ padding: '6px 8px', borderRadius: 6, background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Fib: </span>
+                            <span style={{ fontSize: 11, fontWeight: 700 }}>{String(wfSortedSignals[wfExpandedIdx].steps.fib_retracement)}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {wfSortedSignals.length === 0 && (
+                    <div style={{ textAlign: 'center', padding: 24, color: 'var(--text-muted)' }}>
+                      <div style={{ fontSize: 28, marginBottom: 8 }}>📭</div>
+                      <p style={{ fontSize: 12 }}>Aucun signal SMC/Wyckoff detecte. Essayez un autre timeframe ou une duree plus longue.</p>
+                    </div>
+                  )}
+
+                  <button
+                    className="btn btn-secondary"
+                    style={{ width: '100%', marginTop: 8 }}
+                    onClick={() => { setWfResult(null); setWfExpandedIdx(null); }}
+                  >
+                    Nouvelle analyse
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
 
@@ -1223,47 +1862,58 @@ export function BacktestsPage() {
                     const isSelected = compareIds[0] === r.id || compareIds[1] === r.id;
                     const isA = compareIds[0] === r.id;
                     const isOptimize = optimizeIds.has(r.id);
+                    const isExpanded = expandedRow === r.id;
                     return (
-                      <tr
-                        key={r.id}
-                        style={{
-                          background: isOptimize
-                            ? 'rgba(139,92,246,0.1)'
-                            : isSelected
-                            ? isA ? 'rgba(88,166,255,0.15)' : 'rgba(63,185,80,0.12)'
-                            : optimizeTarget?.id === r.id ? 'rgba(88,166,255,0.08)' : 'transparent',
-                          cursor: 'pointer',
-                        }}
-                        onClick={() => toggleCompare(r.id)}
-                      >
-                        <td onClick={e => e.stopPropagation()}>
-                          <input type="checkbox" checked={isSelected} onChange={() => toggleCompare(r.id)}
-                            style={{ width: 'auto', cursor: 'pointer' }} />
-                        </td>
-                        <td onClick={e => e.stopPropagation()}>
-                          <input
-                            type="checkbox"
-                            checked={isOptimize}
-                            onChange={() => toggleOptimizeId(r.id)}
-                            style={{ width: 'auto', cursor: 'pointer', accentColor: '#7c3aed' }}
-                          />
-                        </td>
-                        <td className="muted">{r.id}</td>
-                        <td><strong style={{ fontSize: 12 }}>{r.symbol.replace('USDT', '')}</strong></td>
-                        <td><span className="tag">{r.timeframe}</span></td>
-                        <td className={r.win_rate >= 0.5 ? 'green' : 'red'}>{pct(r.win_rate)}</td>
-                        <td className={r.profit_factor >= 1.2 ? 'green' : 'yellow'}>{num(r.profit_factor)}</td>
-                        <td className={r.drawdown <= 0.1 ? 'green' : r.drawdown <= 0.2 ? 'yellow' : 'red'}>{pct(r.drawdown)}</td>
-                        <td onClick={e => e.stopPropagation()}>
-                          <button
-                            className="btn btn-secondary"
-                            style={{ fontSize: 10, padding: '2px 6px', opacity: 0.8 }}
-                            onClick={() => setOptimizeTarget(optimizeTarget?.id === r.id ? null : r)}
-                          >
-                            {optimizeTarget?.id === r.id ? '▼' : '🤖'}
-                          </button>
-                        </td>
-                      </tr>
+                      <React.Fragment key={r.id}>
+                        <tr
+                          style={{
+                            background: isExpanded
+                              ? 'rgba(59,130,246,0.12)'
+                              : isOptimize
+                              ? 'rgba(139,92,246,0.1)'
+                              : isSelected
+                              ? isA ? 'rgba(88,166,255,0.15)' : 'rgba(63,185,80,0.12)'
+                              : optimizeTarget?.id === r.id ? 'rgba(88,166,255,0.08)' : 'transparent',
+                            cursor: 'pointer',
+                          }}
+                          onClick={() => setExpandedRow(isExpanded ? null : r.id)}
+                        >
+                          <td onClick={e => e.stopPropagation()}>
+                            <input type="checkbox" checked={isSelected} onChange={() => toggleCompare(r.id)}
+                              style={{ width: 'auto', cursor: 'pointer' }} />
+                          </td>
+                          <td onClick={e => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              checked={isOptimize}
+                              onChange={() => toggleOptimizeId(r.id)}
+                              style={{ width: 'auto', cursor: 'pointer', accentColor: '#7c3aed' }}
+                            />
+                          </td>
+                          <td className="muted">{r.id}</td>
+                          <td><strong style={{ fontSize: 12 }}>{fmtSym(r.symbol)}</strong></td>
+                          <td><span className="tag">{r.timeframe}</span></td>
+                          <td className={r.win_rate >= 0.5 ? 'green' : 'red'}>{pct(r.win_rate)}</td>
+                          <td className={r.profit_factor >= 1.2 ? 'green' : 'yellow'}>{num(r.profit_factor)}</td>
+                          <td className={r.drawdown <= 0.1 ? 'green' : r.drawdown <= 0.2 ? 'yellow' : 'red'}>{pct(r.drawdown)}</td>
+                          <td onClick={e => e.stopPropagation()}>
+                            <button
+                              className="btn btn-secondary"
+                              style={{ fontSize: 10, padding: '2px 6px', opacity: 0.8 }}
+                              onClick={() => setOptimizeTarget(optimizeTarget?.id === r.id ? null : r)}
+                            >
+                              {optimizeTarget?.id === r.id ? '▼' : '🤖'}
+                            </button>
+                          </td>
+                        </tr>
+                        {isExpanded && (
+                          <tr>
+                            <td colSpan={9} style={{ padding: 0, border: 'none' }}>
+                              <BacktestDetailPanel r={r} simulatedTrades={tradesMap[r.id]} />
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
                     );
                   })}
                 </tbody>

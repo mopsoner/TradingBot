@@ -51,6 +51,7 @@ Each skill is an isolated service class in `backend/app/services/`:
 | session-filter | `SessionFilter` | Filters trades to London/NY session hours |
 | risk-manager | `RiskManager` | Enforces daily/weekly loss limits and position caps |
 | backtesting-manager | `BacktestingEngine` | Computes win rate, profit factor, expectancy, drawdown |
+| walk-forward | `WalkForwardService` (in `walkforward.py`) | Downloads real OHLCV data via yfinance, runs SMC/Wyckoff 7-step detection on sliding windows, simulates paper trades |
 | paper-trade-manager | `PaperTradeManager` | Simulates trade execution in-memory |
 | trade-execution | `ExecutionService` | Builds Binance isolated margin order payloads; paper mode by default |
 | trade-journal | `TradeJournal` (in `journal.py`) | Records all accepted and rejected setups |
