@@ -768,6 +768,8 @@ def backtest_strategy_profile(profile_id: int) -> dict:
             win_rate=metrics.win_rate, profit_factor=metrics.profit_factor,
             expectancy=metrics.expectancy, drawdown=metrics.drawdown,
             r_multiple=metrics.r_multiple,
+            profile_id=profile_id,
+            overrides_json=json.dumps(config.backtest.overrides.model_dump()),
         )
         s.add(bt_result)
         s.add(Log(level="INFO", message=f"Backtest completed for profile={profile.name}: PF={metrics.profit_factor:.2f} DD={metrics.drawdown:.2%}"))
@@ -1444,6 +1446,8 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
             step_count=step_count,
             date_from=date_from_str,
             date_to=date_to_str,
+            profile_id=req.profile_id,
+            overrides_json=json.dumps(config.backtest.overrides.model_dump()),
         )
         s.add(result)
         s.add(Log(level="INFO", message=(

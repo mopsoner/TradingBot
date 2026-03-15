@@ -87,6 +87,8 @@ export type BacktestResult = {
   step_count?: number | null;
   date_from?: string | null;
   date_to?: string | null;
+  profile_id?: number | null;
+  overrides_json?: string | null;
 };
 
 export type SimulatedTrade = {

@@ -100,6 +100,98 @@ function ExpandedSignals({ r }: { r: BacktestResult }) {
   );
 }
 
+/* ── ExpandedOverrides ───────────────────────────────────────────────────── */
+const OVERRIDE_LABELS: Record<string, string> = {
+  enabled:                   'Overrides actifs',
+  wyckoff_lookback:          'Lookback Wyckoff',
+  displacement_threshold:    'Seuil Displacement',
+  displacement_atr_min:      'ATR min Displacement',
+  displacement_vol_min:      'Volume min Displacement',
+  bos_sensitivity:           'Sensibilité BOS',
+  bos_close_confirmation:    'BOS clôture requise',
+  volume_multiplier_active:  'Multiplicateur vol. (actif)',
+  volume_multiplier_offpeak: 'Multiplicateur vol. (off-peak)',
+  skip_htf_1h_validation:    'Ignorer validation 1H',
+  use_5m_refinement:         'Affinement 5m',
+  allow_weekend_trading:     'Trading week-end',
+};
+
+function ExpandedOverrides({ overridesJson }: { overridesJson: string }) {
+  let ov: Record<string, unknown> = {};
+  try { ov = JSON.parse(overridesJson); } catch { /**/ }
+  const entries = Object.entries(ov).filter(([k]) => k !== 'enabled');
+  if (entries.length === 0) return null;
+  return (
+    <div style={{ padding: '10px 20px 14px', background: 'rgba(168,85,247,0.04)', borderTop: '1px solid rgba(168,85,247,0.12)' }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: '#a855f7', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+        Overrides utilisés pour ce backtest
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 18px' }}>
+        {entries.map(([k, v]) => (
+          <div key={k} style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', gap: 5 }}>
+            <span style={{ color: 'var(--text-soft)' }}>{OVERRIDE_LABELS[k] ?? k}:</span>
+            <span style={{ fontWeight: 700, fontFamily: 'monospace', color: v === true ? 'var(--accent-green)' : v === false ? 'var(--accent-red)' : 'var(--text)' }}>
+              {String(v)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ── BacktestOverridesPanel ──────────────────────────────────────────────── */
+function BacktestOverridesPanel({ lastBacktest, onOptimize }: { lastBacktest: BacktestResult | null; onOptimize: (r: BacktestResult) => void }) {
+  const { data: cfgData } = useApi(() => api.config());
+  const cfg = cfgData as Record<string, unknown> | null;
+  const bt = cfg?.backtest as Record<string, unknown> | undefined;
+  const ov = bt?.overrides as Record<string, unknown> | undefined;
+
+  if (!ov) return null;
+
+  const items = Object.entries(ov).filter(([k]) => k !== 'enabled');
+
+  return (
+    <div style={{ marginBottom: 24, borderRadius: 10, border: '1px solid rgba(168,85,247,0.25)', background: 'rgba(168,85,247,0.04)', overflow: 'hidden' }}>
+      <div style={{ padding: '12px 18px', borderBottom: '1px solid rgba(168,85,247,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: '#a855f7' }}>Paramètres backtest actifs</span>
+          {ov.enabled ? (
+            <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 4, background: 'rgba(168,85,247,0.2)', color: '#a855f7' }}>Overrides ON</span>
+          ) : (
+            <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 4, background: 'rgba(100,116,139,0.15)', color: 'var(--text-muted)' }}>Overrides OFF</span>
+          )}
+        </div>
+        {lastBacktest && (
+          <button
+            onClick={() => onOptimize(lastBacktest)}
+            style={{
+              padding: '5px 14px', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer',
+              background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.4)',
+              color: 'var(--accent)',
+            }}
+          >
+            ✨ Optimiser via IA
+          </button>
+        )}
+      </div>
+      <div style={{ padding: '12px 18px', display: 'flex', flexWrap: 'wrap', gap: '8px 24px' }}>
+        {items.map(([k, v]) => (
+          <div key={k} style={{ fontSize: 12, display: 'flex', gap: 6, alignItems: 'center' }}>
+            <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>{OVERRIDE_LABELS[k] ?? k}</span>
+            <span style={{
+              fontWeight: 700, fontFamily: 'monospace', fontSize: 12,
+              color: v === true ? 'var(--accent-green)' : v === false ? 'var(--accent-red)' : 'var(--text)',
+            }}>
+              {String(v)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ── BacktestRow ─────────────────────────────────────────────────────────── */
 function BacktestRow({
   r, selected, onSelect, onOptimize, onCompare,
@@ -130,6 +222,17 @@ function BacktestRow({
           <span style={{ marginRight: 6, opacity: 0.5 }}>{expanded ? '▾' : '▸'}</span>
           {r.symbol}
         </td>
+        <td style={{ padding: '10px 8px' }} onClick={() => setExpanded(!expanded)}>
+          <span style={{
+            fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+            background: 'rgba(59,130,246,0.1)', color: 'var(--accent)',
+            border: '1px solid rgba(59,130,246,0.2)',
+            whiteSpace: 'nowrap', maxWidth: 120, overflow: 'hidden',
+            textOverflow: 'ellipsis', display: 'inline-block',
+          }} title={r.strategy_version}>
+            {r.strategy_version || '—'}
+          </span>
+        </td>
         <td style={{ padding: '10px 8px', color: 'var(--text-muted)', fontSize: 11 }} onClick={() => setExpanded(!expanded)}>
           {dateRange}
         </td>
@@ -156,8 +259,9 @@ function BacktestRow({
       </tr>
       {expanded && (
         <tr>
-          <td colSpan={9} style={{ padding: 0 }}>
+          <td colSpan={10} style={{ padding: 0 }}>
             <ExpandedSignals r={r} />
+            {r.overrides_json && <ExpandedOverrides overridesJson={r.overrides_json} />}
           </td>
         </tr>
       )}
@@ -511,6 +615,8 @@ export function BacktestsPage({ onNavigate: _onNavigate }: { onNavigate?: (page:
 
       <LaunchForm onLaunched={reload} />
 
+      <BacktestOverridesPanel lastBacktest={rows[0] ?? null} onOptimize={r => setOptimize(r)} />
+
       <BacktestProcessCard onDone={reload} />
 
       {compareQueue.length === 1 && (
@@ -530,6 +636,7 @@ export function BacktestsPage({ onNavigate: _onNavigate }: { onNavigate?: (page:
               <tr style={{ background: 'rgba(59,130,246,0.07)', color: 'var(--text-muted)', fontSize: 11 }}>
                 <th style={{ padding: '10px 8px', textAlign: 'left', width: 28 }}></th>
                 <th style={{ padding: '10px 8px', textAlign: 'left' }}>Symboles</th>
+                <th style={{ padding: '10px 8px', textAlign: 'left' }}>Profil</th>
                 <th style={{ padding: '10px 8px', textAlign: 'left' }}>Période</th>
                 <th style={{ padding: '10px 8px', textAlign: 'center' }}>Signaux</th>
                 <th style={{ padding: '10px 8px', textAlign: 'center' }}>WR%</th>

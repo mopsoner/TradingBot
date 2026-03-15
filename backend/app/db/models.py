@@ -109,6 +109,8 @@ class BacktestResult(SQLModel, table=True):
     step_count: Optional[int] = None     # 4H steps evaluated
     date_from: Optional[str] = None      # ISO date start
     date_to: Optional[str] = None        # ISO date end
+    profile_id: Optional[int] = None     # StrategyProfile.id used
+    overrides_json: Optional[str] = None # JSON snapshot of BacktestOverrides
 
 
 class Log(SQLModel, table=True):
