@@ -94,19 +94,27 @@ function SignalDetailModal({ signal, onClose }: { signal: Signal; onClose: () =>
             </div>
             <div className="field-group">
               <div className="field-label">Zone de liquidité</div>
-              <div className="field-value">{signal.liquidity_zone || '—'}</div>
+              <div className="field-value">
+                {signal.liquidity_zone && signal.liquidity_zone !== 'N/A' ? signal.liquidity_zone : '—'}
+              </div>
             </div>
             <div className="field-group">
               <div className="field-label">Niveau Sweep</div>
-              <div className="field-value">{signal.sweep_level.toFixed(4)}</div>
+              <div className="field-value">
+                {signal.sweep_level > 0 ? `${signal.sweep_level.toFixed(2)} %` : '—'}
+              </div>
             </div>
             <div className="field-group">
               <div className="field-label">Niveau BOS</div>
-              <div className="field-value">{signal.bos_level.toFixed(4)}</div>
+              <div className="field-value">
+                {signal.bos_level > 0 ? signal.bos_level.toFixed(2) : '—'}
+              </div>
             </div>
             <div className="field-group">
               <div className="field-label">Zone Fibonacci</div>
-              <div className="field-value">{signal.fib_zone || '—'}</div>
+              <div className="field-value">
+                {signal.fib_zone && signal.fib_zone !== 'N/A' ? signal.fib_zone : '—'}
+              </div>
             </div>
           </div>
 
@@ -384,9 +392,9 @@ export function SignalsPage() {
                             <span className="tag" style={{ fontSize: 11 }}>{s.timeframe}</span>
                           </td>
                           <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text-soft)' }}>{s.setup_type || '—'}</td>
-                          <td style={{ padding: '10px 14px', fontWeight: 600, fontSize: 13 }}>{s.sweep_level.toFixed(2)}</td>
-                          <td style={{ padding: '10px 14px', fontWeight: 600, fontSize: 13 }}>{s.bos_level.toFixed(2)}</td>
-                          <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text-soft)' }}>{s.fib_zone || '—'}</td>
+                          <td style={{ padding: '10px 14px', fontWeight: 600, fontSize: 13 }}>{s.sweep_level > 0 ? `${s.sweep_level.toFixed(2)}%` : '—'}</td>
+                          <td style={{ padding: '10px 14px', fontWeight: 600, fontSize: 13 }}>{s.bos_level > 0 ? s.bos_level.toFixed(2) : '—'}</td>
+                          <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text-soft)' }}>{s.fib_zone && s.fib_zone !== 'N/A' ? s.fib_zone : '—'}</td>
                           <td style={{ padding: '10px 14px' }}>
                             <span className={`badge ${s.accepted ? 'badge-green' : 'badge-gray'}`}>
                               {s.accepted ? 'Accepté' : 'Rejeté'}
