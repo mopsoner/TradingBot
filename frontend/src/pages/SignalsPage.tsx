@@ -4,6 +4,22 @@ import { api } from '../services/api';
 import type { PipelineState, Signal } from '../services/api';
 import { fmtDateTime, fmtSym } from '../utils/dateUtils';
 import { useSortable } from '../hooks/useSortable';
+import { PipelineRunDetailModal } from '../components/PipelineRunDetail';
+
+function fmtZonePrice(n: number): string {
+  if (n >= 10000) return n.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  if (n >= 100)   return n.toFixed(2);
+  if (n >= 1)     return n.toFixed(4);
+  return n.toFixed(6);
+}
+
+function fmtZone(name: string, low?: number | null, high?: number | null): string {
+  if (!name || name === 'N/A') return '—';
+  if (low != null && high != null && low > 0) {
+    return `${name} [${fmtZonePrice(low)} – ${fmtZonePrice(high)}]`;
+  }
+  return name;
+}
 
 const STEPS = [
   { id: 1, label: 'Liquidité',     desc: 'Zone de liquidité identifiée' },
@@ -22,6 +38,66 @@ function stepDotColor(status: string): string {
   return 'rgba(78,98,128,0.35)';
 }
 
+type StepState = 'passed' | 'failed' | 'pending';
+
+function inferStepStates(signal: Signal): StepState[] {
+  if (signal.accepted) return Array(7).fill('passed');
+  const r = (signal.reject_reason ?? '').toLowerCase();
+
+  // Map reject reason → which step index (0-based) FAILED
+  let failedAt = 7; // default: all passed but somehow rejected
+
+  if (r.includes('session') || r.includes('pas de marché') || r.includes('hors session')) {
+    failedAt = 0; // failed before step 1
+  } else if (r.includes('4h neutre') || r.includes('range') || r.includes('multi-tf') || r.includes('pas de biais')) {
+    failedAt = 0;
+  } else if (r.includes('pas de zone') || r.includes('liquidité identifiable') || r.includes('aucune zone')) {
+    failedAt = 0; // step 1
+  } else if (r.includes('sweep') || r.includes('sweep liquidity')) {
+    failedAt = 1; // step 2
+  } else if (r.includes('wyckoff') || r.includes('spring') || r.includes('utad') || r.includes('aucun événement')) {
+    failedAt = 2; // step 3
+  } else if (r.includes('htf') || r.includes('multi-tf') || r.includes('1h diverge') || r.includes('conflit')) {
+    failedAt = 3; // step 4 (HTF alignment, treated as displacement step)
+  } else if (r.includes('displacement') || r.includes('atr')) {
+    failedAt = 3; // step 4
+  } else if (r.includes('bos') || r.includes('volume')) {
+    failedAt = 4; // step 5
+  } else if (r.includes('expansion')) {
+    failedAt = 5; // step 6
+  } else if (r.includes('fib') || r.includes('retracement') || r.includes('5m') || r.includes('refinement')) {
+    failedAt = 6; // step 7
+  } else if (r.includes('risk')) {
+    // Risk rejection happens after all 7 steps — treat as passed all
+    return Array(7).fill('passed');
+  }
+
+  return Array.from({ length: 7 }, (_, i) =>
+    i < failedAt ? 'passed' : i === failedAt ? 'failed' : 'pending'
+  );
+}
+
+/* ── MiniStepBar ─────────────────────────────────────────────────────────── */
+function MiniStepBar({ signal }: { signal: Signal }) {
+  const states = inferStepStates(signal);
+  return (
+    <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
+      {states.map((st, i) => (
+        <div
+          key={i}
+          title={`${i + 1}. ${STEPS[i].label}: ${st === 'passed' ? '✓' : st === 'failed' ? '✗' : '—'}`}
+          style={{
+            width: 10, height: 10, borderRadius: 3,
+            background: stepDotColor(st),
+            opacity: st === 'pending' ? 0.22 : 1,
+            flexShrink: 0,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
 function SignalDetailModal({ signal, onClose }: { signal: Signal; onClose: () => void }) {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -30,7 +106,7 @@ function SignalDetailModal({ signal, onClose }: { signal: Signal; onClose: () =>
   }, [onClose]);
 
   const accepted = signal.accepted;
-  const passedCount = accepted ? 7 : 4;
+  const stepStates = inferStepStates(signal);
 
   const dir = (signal as Record<string, unknown>)['direction'] as string | undefined;
   const dirLabel = dir ?? (accepted ? 'LONG' : null);
@@ -93,19 +169,27 @@ function SignalDetailModal({ signal, onClose }: { signal: Signal; onClose: () =>
             </div>
             <div className="field-group">
               <div className="field-label">Zone de liquidité</div>
-              <div className="field-value">{signal.liquidity_zone || '—'}</div>
+              <div className="field-value">
+                {fmtZone(signal.liquidity_zone, signal.zone_low, signal.zone_high)}
+              </div>
             </div>
             <div className="field-group">
               <div className="field-label">Niveau Sweep</div>
-              <div className="field-value">{signal.sweep_level.toFixed(4)}</div>
+              <div className="field-value">
+                {signal.sweep_level > 0 ? signal.sweep_level.toFixed(4) : '—'}
+              </div>
             </div>
             <div className="field-group">
               <div className="field-label">Niveau BOS</div>
-              <div className="field-value">{signal.bos_level.toFixed(4)}</div>
+              <div className="field-value">
+                {signal.bos_level > 0 ? signal.bos_level.toFixed(2) : '—'}
+              </div>
             </div>
             <div className="field-group">
               <div className="field-label">Zone Fibonacci</div>
-              <div className="field-value">{signal.fib_zone || '—'}</div>
+              <div className="field-value">
+                {signal.fib_zone && signal.fib_zone !== 'N/A' ? signal.fib_zone : '—'}
+              </div>
             </div>
           </div>
 
@@ -113,25 +197,31 @@ function SignalDetailModal({ signal, onClose }: { signal: Signal; onClose: () =>
           <div className="section-title">Séquence SMC / Wyckoff</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 8 }}>
             {STEPS.map((step, i) => {
-              const passed = i < passedCount;
+              const st = stepStates[i];
+              const passed = st === 'passed';
+              const failed = st === 'failed';
+              const bgColor = passed ? 'rgba(34,197,94,0.08)' : failed ? 'rgba(239,68,68,0.07)' : 'rgba(255,255,255,0.02)';
+              const borderColor = passed ? 'rgba(34,197,94,0.25)' : failed ? 'rgba(239,68,68,0.25)' : 'var(--border)';
+              const iconBg = passed ? 'var(--accent-green)' : failed ? 'var(--accent-red)' : 'rgba(255,255,255,0.06)';
+              const labelColor = passed ? 'var(--accent-green)' : failed ? 'var(--accent-red)' : 'var(--text-muted)';
               return (
                 <div key={step.id} style={{
                   display: 'flex', alignItems: 'flex-start', gap: 10,
                   padding: '10px 12px', borderRadius: 10,
-                  background: passed ? 'rgba(34,197,94,0.08)' : 'rgba(255,255,255,0.02)',
-                  border: `1px solid ${passed ? 'rgba(34,197,94,0.25)' : 'var(--border)'}`,
+                  background: bgColor, border: `1px solid ${borderColor}`,
+                  opacity: st === 'pending' ? 0.45 : 1,
                 }}>
                   <div style={{
                     width: 22, height: 22, borderRadius: 6, flexShrink: 0,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     fontSize: 11, fontWeight: 800,
-                    background: passed ? 'var(--accent-green)' : 'rgba(255,255,255,0.06)',
-                    color: passed ? '#fff' : 'var(--text-muted)',
+                    background: iconBg,
+                    color: (passed || failed) ? '#fff' : 'var(--text-muted)',
                   }}>
-                    {passed ? '✓' : step.id}
+                    {passed ? '✓' : failed ? '✗' : step.id}
                   </div>
                   <div>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: passed ? 'var(--accent-green)' : 'var(--text-soft)', lineHeight: 1.2 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: labelColor, lineHeight: 1.2 }}>
                       {step.label}
                     </div>
                     <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2, lineHeight: 1.3 }}>
@@ -158,17 +248,27 @@ const FILTER_OPTIONS = [
   { id: 'rejected', label: 'Rejetés' },
 ] as const;
 
+type ModeFilter = 'all' | 'backtest' | 'paper' | 'live' | 'research';
+
 export function SignalsPage() {
   const [filter, setFilter] = useState<'all' | 'accepted' | 'rejected'>('all');
+  const [modeFilter, setModeFilter] = useState<ModeFilter>('all');
+  const [symbolFilter, setSymbolFilter] = useState<string>('');
   const [selected, setSelected] = useState<Signal | null>(null);
   const [pipelineData, setPipelineData] = useState<PipelineState | null>(null);
   const pollRef = useRef<number | null>(null);
+  const [detailRunId, setDetailRunId] = useState<string | null>(null);
 
-  const params =
-    filter === 'accepted' ? '?accepted=true' :
-    filter === 'rejected' ? '?accepted=false' : '';
+  const params = (() => {
+    const parts: string[] = [];
+    if (filter === 'accepted') parts.push('accepted=true');
+    if (filter === 'rejected') parts.push('accepted=false');
+    if (modeFilter !== 'all') parts.push(`mode=${modeFilter}`);
+    if (symbolFilter) parts.push(`symbol=${encodeURIComponent(symbolFilter)}`);
+    return parts.length ? `?${parts.join('&')}` : '';
+  })();
 
-  const { data, loading, error } = useApi(() => api.signals(params), [filter]);
+  const { data, loading, error } = useApi(() => api.signals(params), [filter, modeFilter, symbolFilter]);
   const { sorted: sortedRows, Th } = useSortable<Signal>(data?.rows ?? [], 'timestamp', 'desc');
 
   useEffect(() => {
@@ -190,6 +290,7 @@ export function SignalsPage() {
   return (
     <section>
       {selected && <SignalDetailModal signal={selected} onClose={() => setSelected(null)} />}
+      {detailRunId && <PipelineRunDetailModal runId={detailRunId} onClose={() => setDetailRunId(null)} />}
 
       {/* ── Page header ───────────────────────────────────── */}
       <div className="page-header-row">
@@ -221,6 +322,70 @@ export function SignalsPage() {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* ── Filtres mode + crypto ──────────────────────────── */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+        {/* Mode filter */}
+        <div style={{ display: 'flex', background: 'var(--surface2)', borderRadius: 8, padding: 3, gap: 2, border: '1px solid var(--border)' }}>
+          {([
+            ['all',      'Tous'],
+            ['backtest', '📊 Backtest'],
+            ['paper',    '🧪 Paper'],
+            ['live',     '🔴 Live'],
+            ['research', '🔬 Research'],
+          ] as [ModeFilter, string][]).map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => setModeFilter(id)}
+              style={{
+                padding: '5px 13px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+                cursor: 'pointer', transition: 'all 0.15s',
+                background: modeFilter === id ? 'var(--surface3, #1c2128)' : 'transparent',
+                color: modeFilter === id ? 'var(--text)' : 'var(--text-muted)',
+                border: modeFilter === id ? '1px solid var(--border)' : '1px solid transparent',
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Symbol filter */}
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+          <span style={{ position: 'absolute', left: 9, fontSize: 12, color: 'var(--text-muted)', pointerEvents: 'none' }}>🔎</span>
+          <select
+            value={symbolFilter}
+            onChange={e => setSymbolFilter(e.target.value)}
+            style={{
+              paddingLeft: 28, paddingRight: 10, paddingTop: 6, paddingBottom: 6,
+              borderRadius: 8, fontSize: 12, fontWeight: 600,
+              border: `1px solid ${symbolFilter ? 'var(--accent)' : 'var(--border)'}`,
+              background: symbolFilter ? 'rgba(59,130,246,0.08)' : 'var(--surface2)',
+              color: symbolFilter ? 'var(--accent)' : 'var(--text)',
+              cursor: 'pointer', minWidth: 140,
+            }}
+          >
+            <option value="">— Toutes cryptos —</option>
+            {[...new Set(data?.rows.map(r => r.symbol) ?? [])].sort().map(sym => (
+              <option key={sym} value={sym}>{fmtSym(sym)}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Reset chip */}
+        {(modeFilter !== 'all' || symbolFilter) && (
+          <button
+            onClick={() => { setModeFilter('all'); setSymbolFilter(''); }}
+            style={{
+              padding: '5px 12px', borderRadius: 8, fontSize: 11, fontWeight: 700,
+              border: '1px solid var(--border)', background: 'transparent',
+              color: 'var(--text-muted)', cursor: 'pointer',
+            }}
+          >
+            ✕ Réinitialiser
+          </button>
+        )}
       </div>
 
       {/* ── Pipeline actif ────────────────────────────────── */}
@@ -348,11 +513,13 @@ export function SignalsPage() {
                       <Th col="timestamp" style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left', whiteSpace: 'nowrap' }}>Date</Th>
                       <Th col="symbol"    style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Symbole</Th>
                       <Th col="timeframe" style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>TF</Th>
-                      <th style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Setup</th>
+                      <th style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Zone [range]</th>
                       <Th col="sweep_level" style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Sweep</Th>
                       <Th col="bos_level"   style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>BOS</Th>
                       <th style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Fib</th>
                       <Th col="accepted"    style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Statut</Th>
+                      <th style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Steps</th>
+                      <th style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Raison rejet</th>
                       <th style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', textAlign: 'left' }}>Pipeline</th>
                     </tr>
                   </thead>
@@ -380,17 +547,58 @@ export function SignalsPage() {
                           <td style={{ padding: '10px 14px' }}>
                             <span className="tag" style={{ fontSize: 11 }}>{s.timeframe}</span>
                           </td>
-                          <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text-soft)' }}>{s.setup_type || '—'}</td>
-                          <td style={{ padding: '10px 14px', fontWeight: 600, fontSize: 13 }}>{s.sweep_level.toFixed(2)}</td>
-                          <td style={{ padding: '10px 14px', fontWeight: 600, fontSize: 13 }}>{s.bos_level.toFixed(2)}</td>
-                          <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text-soft)' }}>{s.fib_zone || '—'}</td>
+                          <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text-soft)', whiteSpace: 'nowrap' }}>{fmtZone(s.liquidity_zone, s.zone_low, s.zone_high)}</td>
+                          <td style={{ padding: '10px 14px', fontWeight: 600, fontSize: 13 }}>{s.sweep_level > 0 ? s.sweep_level.toFixed(4) : '—'}</td>
+                          <td style={{ padding: '10px 14px', fontWeight: 600, fontSize: 13 }}>{s.bos_level > 0 ? s.bos_level.toFixed(4) : '—'}</td>
+                          <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text-soft)' }}>{s.fib_zone && s.fib_zone !== 'N/A' ? s.fib_zone : '—'}</td>
                           <td style={{ padding: '10px 14px' }}>
                             <span className={`badge ${s.accepted ? 'badge-green' : 'badge-gray'}`}>
                               {s.accepted ? 'Accepté' : 'Rejeté'}
                             </span>
                           </td>
                           <td style={{ padding: '10px 14px' }}>
-                            {pActive && (
+                            <MiniStepBar signal={s} />
+                          </td>
+                          <td style={{ padding: '10px 14px', maxWidth: 200 }}>
+                            {!s.accepted && s.reject_reason ? (
+                              <span
+                                title={s.reject_reason}
+                                style={{
+                                  fontSize: 11,
+                                  display: 'block', overflow: 'hidden',
+                                  textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                  maxWidth: 190, cursor: 'help',
+                                  padding: '2px 6px', borderRadius: 4,
+                                  background: 'rgba(248,81,73,0.07)',
+                                  border: '1px solid rgba(248,81,73,0.18)',
+                                  color: 'var(--accent-red)',
+                                }}
+                              >
+                                {s.reject_reason}
+                              </span>
+                            ) : s.accepted ? (
+                              <span style={{ fontSize: 11, color: 'var(--accent-green)' }}>—</span>
+                            ) : (
+                              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>—</span>
+                            )}
+                          </td>
+                          <td style={{ padding: '10px 14px' }} onClick={e => {
+                            if (s.pipeline_run_id) { e.stopPropagation(); setDetailRunId(s.pipeline_run_id); }
+                          }}>
+                            {s.pipeline_run_id ? (
+                              <span
+                                style={{
+                                  fontSize: 11, fontWeight: 700, fontFamily: 'monospace',
+                                  color: 'var(--accent)', cursor: 'pointer',
+                                  padding: '2px 8px', borderRadius: 5,
+                                  background: 'rgba(59,130,246,0.1)',
+                                  border: '1px solid rgba(59,130,246,0.2)',
+                                }}
+                                title="Voir le run pipeline"
+                              >
+                                #{s.pipeline_run_id.slice(0, 4)}
+                              </span>
+                            ) : pActive ? (
                               <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                                 <div style={{
                                   width: 6, height: 6, borderRadius: '50%',
@@ -400,19 +608,7 @@ export function SignalsPage() {
                                   En cours
                                 </span>
                               </div>
-                            )}
-                            {pAccepted && !pActive && (
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                                {pEntry.steps.map((step, i) => (
-                                  <div key={i} style={{
-                                    width: 7, height: 7, borderRadius: 2,
-                                    background: stepDotColor(step.status),
-                                    opacity: step.status === 'pending' ? 0.2 : 1,
-                                  }} />
-                                ))}
-                              </div>
-                            )}
-                            {!pEntry && (
+                            ) : (
                               <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>—</span>
                             )}
                           </td>

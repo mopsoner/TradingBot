@@ -1,5 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { AdminPage } from '../types';
+import { api } from '../services/api';
+import type { ProcessStatus } from '../services/api';
 
 type NavItem = { page: AdminPage; icon: JSX.Element; label: string };
 
@@ -107,6 +109,121 @@ const SECTIONS: { title: string; items: AdminPage[] }[] = [
   { title: 'Système',      items: ['Journaux', 'Paramètres'] },
 ];
 
+function fmtCountdown(secs: number | null): string {
+  if (secs === null || secs <= 0) return 'maintenant';
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return m > 0 ? `${m}m${s.toString().padStart(2, '0')}s` : `${s}s`;
+}
+
+function ProcessWidget() {
+  const [processes, setProcesses] = useState<ProcessStatus[]>([]);
+  const [totalRunning, setTotalRunning] = useState(0);
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const load = () => {
+    api.systemProcesses().then(d => {
+      setProcesses(d.processes);
+      setTotalRunning(d.total_running);
+      const scanner = d.processes.find(p => p.id === 'scanner');
+      setCountdown(scanner?.seconds_to_next ?? null);
+    }).catch(() => {});
+  };
+
+  useEffect(() => {
+    load();
+    const poll = setInterval(load, 8000);
+    return () => clearInterval(poll);
+  }, []);
+
+  // countdown tick
+  useEffect(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = setInterval(() => {
+      setCountdown(prev => (prev !== null && prev > 0) ? prev - 1 : prev);
+    }, 1000);
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [processes]);
+
+  const running = processes.filter(p => p.status === 'running');
+  const scanner = processes.find(p => p.id === 'scanner');
+  const backtests = processes.find(p => p.id === 'backtest');
+  const pipeline  = processes.find(p => p.id === 'pipeline');
+
+  return (
+    <div style={{
+      margin: '0 8px 8px',
+      padding: '10px 12px',
+      borderRadius: 10,
+      background: 'rgba(11,17,32,0.85)',
+      border: `1px solid ${totalRunning > 0 ? 'rgba(59,130,246,0.25)' : 'rgba(255,255,255,0.06)'}`,
+    }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: 0.8 }}>
+          Processus
+        </span>
+        <span style={{
+          fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 10,
+          background: totalRunning > 0 ? 'rgba(59,130,246,0.18)' : 'rgba(255,255,255,0.06)',
+          color: totalRunning > 0 ? '#60a5fa' : 'rgba(255,255,255,0.3)',
+        }}>
+          {totalRunning} actif{totalRunning !== 1 ? 's' : ''}
+        </span>
+      </div>
+
+      {/* Scanner */}
+      {scanner && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
+          <span style={{
+            width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+            background: scanner.status === 'running' ? '#22c55e' : '#4b5563',
+            boxShadow: scanner.status === 'running' ? '0 0 6px #22c55e88' : 'none',
+          }} />
+          <span style={{ fontSize: 11, color: scanner.status === 'running' ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.3)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {scanner.status === 'running'
+              ? scanner.detail
+              : 'Scanner arrêté'}
+          </span>
+          {scanner.status === 'running' && countdown !== null && (
+            <span style={{ fontSize: 10, color: '#60a5fa', fontFamily: 'monospace', flexShrink: 0 }}>
+              {fmtCountdown(countdown)}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Pipeline live */}
+      {pipeline && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
+          <span style={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0, background: '#3b82f6', boxShadow: '0 0 6px #3b82f688' }} />
+          <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.75)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {pipeline.detail}
+          </span>
+        </div>
+      )}
+
+      {/* Backtests */}
+      {backtests && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0, background: '#a855f7', boxShadow: '0 0 6px #a855f788' }} />
+          <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.75)', flex: 1 }}>
+            {backtests.detail}
+          </span>
+        </div>
+      )}
+
+      {/* Tout arrêté */}
+      {running.length === 0 && (
+        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.25)', textAlign: 'center', paddingTop: 2 }}>
+          Aucun processus actif
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Sidebar({ onSelect, selected }: { onSelect: (page: AdminPage) => void; selected: AdminPage }) {
   const [open, setOpen] = useState(false);
 
@@ -204,6 +321,9 @@ export function Sidebar({ onSelect, selected }: { onSelect: (page: AdminPage) =>
             </div>
           ))}
         </div>
+
+        {/* Process status widget */}
+        <ProcessWidget />
 
         {/* Bottom mode indicator */}
         <div className="sidebar-bottom">

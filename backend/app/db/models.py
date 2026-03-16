@@ -1,11 +1,33 @@
 from datetime import datetime, timezone
 from typing import Optional
+import uuid
 
 from sqlmodel import Field, SQLModel
 
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _uuid() -> str:
+    return str(uuid.uuid4())
+
+
+class PipelineRun(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    run_id: str = Field(default_factory=_uuid, index=True)
+    started_at: datetime = Field(default_factory=_now_utc)
+    completed_at: Optional[datetime] = None
+    mode: str = "paper"
+    source: str = "manual"
+    symbols_json: str = "[]"
+    timeframe: str = "1h"
+    profile_id: Optional[int] = None
+    accepted_count: int = 0
+    rejected_count: int = 0
+    error_count: int = 0
+    total_count: int = 0
+    results_json: str = "{}"
 
 
 class Signal(SQLModel, table=True):
@@ -29,6 +51,15 @@ class Signal(SQLModel, table=True):
     session_name: Optional[str] = None
     displacement_force: Optional[float] = None
     wyckoff_event: Optional[str] = None
+    pipeline_run_id: Optional[str] = None
+    zone_low: Optional[float] = None
+    zone_high: Optional[float] = None
+    bt_outcome: Optional[str] = None      # "win" | "loss" | "timeout" (backtest only)
+    bt_r_multiple: Optional[float] = None # actual R achieved (backtest only)
+    entry_price: Optional[float] = None
+    tp_price: Optional[float] = None
+    sl_price: Optional[float] = None
+    mode: Optional[str] = None            # "paper" | "live" | "research" | "backtest"
 
 
 class Trade(SQLModel, table=True):
@@ -74,6 +105,16 @@ class BacktestResult(SQLModel, table=True):
     expectancy: float
     drawdown: float
     r_multiple: float
+    pipeline_run_id: Optional[str] = None
+    signal_count: Optional[int] = None
+    step_count: Optional[int] = None
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
+    profile_id: Optional[int] = None
+    overrides_json: Optional[str] = None
+    status: Optional[str] = None
+    config: Optional[str] = None
+    trades_json: Optional[str] = None
 
 
 class Log(SQLModel, table=True):

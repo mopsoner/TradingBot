@@ -5,6 +5,7 @@ import os
 import random
 import threading
 import time
+import uuid
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -13,6 +14,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select, func
+from sqlalchemy import update
 
 from backend.app.core.config import AppConfig, config
 from backend.app.db.models import (
@@ -25,6 +27,7 @@ from backend.app.db.models import (
     BotJob,
     ScanSchedule,
     StrategyProfile,
+    PipelineRun,
 )
 from backend.app.db.session import engine, save_app_config
 from backend.app.services.backtesting import BacktestingEngine
@@ -35,6 +38,7 @@ from backend.app.services.paper_trade import PaperTradeManager
 from backend.app.services.risk_manager import RiskManager, RiskState
 from backend.app.services.session_filter import SessionFilter
 from backend.app.services.signal_engine import SetupInput, SignalEngine
+from backend.app.services import ta_engine as ta
 
 router = APIRouter()
 
@@ -44,6 +48,9 @@ from src.openclaw.trade_execution import derive_margin_asset as _derive_margin_a
 market_data = MarketDataService()
 session_filter = SessionFilter()
 signal_engine = SignalEngine(config.strategy.fib_levels)
+
+_active_imports: dict[str, dict] = {}
+_active_imports_lock = threading.Lock()
 risk = RiskManager(
     config.risk.risk_per_trade,
     config.risk.max_open_positions,
@@ -88,11 +95,14 @@ def dashboard() -> dict:
 
 @router.get("/signals")
 def get_signals(
-    limit: int = Query(100, le=500),
+    limit: int = Query(100, le=1000),
     offset: int = 0,
     accepted: Optional[bool] = None,
     symbol: Optional[str] = None,
     timeframe: Optional[str] = None,
+    pipeline_run_id: Optional[str] = None,
+    run_prefix: Optional[str] = None,  # walk-forward: match pipeline_run_id LIKE '{prefix}%'
+    mode: Optional[str] = None,        # "backtest" | "paper" | "live" | "research"
 ) -> dict:
     with Session(engine) as s:
         q = select(Signal).order_by(Signal.timestamp.desc())
@@ -106,6 +116,16 @@ def get_signals(
         if timeframe is not None:
             q = q.where(Signal.timeframe == timeframe)
             count_q = count_q.where(Signal.timeframe == timeframe)
+        if pipeline_run_id is not None:
+            q = q.where(Signal.pipeline_run_id == pipeline_run_id)
+            count_q = count_q.where(Signal.pipeline_run_id == pipeline_run_id)
+        elif run_prefix is not None:
+            like_pat = f"{run_prefix}%"
+            q = q.where(Signal.pipeline_run_id.like(like_pat))  # type: ignore[union-attr]
+            count_q = count_q.where(Signal.pipeline_run_id.like(like_pat))  # type: ignore[union-attr]
+        if mode is not None:
+            q = q.where(Signal.mode == mode)
+            count_q = count_q.where(Signal.mode == mode)
         total = s.exec(count_q).one()
         rows = s.exec(q.offset(offset).limit(limit)).all()
     return {"total": total, "rows": [r.model_dump() for r in rows]}
@@ -199,10 +219,28 @@ def data_stats() -> dict:
         latest = s.exec(select(MarketCandle).order_by(MarketCandle.timestamp.desc()).limit(1)).first()
         symbols = s.exec(select(MarketCandle.symbol)).all()
         unique_symbols = sorted(list(set(symbols)))
+
+        # Per (symbol, timeframe) breakdown
+        from sqlalchemy import text as sa_text
+        rows = s.exec(sa_text(
+            "SELECT symbol, timeframe, COUNT(*) as n, MIN(timestamp) as ts_min, MAX(timestamp) as ts_max "
+            "FROM marketcandle GROUP BY symbol, timeframe ORDER BY symbol, timeframe"
+        )).fetchall()
+        coverage: list[dict] = []
+        for row in rows:
+            coverage.append({
+                "symbol": row[0],
+                "timeframe": row[1],
+                "count": row[2],
+                "from": str(row[3])[:10] if row[3] else None,
+                "to": str(row[4])[:10] if row[4] else None,
+            })
+
     return {
         "total_candles": total_candles,
         "tracked_symbols": unique_symbols,
         "last_candle_at": latest.timestamp if latest else None,
+        "coverage": coverage,
     }
 
 
@@ -246,20 +284,44 @@ def symbols_by_quote(response: Response) -> dict[str, list[str]]:
 
 @router.get("/symbols/loaded")
 def symbols_loaded() -> list[dict]:
-    """Return distinct symbols that have candle data in the database, with counts per timeframe."""
+    """Return distinct symbols with candle data: counts per timeframe + date range."""
     with Session(engine) as s:
+        # Counts per timeframe
         rows = s.exec(
             select(MarketCandle.symbol, MarketCandle.timeframe, func.count(MarketCandle.id).label("count"))
             .group_by(MarketCandle.symbol, MarketCandle.timeframe)
             .order_by(MarketCandle.symbol, MarketCandle.timeframe)
         ).all()
+        # Date ranges per symbol
+        date_rows = s.exec(
+            select(
+                MarketCandle.symbol,
+                func.min(MarketCandle.timestamp).label("min_ts"),
+                func.max(MarketCandle.timestamp).label("max_ts"),
+            )
+            .group_by(MarketCandle.symbol)
+        ).all()
+    date_map: dict[str, dict] = {r[0]: {"min_ts": str(r[1])[:10], "max_ts": str(r[2])[:10]} for r in date_rows}
     result: dict[str, dict] = {}
     for symbol, timeframe, count in rows:
         if symbol not in result:
-            result[symbol] = {"symbol": symbol, "timeframes": {}, "total": 0}
+            # Determine quote currency
+            quote = "USDT"
+            for q in ("BTC", "ETH", "BNB"):
+                if symbol.endswith(q):
+                    quote = q
+                    break
+            result[symbol] = {
+                "symbol": symbol,
+                "quote": quote,
+                "timeframes": {},
+                "total": 0,
+                "min_ts": date_map.get(symbol, {}).get("min_ts"),
+                "max_ts": date_map.get(symbol, {}).get("max_ts"),
+            }
         result[symbol]["timeframes"][timeframe] = count
         result[symbol]["total"] += count
-    return list(result.values())
+    return sorted(result.values(), key=lambda x: -x["total"])
 
 
 @router.get("/symbols/prices")
@@ -383,6 +445,7 @@ class ScanRequest(BaseModel):
     fake_breakout: bool = False
     equal_highs_lows: bool = False
     fib_retracement: float
+    profile_id: int | None = None
 
 
 class MultiScanRequest(BaseModel):
@@ -390,6 +453,7 @@ class MultiScanRequest(BaseModel):
     fib_retracement: float = 0.618
     require_displacement: bool = True
     require_bos: bool = True
+    profile_id: int | None = None
 
 
 class StartBotRequest(BaseModel):
@@ -416,11 +480,23 @@ class LiveApprovalIn(BaseModel):
     approved_by: str = "operator"
 
 
+DURATION_MAP: dict[str, int | None] = {
+    "1d":  1,
+    "1w":  7,
+    "1m":  30,
+    "3m":  90,
+    "6m":  180,
+    "1y":  365,
+    "2y":  730,
+    "4y":  1460,
+    "all": None,
+}
+
+
 class BacktestRunRequest(BaseModel):
-    symbol: str
-    timeframe: str = "15m"
+    symbols: list[str]
     profile_id: int | None = None
-    horizon_days: int = 30
+    duration: str = "all"          # "1d","1w","1m","3m","6m","1y","2y","4y","all"
 
 
 class CandleIn(BaseModel):
@@ -448,6 +524,13 @@ def resolve_session(ts: datetime) -> str:
 
 @router.post("/scan")
 def scan(req: ScanRequest) -> dict:
+    profile_name = "SMC/Wyckoff"
+    if req.profile_id:
+        with Session(engine) as s:
+            prof = s.get(StrategyProfile, req.profile_id)
+            if prof:
+                profile_name = prof.name
+
     payload = SetupInput(
         symbol=req.symbol,
         liquidity_zone=req.liquidity_zone,
@@ -469,10 +552,10 @@ def scan(req: ScanRequest) -> dict:
         sig = Signal(
             symbol=req.symbol,
             timeframe="1H",
-            setup_type=f"SMC/Wyckoff {direction}" if direction else "SMC/Wyckoff",
+            setup_type=f"{profile_name} — {direction}" if direction else profile_name,
             liquidity_zone="Active" if req.liquidity_zone else "None",
-            sweep_level=round(req.fib_retracement * 100, 2),
-            bos_level=round(req.fib_retracement * 100 + 0.5, 2),
+            sweep_level=round(100.0 * (1.012 if req.liquidity_zone else 0.988), 4),
+            bos_level=round(100.0 * (1.005 if direction == "LONG" else 0.995), 4) if direction else 0.0,
             fib_zone=str(req.fib_retracement),
             accepted=bool(direction),
             direction=direction,
@@ -508,6 +591,13 @@ def scan(req: ScanRequest) -> dict:
 
 @router.post("/scan/market")
 def market_scan(req: MultiScanRequest) -> dict:
+    profile_name = "SMC/Wyckoff"
+    if req.profile_id:
+        with Session(engine) as s:
+            prof = s.get(StrategyProfile, req.profile_id)
+            if prof:
+                profile_name = prof.name
+
     accepted: list[dict] = []
     rejected: list[dict] = []
     for idx, symbol in enumerate(req.symbols):
@@ -556,10 +646,10 @@ def market_scan(req: MultiScanRequest) -> dict:
             db_sig = Signal(
                 symbol=symbol,
                 timeframe="1H",
-                setup_type=f"SMC/Wyckoff {signal}" if signal else "SMC/Wyckoff",
+                setup_type=f"{profile_name} — {signal}" if signal else profile_name,
                 liquidity_zone="Active",
-                sweep_level=round(req.fib_retracement * 100, 2),
-                bos_level=round(req.fib_retracement * 100 + 0.5, 2),
+                sweep_level=round((100 + idx * 4) * 1.012, 4),
+                bos_level=round((100 + idx * 4) * (1.005 if signal == "LONG" else 0.995), 4) if signal else 0.0,
                 fib_zone=str(req.fib_retracement),
                 accepted=bool(signal),
                 direction=signal,
@@ -693,6 +783,8 @@ def backtest_strategy_profile(profile_id: int) -> dict:
             win_rate=metrics.win_rate, profit_factor=metrics.profit_factor,
             expectancy=metrics.expectancy, drawdown=metrics.drawdown,
             r_multiple=metrics.r_multiple,
+            profile_id=profile_id,
+            overrides_json=json.dumps(config.backtest.overrides.model_dump()),
         )
         s.add(bt_result)
         s.add(Log(level="INFO", message=f"Backtest completed for profile={profile.name}: PF={metrics.profit_factor:.2f} DD={metrics.drawdown:.2%}"))
@@ -740,7 +832,7 @@ def create_optimized_profile(profile_id: int, payload: CreateOptimizedProfileIn)
                 src_params = json.loads(source.parameters) if isinstance(source.parameters, str) else source.parameters
             except Exception:
                 src_params = {}
-        merged = {**src_params, **payload.suggested_params}
+        merged = {**src_params, **_sanitize_ai_params(payload.suggested_params)}
         new_name = (payload.new_name or _next_profile_version(source.name)).strip()
         # Ensure name is unique (append timestamp if conflict)
         existing = s.exec(select(StrategyProfile).where(StrategyProfile.name == new_name)).first()
@@ -950,40 +1042,127 @@ def ingest_data(payload: list[CandleIn]) -> dict:
 class FetchRequest(BaseModel):
     symbols: list[str] = Field(min_length=1)
     timeframe: str = "1h"
-    days: int = Field(default=365, ge=1, le=1460)
+    days: int = Field(default=365, ge=0, le=1460)
     source: str | None = Field(default=None, description="Override source for this request (binance/yfinance). Falls back to config.")
+
+
+def _do_import_bg(job_id: str, symbol: str, tf: str, days: int, source: str) -> None:
+    from backend.app.services.candle_importer import import_candles
+
+    def _progress_cb(page: int, total_pages: int, candles_so_far: int) -> None:
+        with _active_imports_lock:
+            job = _active_imports.get(job_id)
+            if job:
+                job["page"] = page
+                job["total_pages"] = total_pages
+                job["candles"] = candles_so_far
+
+    try:
+        r = import_candles(symbol=symbol, timeframe=tf, days=days, source=source, progress_cb=_progress_cb)
+        with _active_imports_lock:
+            job = _active_imports.get(job_id)
+            if job:
+                job["status"] = "done"
+                job["candles"] = r.get("downloaded", 0)
+                job["inserted"] = r.get("inserted", 0)
+                job["completed_at"] = time.time()
+        with Session(engine) as s:
+            s.add(Log(level="INFO", message=f"Import {symbol} {tf} via {source}: {r.get('inserted', 0)} insérées, {r.get('skipped', 0)} existantes"))
+            s.commit()
+    except Exception as exc:
+        logger.warning("_do_import_bg failed %s %s: %s", symbol, tf, exc)
+        with _active_imports_lock:
+            job = _active_imports.get(job_id)
+            if job:
+                job["status"] = "error"
+                job["error"] = str(exc)
+                job["completed_at"] = time.time()
+        try:
+            with Session(engine) as s:
+                s.add(Log(level="ERROR", message=f"Import {symbol} {tf} via {source} failed: {exc}"))
+                s.commit()
+        except Exception:
+            pass
 
 
 @router.post("/data/fetch")
 def fetch_candles(req: FetchRequest) -> dict:
-    """
-    Download real candles from Binance or yfinance and store in DB.
-    Source: req.source if provided, else config.data.candle_source.
-    """
-    from backend.app.services.candle_importer import import_candles
-
     source = req.source or config.data.candle_source
     if source not in ("binance", "yfinance"):
         return {"ok": False, "reason": f"unknown source '{source}'. Use 'binance' or 'yfinance'."}
 
     tf = req.timeframe if req.timeframe in ("5m", "15m", "1h", "4h", "1d") else "1h"
 
-    results = []
-    total_inserted = 0
+    jobs = []
     for symbol in req.symbols:
-        try:
-            r = import_candles(symbol=symbol, timeframe=tf, days=req.days, source=source)
-            results.append(r)
-            total_inserted += r.get("inserted", 0)
-        except Exception as exc:
-            logger.warning("fetch_candles failed %s: %s", symbol, exc)
-            results.append({"ok": False, "symbol": symbol, "error": str(exc)})
+        job_id = str(uuid.uuid4())
+        with _active_imports_lock:
+            _active_imports[job_id] = {
+                "symbol": symbol,
+                "tf": tf,
+                "source": source,
+                "page": 0,
+                "total_pages": 0,
+                "candles": 0,
+                "inserted": 0,
+                "status": "running",
+                "started_at": time.time(),
+                "completed_at": None,
+                "error": None,
+            }
+        t = threading.Thread(target=_do_import_bg, args=(job_id, symbol, tf, req.days, source), daemon=True)
+        t.start()
+        jobs.append({"job_id": job_id, "symbol": symbol, "timeframe": tf})
 
-    with Session(engine) as s:
-        s.add(Log(level="INFO", message=f"Fetch {tf}/{source}: {total_inserted} bougies insérées pour {len(req.symbols)} symbole(s)"))
-        s.commit()
+    return {"ok": True, "async": True, "jobs": jobs}
 
-    return {"ok": True, "source": source, "timeframe": tf, "results": results, "total_inserted": total_inserted}
+
+class BulkFetchRequest(BaseModel):
+    symbols: list[str] = Field(min_length=1)
+    timeframes: list[str] = Field(default_factory=lambda: ["5m", "15m", "1h", "4h"])
+    days: int = Field(default=365, ge=0, le=1460)
+    source: str = Field(default="binance")
+
+
+@router.post("/data/fetch/bulk")
+def fetch_candles_bulk(req: BulkFetchRequest) -> dict:
+    """
+    Fetch all specified timeframes for all specified symbols in one call.
+    Launches one background job per (symbol × timeframe) pair.
+    Always uses the Binance public API by default for accurate multi-TF data.
+    """
+    source = req.source if req.source in ("binance", "yfinance") else "binance"
+    valid_tfs = [tf for tf in req.timeframes if tf in ("5m", "15m", "1h", "4h", "1d")]
+    if not valid_tfs:
+        valid_tfs = ["5m", "15m", "1h", "4h"]
+
+    jobs = []
+    for symbol in req.symbols:
+        for tf in valid_tfs:
+            job_id = str(uuid.uuid4())
+            with _active_imports_lock:
+                _active_imports[job_id] = {
+                    "symbol": symbol,
+                    "tf": tf,
+                    "source": source,
+                    "page": 0,
+                    "total_pages": 0,
+                    "candles": 0,
+                    "inserted": 0,
+                    "status": "running",
+                    "started_at": time.time(),
+                    "completed_at": None,
+                    "error": None,
+                }
+            t = threading.Thread(
+                target=_do_import_bg,
+                args=(job_id, symbol, tf, req.days, source),
+                daemon=True,
+            )
+            t.start()
+            jobs.append({"job_id": job_id, "symbol": symbol, "timeframe": tf})
+
+    return {"ok": True, "async": True, "jobs": jobs, "total": len(jobs)}
 
 
 class CsvImportRequest(BaseModel):
@@ -1117,67 +1296,369 @@ def _simulate_outcomes(profile: "StrategyProfile | None", symbol: str, timeframe
 
 @router.post("/backtest/run")
 def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
+    """
+    Walk-forward backtest SMC/Wyckoff.
+    - Itère chaque timestamp 4H de la plage demandée
+    - Appelle le vrai pipeline à cutoff_ts (bougies réelles historiques, mode silencieux)
+    - Résout l'outcome de chaque signal accepté sur les 96 bougies 5m suivantes
+    - Agrège win rate, PF, expectancy, drawdown, R total
+    """
     with Session(engine) as s:
         profile = s.get(StrategyProfile, req.profile_id) if req.profile_id else None
         if req.profile_id and not profile:
             return {"ok": False, "reason": "profile_not_found"}
 
-        candles = s.exec(
-            select(MarketCandle)
-            .where(MarketCandle.symbol == req.symbol, MarketCandle.timeframe == req.timeframe)
-            .order_by(MarketCandle.timestamp.desc())
-            .limit(500)
-        ).all()
-        outcomes = _simulate_outcomes(profile, req.symbol, req.timeframe, req.horizon_days, candles)
-        metrics = backtesting.run(outcomes)
+    profile_params: dict = {}
+    profile_name = "SMC/Wyckoff"
+    if profile:
+        profile_name = str(profile.name)
+        try:
+            profile_params = json.loads(profile.parameters) if isinstance(profile.parameters, str) else (profile.parameters or {})
+        except Exception:
+            profile_params = {}
+
+    symbols = [sym.strip() for sym in req.symbols if sym.strip()]
+    if not symbols:
+        return {"ok": False, "reason": "Aucun symbole sélectionné"}
+
+    symbols_label = ", ".join(symbols)
+    target_rs: list = list(profile_params.get("target_r_multiples", config.strategy.target_r_multiples) or [2.0, 3.0])
+    avg_r_win = float(target_rs[0]) if target_rs else 2.0
+
+    # ── Résolution de la plage de dates ──────────────────────────────────────
+    now_dt   = datetime.now(timezone.utc)
+    dur_map  = {
+        "1d": 1, "1w": 7, "1m": 30, "3m": 90,
+        "6m": 180, "1y": 365, "2y": 730, "4y": 1460,
+    }
+    days_back = dur_map.get(req.duration, None)
+    dt_from   = (now_dt - timedelta(days=days_back)) if days_back else None
+
+    # ── Chargement des timestamps 4H pour le walk-forward ────────────────────
+    primary_symbol = symbols[0]
+    with Session(engine) as s:
+        q4h = (
+            select(MarketCandle.timestamp)
+            .where(MarketCandle.symbol == primary_symbol, MarketCandle.timeframe == "4h")
+        )
+        if dt_from:
+            q4h = q4h.where(MarketCandle.timestamp >= dt_from)
+        q4h = q4h.order_by(MarketCandle.timestamp)
+        ts_list: list[datetime] = [row for row in s.exec(q4h).all()]
+
+    if not ts_list:
+        return {"ok": False, "reason": f"Aucune bougie 4H trouvée pour {primary_symbol} sur la période sélectionnée. Importez d'abord les données historiques."}
+
+    # Sous-échantillonnage : max 300 steps pour ne pas bloquer (1 step = 4H)
+    MAX_STEPS = 300
+    step = max(1, len(ts_list) // MAX_STEPS)
+    sampled_ts = ts_list[::step]
+    step_count = len(sampled_ts)
+
+    date_from_str = sampled_ts[0].strftime("%Y-%m-%d") if sampled_ts else ""
+    date_to_str   = sampled_ts[-1].strftime("%Y-%m-%d") if sampled_ts else ""
+
+    # ── Vérification disponibilité des bougies ────────────────────────────────
+    data_warning: str | None = None
+    with Session(engine) as s:
+        insufficient: list[str] = []
+        for tf in ("4h", "1h", "15m", "5m"):
+            count = s.exec(
+                select(func.count(MarketCandle.id))
+                .where(MarketCandle.symbol.in_(symbols), MarketCandle.timeframe == tf)
+            ).one()
+            if count < 100:
+                insufficient.append(f"{tf} ({count} bougies)")
+        if insufficient:
+            data_warning = (
+                f"Données insuffisantes pour : {', '.join(insufficient)}. "
+                f"Importez des bougies historiques (page Données) pour des métriques fiables."
+            )
+
+    global _active_backtests
+    with _active_backtests_lock:
+        _active_backtests += 1
+
+    wf_run_id = str(uuid.uuid4())
+    all_sig_ids: list[int] = []
+
+    try:
+        for idx, cutoff_ts in enumerate(sampled_ts):
+            step_run_id = f"{wf_run_id}_s{idx}"
+            # Run pipeline silently at this cutoff — stores signals in DB with step_run_id
+            _run_live_scan(
+                symbols, "MTF", profile_params,
+                pipeline_run_id=step_run_id,
+                profile_name=profile_name,
+                is_backtest=True,
+                cutoff_ts=cutoff_ts,
+                silent=True,
+            )
+            # Retrieve accepted signals from this step
+            with Session(engine) as s:
+                step_sigs = s.exec(
+                    select(Signal)
+                    .where(
+                        Signal.pipeline_run_id == step_run_id,
+                        Signal.accepted == True,  # noqa: E712
+                    )
+                ).all()
+
+                for sig in step_sigs:
+                    all_sig_ids.append(sig.id)
+                    if sig.entry_price and sig.sl_price and sig.tp_price:
+                        # Load next 96 × 5m candles after cutoff (= up to 8 hours)
+                        future_5m = s.exec(
+                            select(MarketCandle)
+                            .where(
+                                MarketCandle.symbol == sig.symbol,
+                                MarketCandle.timeframe == "5m",
+                                MarketCandle.timestamp > cutoff_ts,
+                            )
+                            .order_by(MarketCandle.timestamp)
+                            .limit(96)
+                        ).all()
+                        outcome = ta.resolve_outcome(
+                            future_5m,
+                            sig.direction or "LONG",
+                            sig.tp_price,
+                            sig.sl_price,
+                        )
+                        r_mult = avg_r_win if outcome == "win" else (-1.0 if outcome == "loss" else 0.0)
+                        sig.bt_outcome     = outcome
+                        sig.bt_r_multiple  = r_mult
+                        s.add(sig)
+
+                # Also collect rejected signal IDs for the report
+                rej_sigs = s.exec(
+                    select(Signal.id)
+                    .where(
+                        Signal.pipeline_run_id == step_run_id,
+                        Signal.accepted == False,  # noqa: E712
+                    )
+                ).all()
+                all_sig_ids.extend(list(rej_sigs))
+                s.commit()
+
+    finally:
+        with _active_backtests_lock:
+            _active_backtests = max(0, _active_backtests - 1)
+
+    # ── Agrégation des métriques sur tous les signaux walk-forward ────────────
+    with Session(engine) as s:
+        all_sigs = s.exec(
+            select(Signal)
+            .where(Signal.id.in_(all_sig_ids))
+            .order_by(Signal.timestamp)
+        ).all() if all_sig_ids else []
+
+    accepted_sigs = [sg for sg in all_sigs if sg.accepted]
+    wins     = [sg for sg in accepted_sigs if sg.bt_outcome == "win"]
+    losses   = [sg for sg in accepted_sigs if sg.bt_outcome == "loss"]
+    timeouts = [sg for sg in accepted_sigs if sg.bt_outcome == "timeout"]
+    n_total  = len(accepted_sigs)  # only accepted signals are judged for WR
+
+    win_rate      = len(wins) / n_total if n_total > 0 else 0.0
+    gross_profit  = sum(sg.bt_r_multiple or 0.0 for sg in wins)
+    gross_loss    = abs(sum(sg.bt_r_multiple or 0.0 for sg in losses))
+    profit_factor = gross_profit / max(gross_loss, 0.001) if gross_loss > 0 else float(gross_profit)
+    expectancy    = sum(sg.bt_r_multiple or 0.0 for sg in accepted_sigs) / max(n_total, 1)
+    r_multiple    = sum(sg.bt_r_multiple or 0.0 for sg in accepted_sigs)
+
+    equity = 0.0
+    peak   = 0.0
+    max_dd = 0.0
+    for sg in accepted_sigs:
+        equity += (sg.bt_r_multiple or 0.0)
+        if equity > peak:
+            peak = equity
+        if peak > 0:
+            dd = (peak - equity) / peak
+            if dd > max_dd:
+                max_dd = dd
+    drawdown = max_dd
+
+    # Breakdown des rejets
+    reject_counts: dict[str, int] = {}
+    for sg in all_sigs:
+        if not sg.accepted and sg.reject_reason:
+            key = sg.reject_reason.split("(")[0].strip()
+            reject_counts[key] = reject_counts.get(key, 0) + 1
+    top_rejects = sorted(reject_counts.items(), key=lambda x: -x[1])[:5]
+
+    with Session(engine) as s:
+        # ── T2 : unifier tous les pipeline_run_id sur wf_run_id ──────────────
+        if all_sig_ids:
+            s.exec(  # type: ignore[call-overload]
+                update(Signal)
+                .where(Signal.id.in_(all_sig_ids))
+                .values(pipeline_run_id=wf_run_id)
+            )
 
         result = BacktestResult(
-            symbol=req.symbol,
-            timeframe=req.timeframe,
-            strategy_version=profile.name if profile else "default-smc",
-            win_rate=metrics.win_rate,
-            profit_factor=metrics.profit_factor,
-            expectancy=metrics.expectancy,
-            drawdown=metrics.drawdown,
-            r_multiple=metrics.r_multiple,
+            symbol=symbols_label,
+            timeframe="MTF",
+            strategy_version=profile_name,
+            win_rate=win_rate,
+            profit_factor=profit_factor,
+            expectancy=expectancy,
+            drawdown=drawdown,
+            r_multiple=r_multiple,
+            pipeline_run_id=wf_run_id,
+            signal_count=n_total,
+            step_count=step_count,
+            date_from=date_from_str,
+            date_to=date_to_str,
+            profile_id=req.profile_id,
+            overrides_json=json.dumps(config.backtest.overrides.model_dump()),
         )
         s.add(result)
-        report = (
-            f"# Backtest Report\n"
-            f"- Symbol: {req.symbol}\n"
-            f"- Timeframe: {req.timeframe}\n"
-            f"- Horizon: {req.horizon_days} days\n"
-            f"- Strategy: {result.strategy_version}\n"
-            f"- Win rate: {metrics.win_rate:.2%}\n"
-            f"- Profit factor: {metrics.profit_factor:.2f}\n"
-            f"- Drawdown: {metrics.drawdown:.2%}\n"
-            f"- Expectancy: {metrics.expectancy:.4f}\n"
-            f"- R multiple: {metrics.r_multiple:.2f}R\n"
-        )
-        s.add(Log(level="INFO", message=f"Backtest report generated for {req.symbol} using {result.strategy_version}"))
+        s.add(Log(level="INFO", message=(
+            f"Walk-forward [{symbols_label}] — {profile_name}: "
+            f"{len(wins)}/{n_total} wins | WR={win_rate:.1%} | PF={profit_factor:.2f} | "
+            f"R={r_multiple:.2f} | Steps={step_count}"
+        )))
         s.commit()
         s.refresh(result)
 
-    now = datetime.now(timezone.utc)
-    n_trades = len(outcomes)
-    interval = timedelta(days=req.horizon_days) / max(n_trades, 1)
-    trades = []
-    for i, r_val in enumerate(outcomes):
-        direction = random.choice(["LONG", "SHORT"])
-        trades.append({
-            "index": i + 1,
-            "direction": direction,
-            "outcome": "win" if r_val > 0 else "loss",
-            "r_multiple": round(r_val, 4),
-            "timestamp": (now - timedelta(days=req.horizon_days) + interval * i).isoformat(),
-        })
+    reject_lines = "\n".join(f"  - {cnt}x {r}" for r, cnt in top_rejects)
+    report = (
+        f"# Walk-Forward Backtest Report\n"
+        f"- Symboles: {symbols_label}\n"
+        f"- Période: {date_from_str} → {date_to_str} ({req.duration})\n"
+        f"- Steps 4H évalués: {step_count}\n"
+        f"- Timeframe: MTF (4H→1H→15m→5m)\n"
+        f"- Strategy: {profile_name}\n"
+        f"- Run ID: {wf_run_id[:8]}…\n"
+        f"- Signaux acceptés: {n_total}\n"
+        f"- Wins: {len(wins)} | Losses: {len(losses)} | Timeouts: {len(timeouts)}\n"
+        f"- Win rate: {win_rate:.2%}\n"
+        f"- Profit factor: {profit_factor:.2f}\n"
+        f"- Drawdown max: {drawdown:.2%}\n"
+        f"- Expectancy: {expectancy:.4f}R\n"
+        f"- R total: {r_multiple:.2f}R\n"
+        + (f"\n⚠️ {data_warning}\n" if data_warning else "")
+        + f"\n## Top rejections:\n{reject_lines or '  Aucun'}\n"
+        + f"\n## Signaux acceptés ({n_total}):\n"
+        + "\n".join(
+            f"  - {sg.symbol}: {sg.bt_outcome or '?'} {sg.bt_r_multiple:+.2f}R | {sg.direction} | {sg.wyckoff_event}"
+            for sg in accepted_sigs
+        )
+    )
 
-    return {"ok": True, "result": result.model_dump(), "report": report, "trades": trades}
+    trades = [
+        {
+            "index":      i + 1,
+            "symbol":     sg.symbol,
+            "direction":  sg.direction or "LONG",
+            "outcome":    sg.bt_outcome or "timeout",
+            "r_multiple": round(sg.bt_r_multiple or 0.0, 4),
+            "timestamp":  sg.timestamp.isoformat() if sg.timestamp else "",
+            "reason":     sg.reject_reason or "",
+            "entry":      sg.entry_price,
+            "sl":         sg.sl_price,
+            "tp":         sg.tp_price,
+        }
+        for i, sg in enumerate(accepted_sigs)
+    ]
+
+    return {
+        "ok":           True,
+        "result":       result.model_dump(),
+        "report":       report,
+        "trades":       trades,
+        "data_warning": data_warning,
+        "step_count":   step_count,
+        "date_from":    date_from_str,
+        "date_to":      date_to_str,
+    }
 
 
 @router.post("/backtest")
 def run_backtest(outcomes_r: list[float]) -> dict:
     return backtesting.run(outcomes_r).__dict__
+
+
+class ReplayStartRequest(BaseModel):
+    symbol: str = Field(min_length=2, max_length=20)
+    date_start: str
+    date_end: str
+    profile_id: int | None = None
+    htf_long_min_bias: str | None = None
+    htf_short_min_bias: str | None = None
+    tf1h_short_min_bias: str | None = None
+    tf1h_long_min_bias: str | None = None
+
+
+@router.post("/backtest/replay/start")
+def replay_start(req: ReplayStartRequest) -> dict:
+    from backend.app.services.replay_engine import replay_manager
+    from datetime import datetime as _dt, timezone as _tz
+    import json as _json
+
+    try:
+        ds = _dt.fromisoformat(req.date_start.replace("Z", "+00:00"))
+        de = _dt.fromisoformat(req.date_end.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            ds = _dt.strptime(req.date_start, "%Y-%m-%d").replace(tzinfo=_tz.utc)
+            de = _dt.strptime(req.date_end, "%Y-%m-%d").replace(tzinfo=_tz.utc)
+        except ValueError:
+            return {"ok": False, "reason": "Format de date invalide. Utilisez YYYY-MM-DD."}
+
+    if ds >= de:
+        return {"ok": False, "reason": "date_start doit être avant date_end."}
+
+    fib_levels = [0.5, 0.618, 0.705]
+    rr_ratio = 2.0
+    htf_long_min_bias = req.htf_long_min_bias or "neutral"
+    htf_short_min_bias = req.htf_short_min_bias or "SHORT"
+    tf1h_short_min_bias = req.tf1h_short_min_bias or "neutral"
+    tf1h_long_min_bias = req.tf1h_long_min_bias or "neutral"
+
+    if req.profile_id:
+        with Session(engine) as s:
+            prof = s.get(StrategyProfile, req.profile_id)
+            if prof:
+                try:
+                    params = _json.loads(prof.parameters) if isinstance(prof.parameters, str) else prof.parameters
+                    fib_levels = params.get("fib_levels", fib_levels)
+                    rr_ratio = float(params.get("take_profit_rr", rr_ratio))
+                    if req.htf_long_min_bias is None:
+                        htf_long_min_bias = params.get("htf_long_min_bias", htf_long_min_bias)
+                    if req.htf_short_min_bias is None:
+                        htf_short_min_bias = params.get("htf_short_min_bias", htf_short_min_bias)
+                    if req.tf1h_short_min_bias is None:
+                        tf1h_short_min_bias = params.get("tf1h_short_min_bias", tf1h_short_min_bias)
+                    if req.tf1h_long_min_bias is None:
+                        tf1h_long_min_bias = params.get("tf1h_long_min_bias", tf1h_long_min_bias)
+                except Exception:
+                    pass
+
+    session_id = replay_manager.start(
+        symbol=req.symbol.strip().upper(),
+        date_start=ds,
+        date_end=de,
+        fib_levels=fib_levels,
+        rr_ratio=rr_ratio,
+        htf_long_min_bias=htf_long_min_bias,
+        htf_short_min_bias=htf_short_min_bias,
+        tf1h_short_min_bias=tf1h_short_min_bias,
+        tf1h_long_min_bias=tf1h_long_min_bias,
+    )
+    if session_id is None:
+        return {"ok": False, "reason": "Trop de replays en cours. Réessayez dans quelques instants."}
+    return {"ok": True, "session_id": session_id}
+
+
+@router.get("/backtest/replay/status/{session_id}")
+def replay_status(session_id: str) -> dict:
+    from backend.app.services.replay_engine import replay_manager
+
+    result = replay_manager.get_status(session_id)
+    if result is None:
+        return {"ok": False, "reason": "Session introuvable."}
+    return {"ok": True, **result}
 
 
 class WalkForwardRequest(BaseModel):
@@ -1215,12 +1696,65 @@ def run_walkforward(req: WalkForwardRequest) -> dict:
         rr_ratio=rr_ratio,
     )
 
+    # ── Persist BacktestResult + Signals ──────────────────────────────────────
+    import uuid as _uuid
+    wf_run_id = f"wf-{req.symbol.lower()}-{_uuid.uuid4().hex[:8]}"
+
+    profile_name_label = profile.name if req.profile_id and profile else "SMC/Wyckoff — yfinance"
+    gross_win  = sum(s.r_multiple for s in result.signals if s.result == "win")
+    gross_loss = sum(abs(s.r_multiple) for s in result.signals if s.result == "loss")
+    wins   = [s for s in result.signals if s.result == "win"]
+    losses = [s for s in result.signals if s.result == "loss"]
+    _wr    = result.win_rate
+    _pf    = result.profit_factor
+    _exp   = (_wr * (gross_win / len(wins) if wins else 0) - (1 - _wr) * (gross_loss / len(losses) if losses else 0))
+    _rmult = (gross_win / len(wins)) if wins else 0
+    _bt = BacktestResult(
+        symbol=req.symbol, timeframe=req.timeframe,
+        strategy_version=profile_name_label,
+        win_rate=round(_wr, 4), profit_factor=round(_pf, 4),
+        expectancy=round(_exp, 4), drawdown=round(result.max_drawdown, 4),
+        r_multiple=round(_rmult, 4),
+        signal_count=result.total_signals,
+        date_from=str(result.period_start)[:10] if result.period_start else None,
+        date_to=str(result.period_end)[:10] if result.period_end else None,
+        profile_id=req.profile_id,
+        overrides_json=json.dumps(config.backtest.overrides.model_dump()),
+        pipeline_run_id=wf_run_id,
+    )
     with Session(engine) as s:
+        s.add(_bt)
+        for sig in result.signals:
+            try:
+                ts = datetime.fromisoformat(str(sig.timestamp).replace("Z", "+00:00")) if sig.timestamp else datetime.now(timezone.utc)
+            except Exception:
+                ts = datetime.now(timezone.utc)
+            s.add(Signal(
+                timestamp=ts,
+                symbol=req.symbol,
+                timeframe=req.timeframe,
+                setup_type="SMC/Wyckoff",
+                liquidity_zone="wf",
+                sweep_level=sig.entry_price or 0.0,
+                bos_level=sig.entry_price or 0.0,
+                fib_zone="0.618",
+                accepted=True,
+                direction=sig.direction,
+                entry_price=sig.entry_price,
+                tp_price=sig.tp_price,
+                sl_price=sig.sl_price,
+                bt_outcome="win" if sig.result in ("TP", "win") else ("loss" if sig.result in ("SL", "loss") else sig.result),
+                bt_r_multiple=sig.r_multiple,
+                pipeline_run_id=wf_run_id,
+                mode="backtest",
+            ))
         s.add(Log(level="INFO", message=f"Walk-forward {req.symbol} {req.timeframe} {req.years}y: {result.total_signals} signals, WR {result.win_rate:.2%}, PF {result.profit_factor:.2f}"))
         s.commit()
+        s.refresh(_bt)
 
     return {
         "ok": True,
+        "backtest_id": _bt.id,
         "signals": [
             {
                 "timestamp": sig.timestamp,
@@ -1275,7 +1809,13 @@ PIPELINE_STEPS = [
 ]
 
 _pipeline: dict[str, dict] = {}
+_pipeline_runs_state: dict[str, dict[str, dict]] = {}
+_pipeline_current_run_id: str | None = None
 _pipeline_lock = threading.Lock()
+
+# ── Active backtest counter ────────────────────────────────────────────────────
+_active_backtests     = 0
+_active_backtests_lock = threading.Lock()
 
 # ── Autonomous scanner state ───────────────────────────────────────────────────
 _auto_lock  = threading.Lock()
@@ -1325,12 +1865,15 @@ def _autonomous_worker() -> None:
 
         # ── Run scan ──────────────────────────────────────────────────────────
         profile_params: dict = {}
+        profile_name: str = "SMC/Wyckoff"
         if pid is not None:
             try:
                 with Session(engine) as s:
                     prof = s.get(StrategyProfile, pid)
-                    if prof and prof.parameters:
-                        profile_params = json.loads(prof.parameters)
+                    if prof:
+                        profile_name = prof.name
+                        if prof.parameters:
+                            profile_params = json.loads(prof.parameters)
             except Exception:
                 pass
 
@@ -1339,8 +1882,25 @@ def _autonomous_worker() -> None:
         run_now = datetime.now(timezone.utc)
 
         # ── Full 7-step SMC/Wyckoff pipeline with 4H→1H→15m hierarchy ────────
+        auto_run_id: str | None = None
         try:
-            _run_live_scan(symbols, tf, profile_params)
+            with Session(engine) as s:
+                auto_run = PipelineRun(
+                    mode="paper",
+                    source="autonomous",
+                    symbols_json=json.dumps(symbols),
+                    timeframe=tf,
+                    profile_id=pid,
+                    total_count=len(symbols),
+                )
+                s.add(auto_run)
+                s.commit()
+                s.refresh(auto_run)
+                auto_run_id = auto_run.run_id
+        except Exception:
+            pass
+        try:
+            _run_live_scan(symbols, tf, profile_params, auto_run_id, profile_name)
         except Exception as exc:
             results = [{"symbol": sym, "status": "ERROR", "signal": "—",
                         "session": "?", "details": str(exc), "ts": run_now.isoformat()}
@@ -1497,10 +2057,135 @@ def autonomous_status() -> dict:
     return {**state, "seconds_to_next": seconds_to_next}
 
 
+@router.get("/system/processes")
+def system_processes() -> dict:
+    """Snapshot en temps réel de tous les processus actifs."""
+    with _auto_lock:
+        scanner = dict(_auto_state)
+    now = datetime.now(timezone.utc)
+
+    seconds_to_next: int | None = None
+    if scanner["next_run_at"] and scanner["running"]:
+        try:
+            diff = (datetime.fromisoformat(scanner["next_run_at"]) - now).total_seconds()
+            seconds_to_next = max(0, int(diff))
+        except Exception:
+            pass
+
+    # Pipeline symbols en cours (statut non terminé)
+    with _pipeline_lock:
+        in_progress = [
+            sym for sym, data in _pipeline.items()
+            if not data.get("completed_at")
+        ]
+
+    with _active_backtests_lock:
+        active_bt = _active_backtests
+
+    # Mode live / paper
+    mode = config.system.mode
+
+    processes = []
+
+    # ── Scanner autonome (paper/live)
+    if scanner["running"]:
+        processes.append({
+            "id":     "scanner",
+            "type":   "scanner",
+            "label":  f"Scanner {mode.upper()}",
+            "status": "running",
+            "detail": f"{', '.join(scanner['symbols'][:3])} · {scanner['timeframe']} · toutes les {scanner['interval_minutes']}min",
+            "seconds_to_next": seconds_to_next,
+            "run_count": scanner.get("run_count", 0),
+        })
+    else:
+        processes.append({
+            "id":     "scanner",
+            "type":   "scanner",
+            "label":  "Scanner",
+            "status": "stopped",
+            "detail": "Aucun scanner actif",
+            "seconds_to_next": None,
+            "run_count": 0,
+        })
+
+    # ── Pipeline live (symboles en cours)
+    if in_progress:
+        processes.append({
+            "id":     "pipeline",
+            "type":   "pipeline",
+            "label":  "Pipeline Live",
+            "status": "running",
+            "detail": f"Analyse en cours: {', '.join(in_progress[:5])}",
+            "seconds_to_next": None,
+            "run_count": len(in_progress),
+        })
+
+    # ── Backtests actifs
+    if active_bt > 0:
+        processes.append({
+            "id":     "backtest",
+            "type":   "backtest",
+            "label":  "Backtest",
+            "status": "running",
+            "detail": f"{active_bt} backtest(s) en cours",
+            "seconds_to_next": None,
+            "run_count": active_bt,
+        })
+
+    # ── Live trading
+    if mode == "live":
+        processes.append({
+            "id":     "live",
+            "type":   "live",
+            "label":  "Trading Live",
+            "status": "running",
+            "detail": f"Mode LIVE actif",
+            "seconds_to_next": None,
+            "run_count": 0,
+        })
+
+    # ── Active imports
+    now_ts = time.time()
+    with _active_imports_lock:
+        expired_keys = [k for k, v in _active_imports.items() if v.get("completed_at") and now_ts - v["completed_at"] > 30]
+        for k in expired_keys:
+            del _active_imports[k]
+
+        for job_id, job in _active_imports.items():
+            page = job.get("page", 0)
+            total_pages = job.get("total_pages", 0)
+            candles_count = job.get("candles", 0)
+            pct = round(page / max(total_pages, 1) * 100) if total_pages > 0 else 0
+            processes.append({
+                "id":     f"import-{job_id[:8]}",
+                "type":   "import",
+                "label":  f"Import {job['symbol']} {job['tf']}",
+                "status": job["status"] if job["status"] in ("running", "done", "error") else "running",
+                "detail": f"{job['symbol']} {job['tf']} — {page}/{total_pages} pages ({candles_count} bougies)" if job["status"] == "running" else (
+                    f"{job['symbol']} {job['tf']} — {candles_count} bougies, {job.get('inserted', 0)} insérées" if job["status"] == "done" else
+                    f"{job['symbol']} {job['tf']} — Erreur: {job.get('error', '?')}"
+                ),
+                "pct_done": pct if job["status"] == "running" else (100 if job["status"] == "done" else pct),
+                "seconds_to_next": None,
+                "run_count": candles_count,
+            })
+
+    total_running = sum(1 for p in processes if p["status"] == "running")
+
+    return {
+        "processes":     processes,
+        "total_running": total_running,
+        "mode":          mode,
+        "timestamp":     now.isoformat(),
+    }
+
+
 class PipelineRunRequest(BaseModel):
     symbols: list[str] = Field(min_length=1)
-    timeframe: str = "1h"
+    timeframe: str = "MTF"
     profile_id: int | None = None
+    mode: str = "paper"
 
 
 def _set_step(symbol: str, idx: int, status: str, detail: str = "") -> None:
@@ -1512,7 +2197,73 @@ def _set_step(symbol: str, idx: int, status: str, detail: str = "") -> None:
             step["detail"] = detail
 
 
-def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict) -> None:
+def _get_last_price(symbol: str) -> float:
+    """
+    Retourne le dernier prix de clôture réel pour le symbole.
+    Priorité : 1) dernière bougie MarketCandle en DB
+               2) yfinance (1 bougie horaire)
+               3) fallback simulé rng.uniform(80, 120)
+    """
+    try:
+        with Session(engine) as s:
+            candle = s.exec(
+                select(MarketCandle)
+                .where(MarketCandle.symbol == symbol)
+                .order_by(MarketCandle.timestamp.desc())  # type: ignore[arg-type]
+                .limit(1)
+            ).first()
+            if candle and candle.close and candle.close > 0:
+                return round(candle.close, 4)
+    except Exception:
+        pass
+
+    try:
+        from backend.app.services.candle_importer import YF_TICKER_MAP
+        import yfinance as yf
+        ticker = YF_TICKER_MAP.get(symbol.upper(), symbol.upper().replace("USDT", "-USD"))
+        df = yf.download(ticker, period="1d", interval="1h", progress=False, auto_adjust=True)
+        if not df.empty:
+            if hasattr(df.columns, "get_level_values"):
+                import pandas as pd
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+            last_close = float(df["Close"].iloc[-1])
+            if last_close > 0:
+                return round(last_close, 4)
+    except Exception:
+        pass
+
+    rng_fallback = random.Random()
+    return round(rng_fallback.uniform(80, 120), 4)
+
+
+def _load_candles(symbol: str, tf: str, n: int, cutoff_ts: Optional[datetime] = None) -> list:
+    """
+    Load the last N candles for symbol/tf from DB (returned in chronological order).
+    If cutoff_ts is given, only candles with timestamp <= cutoff_ts are returned.
+    """
+    with Session(engine) as s:
+        q = (
+            select(MarketCandle)
+            .where(MarketCandle.symbol == symbol, MarketCandle.timeframe == tf)
+        )
+        if cutoff_ts is not None:
+            q = q.where(MarketCandle.timestamp <= cutoff_ts)
+        q = q.order_by(MarketCandle.timestamp.desc()).limit(n)
+        rows = s.exec(q).all()
+    return list(reversed(rows))  # chronological (oldest → newest)
+
+
+def _run_live_scan(
+    symbols: list[str],
+    timeframe: str,
+    profile_params: dict,
+    pipeline_run_id: str | None = None,
+    profile_name: str = "SMC/Wyckoff",
+    is_backtest: bool = False,
+    cutoff_ts: Optional[datetime] = None,
+    silent: bool = False,
+) -> None:
     """
     Pipeline live SMC/Wyckoff conforme au cahier des charges.
     - Séquence en 7 étapes strictes et obligatoires
@@ -1522,6 +2273,25 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict) -> 
     - Tous les résultats (acceptés ET rejetés) persistés en DB
     - TradeJournal loggé pour chaque décision
     """
+    # ── Mode du signal (pour filtrage dans la page Signaux) ───────────────────
+    signal_mode: str = "backtest" if is_backtest else config.mode
+
+    # ── En mode backtest, surcharge via config.backtest.overrides ─────────────
+    bt_ov = config.backtest.overrides
+    if is_backtest and bt_ov.enabled:
+        _bt_defaults = {
+            "displacement_threshold":    bt_ov.displacement_threshold,
+            "displacement_atr_min":      bt_ov.displacement_atr_min,
+            "displacement_vol_min":      bt_ov.displacement_vol_min,
+            "bos_sensitivity":           bt_ov.bos_sensitivity,
+            "bos_close_confirmation":    bt_ov.bos_close_confirmation,
+            "volume_multiplier_active":  bt_ov.volume_multiplier_active,
+            "volume_multiplier_offpeak": bt_ov.volume_multiplier_offpeak,
+            "use_5m_refinement":         bt_ov.use_5m_refinement,
+            "allow_weekend_trading":     bt_ov.allow_weekend_trading,
+        }
+        profile_params = {**_bt_defaults, **profile_params}
+
     disp_threshold  = float(profile_params.get("displacement_threshold", config.strategy.displacement_threshold))
     bos_sens        = int(profile_params.get("bos_sensitivity", config.strategy.bos_sensitivity))
     htf_required    = bool(profile_params.get("htf_alignment_required", config.strategy.htf_alignment_required))
@@ -1537,37 +2307,64 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict) -> 
     use_5m_refine   = bool(profile_params.get("use_5m_refinement", config.strategy.use_5m_refinement))
     bos_close_conf  = bool(profile_params.get("bos_close_confirmation", config.strategy.bos_close_confirmation))
     fib_split       = bool(profile_params.get("fib_entry_split", config.strategy.fib_entry_split))
+    wyckoff_lookback = bt_ov.wyckoff_lookback if (is_backtest and bt_ov.enabled) else 5
 
     rng = random.Random()
     now = datetime.now(timezone.utc)
 
     # ── Session / Weekend filter (filtre, pas signal) ────────────────────────
-    tradeable, session_reason = session_filter.is_tradeable(now, config.session, allow_weekend=allow_weekend)
-    current_session = session_filter.session_name(now, config.session)
+    if is_backtest:
+        tradeable, session_reason = True, "Backtest — filtre session/weekend désactivé"
+        current_session = session_filter.session_name(now, config.session)
+    else:
+        tradeable, session_reason = session_filter.is_tradeable(now, config.session, allow_weekend=allow_weekend)
+        current_session = session_filter.session_name(now, config.session)
+
+    run_state: dict[str, dict] = {}
+    if pipeline_run_id:
+        with _pipeline_lock:
+            _pipeline_runs_state[pipeline_run_id] = run_state
 
     for symbol in symbols:
+        entry = {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "started_at": now.isoformat(),
+            "final_status": None,
+            "final_direction": None,
+            "final_reason": None,
+            "session": current_session,
+            "tf_4h_structure": None,
+            "tf_1h_validation": None,
+            "steps": [
+                {"name": n, "status": "pending", "completed_at": None, "detail": ""}
+                for n in PIPELINE_STEPS
+            ],
+        }
         with _pipeline_lock:
-            _pipeline[symbol] = {
-                "symbol": symbol,
-                "timeframe": timeframe,
-                "started_at": now.isoformat(),
-                "final_status": None,
-                "final_direction": None,
-                "final_reason": None,
-                "session": current_session,
-                "tf_4h_structure": None,
-                "tf_1h_validation": None,
-                "steps": [
-                    {"name": n, "status": "pending", "completed_at": None, "detail": ""}
-                    for n in PIPELINE_STEPS
-                ],
-            }
+            _pipeline[symbol] = entry
+            run_state[symbol] = entry
 
         def reject(reason: str, sym: str = symbol) -> None:
             with _pipeline_lock:
                 _pipeline[sym]["final_status"] = "rejected"
                 _pipeline[sym]["final_reason"] = reason
                 _pipeline[sym]["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+        # ── Chargement des bougies réelles depuis la DB ───────────────────────
+        candles_4h  = _load_candles(symbol, "4h",  60, cutoff_ts)
+        candles_1h  = _load_candles(symbol, "1h",  40, cutoff_ts)
+        candles_15m = _load_candles(symbol, "15m", 80, cutoff_ts)
+        candles_5m  = _load_candles(symbol, "5m",  50, cutoff_ts) if use_5m_refine else []
+
+        # Prix de référence réel pour ce symbole (dernière bougie 15m ou 5m si disponible)
+        if candles_15m:
+            base_price = round(candles_15m[-1].close, 6)
+        elif candles_4h:
+            base_price = round(candles_4h[-1].close, 6)
+        else:
+            base_price = _get_last_price(symbol)
+        sweep_price: float = 0.0
 
         try:
             # ── Pre-flight: Session / Weekend ────────────────────────────────
@@ -1576,212 +2373,215 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict) -> 
                 with Session(engine) as s:
                     s.add(Signal(
                         symbol=symbol, timeframe=timeframe,
-                        setup_type="SMC/Wyckoff", liquidity_zone="N/A",
+                        setup_type=profile_name, liquidity_zone="N/A",
                         sweep_level=0, bos_level=0, fib_zone="N/A",
                         accepted=False, reject_reason=session_reason,
                         session_name=current_session,
+                        pipeline_run_id=pipeline_run_id,
                     ))
                     s.add(Log(level="INFO", message=f"[Pipeline] {symbol} rejeté — {session_reason}"))
                     s.commit()
                 continue
 
             # ── Pre-flight: Multi-timeframe (4H structure / 1H validation) ── IA opt ①
-            time.sleep(rng.uniform(0.1, 0.2))
-            tf4h_structures = ["Bullish", "Bearish", "Neutre / Range"]
-            # Distribuer les probabilités : 40% Bullish, 40% Bearish, 20% Neutre
-            tf4h = rng.choices(tf4h_structures, weights=[40, 40, 20])[0]
-            tf1h_valid = rng.random() > 0.25
+            if not silent:
+                time.sleep(rng.uniform(0.1, 0.2))
+            tf4h       = ta.detect_structure(candles_4h)
+            tf1h_valid = ta.validate_htf_1h(candles_1h, tf4h)
             tf1h = "Aligné avec 4H" if tf1h_valid else "Divergent — 4H et 1H en conflit"
-            with _pipeline_lock:
-                _pipeline[symbol]["tf_4h_structure"] = f"4H: {tf4h}"
-                _pipeline[symbol]["tf_1h_validation"] = f"1H: {tf1h}"
+            if not silent:
+                with _pipeline_lock:
+                    _pipeline[symbol]["tf_4h_structure"] = f"4H: {tf4h}"
+                    _pipeline[symbol]["tf_1h_validation"] = f"1H: {tf1h}"
 
             # Filtre HTF obligatoire : bloquer Neutre/Range (pas de structure claire)
             if htf_required and tf4h == "Neutre / Range":
                 reason_htf = "4H Neutre/Range — pas de biais directionnel clair"
                 reject(reason_htf)
-                _persist_reject(symbol, timeframe, reason_htf, current_session, tf4h, tf1h)
+                _persist_reject(symbol, timeframe, reason_htf, current_session, tf4h, tf1h, pipeline_run_id=pipeline_run_id, profile_name=profile_name, mode=signal_mode)
                 continue
 
-            if not tf1h_valid:
+            _skip_htf1h = is_backtest and bt_ov.enabled and bt_ov.skip_htf_1h_validation
+            if not tf1h_valid and not _skip_htf1h:
                 reject(f"Multi-TF invalide: {tf4h} (4H) ↔ {tf1h}")
                 with Session(engine) as s:
                     s.add(Signal(
                         symbol=symbol, timeframe=timeframe,
-                        setup_type="SMC/Wyckoff", liquidity_zone="N/A",
+                        setup_type=profile_name, liquidity_zone="N/A",
                         sweep_level=0, bos_level=0, fib_zone="N/A",
                         accepted=False,
                         reject_reason=f"1H diverge du 4H ({tf4h})",
                         tf_4h_structure=tf4h, tf_1h_validation=tf1h,
                         session_name=current_session,
+                        pipeline_run_id=pipeline_run_id,
                     ))
                     s.commit()
                 continue
 
-            # ── Step 0 — Zone de liquidité ───────────────────────────────────
-            _pipeline[symbol]["steps"][0]["status"] = "checking"
-            time.sleep(rng.uniform(0.3, 0.6))
-            liq_ok = rng.random() > 0.12
-            zone_type = rng.choice(["HOD", "LOD", "Equal Highs", "Equal Lows", "Weekly High", "Weekly Low"])
-            _set_step(symbol, 0, "passed" if liq_ok else "failed",
-                      f"Zone {zone_type} identifiée ({tf4h})" if liq_ok else "Aucune zone de liquidité notable")
+            # ── Step 0 — Zone de liquidité (analyse bougies réelles 15m) ────────
+            if not silent:
+                _pipeline[symbol]["steps"][0]["status"] = "checking"
+                time.sleep(rng.uniform(0.05, 0.12))
+            zone_type, zone_price_detected, is_high_zone = ta.detect_liquidity_zone(candles_15m)
+            liq_ok = zone_price_detected > 0 and bool(zone_type)
+            if not silent:
+                _set_step(symbol, 0, "passed" if liq_ok else "failed",
+                          f"Zone {zone_type} identifiée @ {zone_price_detected:.2f} ({tf4h})" if liq_ok
+                          else "Aucune zone de liquidité notable")
             if not liq_ok:
                 reject("Pas de zone de liquidité identifiable")
-                _persist_reject(symbol, timeframe, "Pas de zone de liquidité", current_session, tf4h, tf1h)
+                _persist_reject(symbol, timeframe, "Pas de zone de liquidité", current_session, tf4h, tf1h, pipeline_run_id=pipeline_run_id, profile_name=profile_name, liquidity_zone=zone_type, mode=signal_mode)
                 continue
 
-            # ── Step 1 — Sweep (avec détection equal highs/lows) ────────────
-            _pipeline[symbol]["steps"][1]["status"] = "checking"
-            time.sleep(rng.uniform(0.3, 0.5))
-            sweep_ok = rng.random() > 0.20
+            # ── Step 1 — Sweep (détection réelle wick/clôture) ──────────────
+            if not silent:
+                _pipeline[symbol]["steps"][1]["status"] = "checking"
+                time.sleep(rng.uniform(0.05, 0.10))
+            sweep_ok, sweep_price = ta.detect_sweep(candles_15m, zone_price_detected, is_high_zone)
             equal_hl = "Equal" in zone_type
             sweep_type = ("Sweep d'equal highs" if zone_type == "Equal Highs"
                          else "Sweep d'equal lows" if zone_type == "Equal Lows"
                          else "Sweep de zone de liquidité")
-            _set_step(symbol, 1, "passed" if sweep_ok else "failed",
-                      f"{sweep_type} confirmé" if sweep_ok else "Pas de sweep détecté")
+            if not silent:
+                _set_step(symbol, 1, "passed" if sweep_ok else "failed",
+                          f"{sweep_type} confirmé @ {sweep_price:.4f}" if sweep_ok else "Pas de sweep détecté")
             if not sweep_ok:
                 reject("Sweep liquidity absent")
-                _persist_reject(symbol, timeframe, "Sweep liquidity absent", current_session, tf4h, tf1h)
+                _persist_reject(symbol, timeframe, "Sweep liquidity absent", current_session, tf4h, tf1h, pipeline_run_id=pipeline_run_id, profile_name=profile_name, liquidity_zone=zone_type, sweep_level=sweep_price, mode=signal_mode)
                 continue
 
-            # ── Step 2 — Spring / UTAD + fake breakout + alignement HTF ── IA opt ①
-            _pipeline[symbol]["steps"][2]["status"] = "checking"
-            time.sleep(rng.uniform(0.4, 0.7))
-            spring = rng.random() > 0.35
-            utad = not spring and rng.random() > 0.40
-            wyckoff_ok = spring or utad
-            direction: str | None = "LONG" if spring else ("SHORT" if utad else None)
-            fake_breakout = wyckoff_ok and rng.random() > 0.30
-            wyckoff_event = "Spring bullish" if spring else ("UTAD bearish" if utad else "Aucun")
-            fb_label = " + fake breakout confirmé" if fake_breakout else ""
-            detail_wyk = (
+            # ── Step 2 — Spring / UTAD (Wyckoff — bougies 15m réelles) ── IA opt ①
+            if not silent:
+                _pipeline[symbol]["steps"][2]["status"] = "checking"
+                time.sleep(rng.uniform(0.05, 0.12))
+            enable_spring = bool(profile_params.get("enable_spring", True))
+            enable_utad   = bool(profile_params.get("enable_utad", True))
+            spring, utad, direction, wyckoff_event = ta.detect_wyckoff(
+                candles_15m, tf4h,
+                enable_spring=enable_spring,
+                enable_utad=enable_utad,
+                lookback=wyckoff_lookback,
+            )
+            wyckoff_ok  = spring or utad
+            fake_breakout = wyckoff_ok  # Spring/UTAD IS a fake breakout by definition
+            fb_label    = " + fake breakout confirmé" if fake_breakout else ""
+            detail_wyk  = (
                 f"Spring bullish{fb_label} — faux cassage sous la zone d'accumulation" if spring
                 else f"UTAD bearish{fb_label} — faux cassage au-dessus de la distribution" if utad
-                else "Ni Spring ni UTAD détecté"
+                else "Ni Spring ni UTAD détecté sur les 12 dernières bougies 15m"
             )
-            _set_step(symbol, 2, "passed" if wyckoff_ok else "failed", detail_wyk)
+            if not silent:
+                _set_step(symbol, 2, "passed" if wyckoff_ok else "failed", detail_wyk)
             if not wyckoff_ok:
                 reject("Aucun événement Wyckoff (Spring bullish ou UTAD bearish)")
-                _persist_reject(symbol, timeframe, "Aucun événement Wyckoff", current_session, tf4h, tf1h)
+                _persist_reject(symbol, timeframe, "Aucun événement Wyckoff", current_session, tf4h, tf1h, pipeline_run_id=pipeline_run_id, profile_name=profile_name, liquidity_zone=zone_type, sweep_level=sweep_price, mode=signal_mode)
                 continue
 
-            # Filtre HTF alignement directionnel : LONG seulement si 4H Bullish, SHORT seulement si 4H Bearish
+            # Filtre HTF alignement directionnel
             if htf_required and direction:
                 htf_conflict = (direction == "LONG" and tf4h == "Bearish") or \
                                (direction == "SHORT" and tf4h == "Bullish")
                 if htf_conflict:
                     reason_align = f"HTF conflit: {direction} contre structure 4H {tf4h}"
-                    _set_step(symbol, 2, "failed", reason_align)
+                    if not silent:
+                        _set_step(symbol, 2, "failed", reason_align)
                     reject(reason_align)
-                    _persist_reject(symbol, timeframe, reason_align, current_session, tf4h, tf1h, wyckoff_event=wyckoff_event)
+                    _persist_reject(symbol, timeframe, reason_align, current_session, tf4h, tf1h, wyckoff_event=wyckoff_event, pipeline_run_id=pipeline_run_id, profile_name=profile_name, liquidity_zone=zone_type, sweep_level=sweep_price, mode=signal_mode)
                     continue
 
-            # ── Step 3 — Displacement ATR-adaptatif ── IA opt ②③
-            # ATR adaptatif: range bougie ≥ 1.2×ATR(14) + clôture dans les 30% sup/inf
-            _pipeline[symbol]["steps"][3]["status"] = "checking"
-            time.sleep(rng.uniform(0.25, 0.45))
-            disp_val   = round(rng.uniform(0.10, 0.90), 2)
-            atr_ratio  = round(rng.uniform(0.6, 2.5), 2)     # range / ATR(14)
-            close_pct  = round(rng.uniform(0.0, 1.0), 2)     # % de la bougie (0=bas, 1=haut)
-            atr_ok     = atr_ratio >= 1.2
-            close_ok   = (close_pct >= 0.70 if direction == "LONG" else close_pct <= 0.30)
-            disp_ok    = disp_val >= disp_threshold and atr_ok and close_ok
-            # Volume sur displacement ── IA opt ①
-            disp_vol   = round(rng.uniform(0.6, 3.0), 2)
-            disp_vol_ok = disp_vol >= 1.8
-            if disp_ok and not disp_vol_ok:
-                disp_ok = False
-            atr_detail = f"ATR ratio {atr_ratio:.2f}× {'✓' if atr_ok else '✗<1.2'}, clôture {close_pct*100:.0f}% {'✓' if close_ok else '✗'}, vol {disp_vol:.2f}×{'✓' if disp_vol_ok else '✗<1.8'}"
-            _set_step(symbol, 3, "passed" if disp_ok else "failed",
-                      f"Force {disp_val:.2f} ≥ {disp_threshold:.2f} | {atr_detail} — impulsion institutionnelle confirmée" if disp_ok
-                      else f"Force {disp_val:.2f} | {atr_detail} — critères ATR non atteints")
+            # ── Step 3 — Displacement ATR-adaptatif (bougie 15m réelle) ── IA opt ②③
+            if not silent:
+                _pipeline[symbol]["steps"][3]["status"] = "checking"
+                time.sleep(rng.uniform(0.05, 0.10))
+            atr_min_param = float(profile_params.get("displacement_atr_min", config.strategy.displacement_atr_min))
+            vol_min_param = float(profile_params.get("displacement_vol_min", 1.2))
+            disp_ok, disp_val, atr_ratio, disp_vol = ta.detect_displacement(
+                candles_15m, direction or "LONG",
+                disp_threshold=disp_threshold,
+                atr_min=atr_min_param,
+                vol_min=vol_min_param,
+            )
+            atr_ok      = atr_ratio >= atr_min_param
+            disp_vol_ok = disp_vol >= vol_min_param
+            atr_detail  = (
+                f"ATR ratio {atr_ratio:.2f}× {'✓' if atr_ok else f'✗<{atr_min_param}'}, "
+                f"vol {disp_vol:.2f}×{'✓' if disp_vol_ok else f'✗<{vol_min_param}'}"
+            )
+            if not silent:
+                _set_step(symbol, 3, "passed" if disp_ok else "failed",
+                          f"Force {disp_val:.2f} ≥ {disp_threshold:.2f} | {atr_detail} — impulsion institutionnelle" if disp_ok
+                          else f"Force {disp_val:.2f} | {atr_detail} — critères ATR non atteints")
             if not disp_ok:
                 reason_disp = f"Displacement insuffisant (force={disp_val:.2f}, ATR={atr_ratio:.2f}×, vol={disp_vol:.2f}×)"
                 reject(reason_disp)
-                _persist_reject(symbol, timeframe, reason_disp, current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event)
+                _persist_reject(symbol, timeframe, reason_disp, current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, pipeline_run_id=pipeline_run_id, profile_name=profile_name, liquidity_zone=zone_type, sweep_level=sweep_price, mode=signal_mode)
                 continue
 
-            # ── Step 4 — BOS (Break Of Structure) — sensibilité {bos_sens}/10 ── IA opt ②
-            _pipeline[symbol]["steps"][4]["status"] = "checking"
-            time.sleep(rng.uniform(0.30, 0.55))
-            # Plus la sensibilité est haute, plus le BOS est difficile à valider
-            # Sensibilité 7/10 → seuil passage 0.42 (base 0.22 + (7-3)*0.05 = 0.42)
-            bos_threshold = min(0.65, 0.22 + (bos_sens - 3) * 0.055)
-            bos_ok = rng.random() > bos_threshold
-            bos_level = round(rng.uniform(0.98, 1.04) * 100, 2)
-            _set_step(symbol, 4, "passed" if bos_ok else "failed",
-                      f"BOS {direction} confirmé @ {bos_level} (sens.{bos_sens}/10, ATR+0.15) — structure cassée" if bos_ok
-                      else f"BOS invalide (sens.{bos_sens}/10) — clôture insuffisante ou swing ambigu")
+            # ── Step 4 — BOS (Break Of Structure — swing réels 15m) ── IA opt ②
+            if not silent:
+                _pipeline[symbol]["steps"][4]["status"] = "checking"
+                time.sleep(rng.uniform(0.05, 0.10))
+            bos_ok, bos_level = ta.detect_bos(candles_15m, direction or "LONG", bos_sens, bos_close_conf)
+            if not silent:
+                _set_step(symbol, 4, "passed" if bos_ok else "failed",
+                          f"BOS {direction} confirmé @ {bos_level:.4f} (sens.{bos_sens}/10) — structure cassée" if bos_ok
+                          else f"BOS invalide (sens.{bos_sens}/10) — clôture insuffisante ou swing ambigu")
             if not bos_ok:
                 reject("BOS non confirmé — structure intacte")
-                _persist_reject(symbol, timeframe, "BOS non confirmé", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level)
+                _persist_reject(symbol, timeframe, "BOS non confirmé", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, pipeline_run_id=pipeline_run_id, profile_name=profile_name, liquidity_zone=zone_type, sweep_level=sweep_price, mode=signal_mode)
                 continue
 
             # ── Step 5 (pré) — Volume adaptatif à la session ── IA opt ⑤
-            # Volume : 1.4× sur session active (London/NY), 1.25× hors session
             eff_vol_mult = vol_mult_on if tradeable else vol_mult_off
-            vol_ratio = round(rng.uniform(0.7, 3.2), 2)
-            vol_ok = not vol_adaptive or vol_ratio >= eff_vol_mult
+            vol_ok, vol_ratio = ta.detect_volume(candles_15m, eff_vol_mult if vol_adaptive else 0.0)
             if not vol_ok:
-                _persist_reject(symbol, timeframe, f"Volume insuffisant ({vol_ratio:.2f}×SMA50 < {eff_vol_mult:.2f}×)", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level)
-                reject(f"Volume insuffisant ({vol_ratio:.2f}×SMA50 < {eff_vol_mult:.2f}× requis session {current_session})")
+                _persist_reject(symbol, timeframe, f"Volume insuffisant ({vol_ratio:.2f}×SMA20 < {eff_vol_mult:.2f}×)", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, pipeline_run_id=pipeline_run_id, profile_name=profile_name, liquidity_zone=zone_type, sweep_level=sweep_price, mode=signal_mode)
+                reject(f"Volume insuffisant ({vol_ratio:.2f}×SMA20 < {eff_vol_mult:.2f}× requis session {current_session})")
                 continue
 
             # ── Step 5 — Expansion vers la prochaine zone de liquidité ───────
-            _pipeline[symbol]["steps"][5]["status"] = "checking"
-            time.sleep(rng.uniform(0.25, 0.45))
-            expansion_ok = rng.random() > 0.25
-            next_liq = rng.choice(["Weekly High", "Monthly High", "Previous Day High"]) if direction == "LONG" \
-                       else rng.choice(["Weekly Low", "Monthly Low", "Previous Day Low"])
-            _set_step(symbol, 5, "passed" if expansion_ok else "failed",
-                      f"Expansion vers {next_liq} — cible de liquidité visible" if expansion_ok
-                      else f"Pas d'extension claire vers la prochaine liquidité ({next_liq})")
+            if not silent:
+                _pipeline[symbol]["steps"][5]["status"] = "checking"
+                time.sleep(rng.uniform(0.05, 0.10))
+            expansion_ok, next_liq = ta.detect_expansion(candles_15m, direction or "LONG")
+            if not silent:
+                _set_step(symbol, 5, "passed" if expansion_ok else "failed",
+                          f"Expansion vers {next_liq} — cible de liquidité visible" if expansion_ok
+                          else f"Pas d'extension claire vers la prochaine liquidité ({next_liq})")
             if not expansion_ok:
                 reject(f"Expansion vers liquidité absente — pas de cible claire ({next_liq})")
-                _persist_reject(symbol, timeframe, "Expansion vers liquidité absente", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level)
+                _persist_reject(symbol, timeframe, "Expansion vers liquidité absente", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, pipeline_run_id=pipeline_run_id, profile_name=profile_name, liquidity_zone=zone_type, sweep_level=sweep_price, mode=signal_mode)
                 continue
 
-            # ── Step 6 — Fibonacci Retracement (0.5 / 0.618 / 0.786) — split 60/40 ── IA opt ③
-            _pipeline[symbol]["steps"][6]["status"] = "checking"
-            time.sleep(rng.uniform(0.30, 0.50))
-            non_allowed = [0.382, 0.236, 0.705, 0.886]
-            pool = allowed_fib + [rng.choice(non_allowed)]
-            fib_val = round(rng.choice(pool), 3)
-            fib_ok = fib_val in allowed_fib
-            # Entrée en 2 tranches : 60% @ 0.618, 40% @ 0.786 (si les deux niveaux disponibles)
-            tranche1 = round(rng.uniform(0.610, 0.630), 3) if 0.618 in allowed_fib else fib_val
-            tranche2 = round(rng.uniform(0.780, 0.792), 3) if 0.786 in allowed_fib else fib_val
-            split_label = f" | Split 60%@{tranche1} + 40%@{tranche2}" if fib_ok and 0.786 in allowed_fib else ""
-            _set_step(symbol, 6, "passed" if fib_ok else "failed",
-                      f"Retracement {fib_val} ✓ zone valide{split_label}" if fib_ok
-                      else f"Retracement {fib_val} ✗ hors niveaux autorisés ({', '.join(str(f) for f in allowed_fib)})")
-
+            # ── Step 6 — Fibonacci Retracement (niveaux réels) ── IA opt ③
+            if not silent:
+                _pipeline[symbol]["steps"][6]["status"] = "checking"
+                time.sleep(rng.uniform(0.05, 0.10))
+            fib_val, fib_ok = ta.detect_fibonacci(candles_15m, direction or "LONG", allowed_fib)
+            if fib_ok and fib_split and 0.786 in allowed_fib:
+                split_label = f" | Split 60%@0.618 + 40%@0.786"
+            else:
+                split_label = ""
+            if not silent:
+                _set_step(symbol, 6, "passed" if fib_ok else "failed",
+                          f"Retracement {fib_val} ✓ zone valide{split_label}" if fib_ok
+                          else f"Retracement {fib_val} ✗ hors niveaux autorisés ({', '.join(str(f) for f in allowed_fib)})")
             if not fib_ok:
                 reject(f"Retracement Fib {fib_val} non autorisé — niveaux valides: {allowed_fib}")
-                _persist_reject(symbol, timeframe, f"Fib {fib_val} non autorisé", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, fib_val=fib_val)
+                _persist_reject(symbol, timeframe, f"Fib {fib_val} non autorisé", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, fib_val=fib_val, pipeline_run_id=pipeline_run_id, profile_name=profile_name, liquidity_zone=zone_type, sweep_level=sweep_price, mode=signal_mode)
                 continue
 
             # ── Refinement 5m (optionnel — activable par profil) ─────────────
             if use_5m_refine:
-                time.sleep(rng.uniform(0.10, 0.20))
-                m5_body  = round(rng.uniform(0.2, 1.8), 2)    # taille corps bougie 5m en %
-                m5_vol   = round(rng.uniform(0.6, 2.8), 2)    # volume 5m vs SMA20
-                m5_wick  = round(rng.uniform(0.0, 0.6), 2)    # wick ratio (mèche / corps)
-                m5_align = rng.random() > 0.30                 # alignement direction 5m avec signal
-                m5_ok    = m5_body >= 0.5 and m5_vol >= 1.2 and m5_align
-                _dir_ok = "✓" if m5_align else "✗"
-                _no_align = "✗ — pas d'alignement 5m"
-                refine_msg = (
-                    f"5m ✓ corps {m5_body:.1f}% | vol {m5_vol:.2f}× | mèche {m5_wick:.2f} | dir {_dir_ok}"
-                    if m5_ok else
-                    f"5m ✗ corps {m5_body:.1f}% | vol {m5_vol:.2f}× | dir {_dir_ok if m5_align else _no_align}"
-                )
-                current_note = _pipeline[symbol]["steps"][6].get("message", "")
-                _pipeline[symbol]["steps"][6]["message"] = current_note + f" | Refinement {refine_msg}"
+                if not silent:
+                    time.sleep(rng.uniform(0.05, 0.10))
+                m5_ok, refine_msg = ta.detect_5m_refinement(candles_5m, direction or "LONG")
+                if not silent:
+                    current_note = _pipeline[symbol]["steps"][6].get("detail", "")
+                    _pipeline[symbol]["steps"][6]["detail"] = current_note + f" | {refine_msg}"
                 if not m5_ok:
                     reject(f"Refinement 5m échoué — {refine_msg}")
-                    _persist_reject(symbol, timeframe, f"5m refinement échoué ({refine_msg})", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, fib_val=fib_val)
+                    _persist_reject(symbol, timeframe, f"5m refinement échoué ({refine_msg})", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, fib_val=fib_val, pipeline_run_id=pipeline_run_id, profile_name=profile_name, liquidity_zone=zone_type, sweep_level=sweep_price, mode=signal_mode)
                     continue
 
             # ── Séquence complète — vérification risk manager ────────────────
@@ -1800,24 +2600,35 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict) -> 
 
             if not risk_ok:
                 reject(f"Risk manager: {risk_reason}")
-                _persist_reject(symbol, timeframe, f"Risk: {risk_reason}", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, fib_val=fib_val)
+                _persist_reject(symbol, timeframe, f"Risk: {risk_reason}", current_session, tf4h, tf1h, displacement_force=disp_val, wyckoff_event=wyckoff_event, bos_level=bos_level, fib_val=fib_val, pipeline_run_id=pipeline_run_id, profile_name=profile_name, liquidity_zone=zone_type, sweep_level=sweep_price, mode=signal_mode)
                 continue
 
             # ── Signal accepté — persistance DB + journal ────────────────────
-            entry_price = round(rng.uniform(95, 105), 2)
-            stop_price = round(entry_price * (0.97 if direction == "LONG" else 1.03), 2)
-            risk_r = abs(entry_price - stop_price)
+            # Prix réels depuis les bougies : entrée = clôture dernière bougie 15m
+            entry_price = round(base_price, 6)
+            # Stop : derrière le niveau de sweep (ATR-based, 2% min)
+            atr_val_15m = ta.atr(candles_15m, 14) if candles_15m else abs(base_price * 0.02)
+            if direction == "LONG":
+                stop_price = round(min(sweep_price - atr_val_15m * 0.5, entry_price * 0.98), 6)
+            else:
+                stop_price = round(max(sweep_price + atr_val_15m * 0.5, entry_price * 1.02), 6)
+            risk_r = max(abs(entry_price - stop_price), entry_price * 0.005)
             targets_str = ", ".join(
                 str(round(entry_price + t * risk_r * (1 if direction == "LONG" else -1), 2))
                 for t in target_rs
             )
 
+            # TP = entry + N×risk_r en direction du trade
+            tp_price = round(
+                entry_price + target_rs[0] * risk_r * (1 if direction == "LONG" else -1), 6
+            ) if target_rs else round(entry_price + 2.0 * risk_r * (1 if direction == "LONG" else -1), 6)
+
             with Session(engine) as s:
                 sig = Signal(
                     symbol=symbol, timeframe=timeframe,
-                    setup_type=f"SMC/Wyckoff {direction}",
+                    setup_type=f"{profile_name} — {direction}",
                     liquidity_zone=zone_type,
-                    sweep_level=round(fib_val * 100, 2),
+                    sweep_level=sweep_price,
                     bos_level=bos_level,
                     fib_zone=str(fib_val),
                     accepted=True,
@@ -1830,71 +2641,109 @@ def _run_live_scan(symbols: list[str], timeframe: str, profile_params: dict) -> 
                     session_name=current_session,
                     displacement_force=disp_val,
                     wyckoff_event=wyckoff_event,
+                    pipeline_run_id=pipeline_run_id,
+                    zone_low=round(sweep_price * 0.997, 4) if sweep_price > 0 else None,
+                    zone_high=round(sweep_price * 1.003, 4) if sweep_price > 0 else None,
+                    entry_price=entry_price,
+                    sl_price=stop_price,
+                    tp_price=tp_price,
+                    mode=signal_mode,
                 )
                 s.add(sig)
-                s.add(Log(level="INFO", message=(
-                    f"[Pipeline] {symbol} ACCEPTÉ — {direction} | {wyckoff_event} | "
-                    f"Fib {fib_val} | Session {current_session} | 4H:{tf4h}"
-                )))
+                if not silent:
+                    s.add(Log(level="INFO", message=(
+                        f"[Pipeline] {symbol} ACCEPTÉ — {direction} | {wyckoff_event} | "
+                        f"Fib {fib_val} | Session {current_session} | 4H:{tf4h}"
+                    )))
                 s.commit()
+                s.refresh(sig)
 
-            journal.log(SetupJournalEntry(
-                timestamp=now,
-                symbol=symbol,
-                timeframe=timeframe,
-                setup_type=f"SMC/Wyckoff {direction}",
-                direction=direction,
-                accepted=True,
-                reject_reason=None,
-                liquidity_zone=zone_type,
-                sweep_level=round(fib_val * 100, 2),
-                fake_breakout=fake_breakout,
-                equal_highs_lows=equal_hl,
-                wyckoff_event=wyckoff_event,
-                displacement_force=disp_val,
-                bos_level=bos_level,
-                expansion_detected=True,
-                fib_zone=str(fib_val),
-                tf_4h_structure=tf4h,
-                tf_1h_validation=tf1h,
-                session=current_session,
-                entry=entry_price,
-                stop=stop_price,
-                targets=targets_str,
-                stop_logic=stop_logic,
-                result="pending",
-            ))
-
-            with _pipeline_lock:
-                _pipeline[symbol]["final_status"] = "accepted"
-                _pipeline[symbol]["final_direction"] = direction
-                _pipeline[symbol]["final_reason"] = (
-                    f"✅ Signal {direction} validé — {wyckoff_event} | Fib {fib_val} | "
-                    f"Session {current_session} | 4H:{tf4h}"
-                )
-                _pipeline[symbol]["completed_at"] = datetime.now(timezone.utc).isoformat()
+            if not silent:
+                journal.log(SetupJournalEntry(
+                    timestamp=now,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    setup_type=f"{profile_name} — {direction}",
+                    direction=direction,
+                    accepted=True,
+                    reject_reason=None,
+                    liquidity_zone=zone_type,
+                    sweep_level=sweep_price,
+                    fake_breakout=fake_breakout,
+                    equal_highs_lows=equal_hl,
+                    wyckoff_event=wyckoff_event,
+                    displacement_force=disp_val,
+                    bos_level=bos_level,
+                    expansion_detected=True,
+                    fib_zone=str(fib_val),
+                    tf_4h_structure=tf4h,
+                    tf_1h_validation=tf1h,
+                    session=current_session,
+                    entry=entry_price,
+                    stop=stop_price,
+                    targets=targets_str,
+                    stop_logic=stop_logic,
+                    result="pending",
+                ))
+                with _pipeline_lock:
+                    _pipeline[symbol]["final_status"] = "accepted"
+                    _pipeline[symbol]["final_direction"] = direction
+                    _pipeline[symbol]["final_reason"] = (
+                        f"✅ Signal {direction} validé — {wyckoff_event} | Fib {fib_val} | "
+                        f"Session {current_session} | 4H:{tf4h}"
+                    )
+                    _pipeline[symbol]["completed_at"] = datetime.now(timezone.utc).isoformat()
 
         except Exception as exc:
-            with _pipeline_lock:
-                _pipeline[symbol]["final_status"] = "error"
-                _pipeline[symbol]["final_reason"] = str(exc)
+            if not silent:
+                with _pipeline_lock:
+                    _pipeline[symbol]["final_status"] = "error"
+                    _pipeline[symbol]["final_reason"] = str(exc)
+
+    if pipeline_run_id:
+        with _pipeline_lock:
+            state_snapshot = {k: dict(v) for k, v in run_state.items()}
+            _pipeline_runs_state.pop(pipeline_run_id, None)
+        accepted_c = sum(1 for v in state_snapshot.values() if v.get("final_status") == "accepted")
+        rejected_c = sum(1 for v in state_snapshot.values() if v.get("final_status") == "rejected")
+        error_c = sum(1 for v in state_snapshot.values() if v.get("final_status") == "error")
+        try:
+            with Session(engine) as s:
+                run = s.exec(select(PipelineRun).where(PipelineRun.run_id == pipeline_run_id)).first()
+                if run:
+                    run.completed_at = datetime.now(timezone.utc)
+                    run.accepted_count = accepted_c
+                    run.rejected_count = rejected_c
+                    run.error_count = error_c
+                    run.results_json = json.dumps(state_snapshot, default=str)
+                    s.add(run)
+                    s.commit()
+        except Exception as exc:
+            logger.error("Failed to finalize PipelineRun %s: %s", pipeline_run_id, exc)
 
 
 def _persist_reject(
     symbol: str, timeframe: str, reason: str, session: str,
     tf4h: str, tf1h: str,
-    displacement_force: float = 0.0,
+    displacement_force: Optional[float] = None,
     wyckoff_event: str = "N/A",
     bos_level: float = 0.0,
     fib_val: float = 0.0,
+    pipeline_run_id: str | None = None,
+    profile_name: str = "SMC/Wyckoff",
+    liquidity_zone: str = "N/A",
+    sweep_level: float = 0.0,
+    mode: str | None = None,
 ) -> None:
     """Persiste les setups rejetés en DB avec tous les détails structurels."""
+    z_low  = round(sweep_level * 0.997, 4) if sweep_level > 0 else None
+    z_high = round(sweep_level * 1.003, 4) if sweep_level > 0 else None
     try:
         with Session(engine) as s:
             s.add(Signal(
                 symbol=symbol, timeframe=timeframe,
-                setup_type="SMC/Wyckoff", liquidity_zone="N/A",
-                sweep_level=round(fib_val * 100, 2),
+                setup_type=profile_name, liquidity_zone=liquidity_zone,
+                sweep_level=sweep_level,
                 bos_level=bos_level,
                 fib_zone=str(fib_val) if fib_val else "N/A",
                 accepted=False,
@@ -1904,14 +2753,18 @@ def _persist_reject(
                 session_name=session,
                 displacement_force=displacement_force,
                 wyckoff_event=wyckoff_event,
+                pipeline_run_id=pipeline_run_id,
+                zone_low=z_low,
+                zone_high=z_high,
+                mode=mode,
             ))
             s.commit()
         journal.log(SetupJournalEntry(
             timestamp=datetime.now(timezone.utc),
             symbol=symbol, timeframe=timeframe,
-            setup_type="SMC/Wyckoff",
+            setup_type=profile_name,
             direction=None, accepted=False, reject_reason=reason,
-            liquidity_zone="N/A", sweep_level=0,
+            liquidity_zone=liquidity_zone, sweep_level=sweep_level,
             fake_breakout=False, equal_highs_lows=False,
             wyckoff_event=wyckoff_event,
             displacement_force=displacement_force,
@@ -1942,14 +2795,68 @@ def get_pipeline() -> dict:
     }
 
 
+@router.get("/pipeline/runs")
+def get_pipeline_runs(
+    limit: int = Query(50, le=200),
+    offset: int = 0,
+) -> dict:
+    with Session(engine) as s:
+        total = s.exec(select(func.count(PipelineRun.id))).one()
+        rows = s.exec(
+            select(PipelineRun)
+            .order_by(PipelineRun.started_at.desc())
+            .offset(offset)
+            .limit(limit)
+        ).all()
+    return {
+        "total": total,
+        "rows": [r.model_dump() for r in rows],
+    }
+
+
+@router.get("/pipeline/runs/{run_id}")
+def get_pipeline_run(run_id: str) -> dict:
+    with Session(engine) as s:
+        run = s.exec(select(PipelineRun).where(PipelineRun.run_id == run_id)).first()
+        if not run:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="Pipeline run not found")
+        signals = s.exec(
+            select(Signal)
+            .where(Signal.pipeline_run_id == run_id)
+            .order_by(Signal.timestamp.desc())
+        ).all()
+    return {
+        "run": run.model_dump(),
+        "signals": [sig.model_dump() for sig in signals],
+    }
+
+
 @router.post("/pipeline/run")
 def run_pipeline(req: PipelineRunRequest) -> dict:
     profile_params: dict = {}
+    profile_name: str = "SMC/Wyckoff"
     if req.profile_id:
         with Session(engine) as s:
             prof = s.get(StrategyProfile, req.profile_id)
-            if prof and prof.parameters:
-                profile_params = json.loads(prof.parameters)
+            if prof:
+                profile_name = prof.name
+                if prof.parameters:
+                    profile_params = json.loads(prof.parameters)
+
+    with Session(engine) as s:
+        run = PipelineRun(
+            mode=req.mode,
+            source="manual",
+            symbols_json=json.dumps(req.symbols),
+            timeframe=req.timeframe,
+            profile_id=req.profile_id,
+            total_count=len(req.symbols),
+        )
+        s.add(run)
+        s.commit()
+        s.refresh(run)
+        run_id = run.run_id
 
     with _pipeline_lock:
         for sym in req.symbols:
@@ -1957,11 +2864,11 @@ def run_pipeline(req: PipelineRunRequest) -> dict:
 
     t = threading.Thread(
         target=_run_live_scan,
-        args=(req.symbols, req.timeframe, profile_params),
+        args=(req.symbols, req.timeframe, profile_params, run_id, profile_name),
         daemon=True,
     )
     t.start()
-    return {"ok": True, "symbols": req.symbols, "timeframe": req.timeframe}
+    return {"ok": True, "symbols": req.symbols, "timeframe": req.timeframe, "run_id": run_id}
 
 
 # ── Journal des setups ────────────────────────────────────────────────────────
@@ -1993,6 +2900,66 @@ def get_journal(
     }
 
 
+def _sanitize_ai_params(raw) -> dict:
+    if not isinstance(raw, dict):
+        return {}
+    _VALID_RANGES: dict[str, tuple] = {
+        "enable_spring": (bool,),
+        "enable_utad": (bool,),
+        "displacement_threshold": (float, 0.1, 1.0),
+        "displacement_atr_min": (float, 0.5, 3.0),
+        "bos_sensitivity": (int, 1, 10),
+        "bos_close_confirmation": (bool,),
+        "fib_entry_split": (bool,),
+        "htf_alignment_required": (bool,),
+        "htf_long_min_bias": (str, ["LONG", "neutral", "any"]),
+        "htf_short_min_bias": (str, ["SHORT", "neutral", "any"]),
+        "tf1h_long_min_bias": (str, ["LONG", "neutral", "any"]),
+        "tf1h_short_min_bias": (str, ["SHORT", "neutral", "any"]),
+        "volume_adaptive": (bool,),
+        "volume_multiplier_active": (float, 1.0, 3.0),
+        "volume_multiplier_offpeak": (float, 0.8, 2.0),
+        "rsi_period": (int, 2, 50),
+        "rsi_overbought": (int, 50, 95),
+        "rsi_oversold": (int, 5, 50),
+        "rsi_divergence_only": (bool,),
+        "require_equal_highs_lows": (bool,),
+        "stop_logic": (str, ["structure", "atr"]),
+        "allow_weekend_trading": (bool,),
+        "use_5m_refinement": (bool,),
+        "risk_per_trade": (float, 0.001, 0.10),
+        "stop_loss_atr_mult": (float, 0.5, 5.0),
+        "take_profit_rr": (float, 1.0, 10.0),
+    }
+    cleaned: dict = {}
+    for key, val in raw.items():
+        spec = _VALID_RANGES.get(key)
+        if spec is None:
+            if key == "fib_levels" and isinstance(val, list):
+                cleaned[key] = [max(0.1, min(0.99, float(v))) for v in val if isinstance(v, (int, float))]
+            continue
+        typ = spec[0]
+        if typ is bool:
+            if isinstance(val, bool):
+                cleaned[key] = val
+        elif typ is int:
+            try:
+                v = int(val)
+                cleaned[key] = max(spec[1], min(spec[2], v))
+            except (ValueError, TypeError):
+                pass
+        elif typ is float:
+            try:
+                v = float(val)
+                cleaned[key] = max(spec[1], min(spec[2], v))
+            except (ValueError, TypeError):
+                pass
+        elif typ is str:
+            if isinstance(val, str) and val in spec[1]:
+                cleaned[key] = val
+    return cleaned
+
+
 @router.post("/backtest/{backtest_id}/optimize")
 def optimize_backtest(backtest_id: int) -> dict:
     with Session(engine) as s:
@@ -2013,17 +2980,6 @@ def optimize_backtest(backtest_id: int) -> dict:
     from openai import OpenAI
     client = OpenAI(base_url=base_url, api_key=api_key)
 
-    spring_on = params.get("enable_spring", True)
-    utad_on = params.get("enable_utad", True)
-    bos_sens = params.get("bos_sensitivity", 3)
-    disp_th = params.get("displacement_threshold", 0.35)
-    fib = params.get("fib_levels", [0.5, 0.618, 0.705])
-    rsi_period = params.get("rsi_period", 14)
-    rsi_ob = params.get("rsi_overbought", 70)
-    rsi_os = params.get("rsi_oversold", 30)
-    vol_mult = params.get("volume_multiplier", 1.5)
-    vol_conf = params.get("volume_confirmation", False)
-
     prompt = f"""Tu es un expert en trading algorithmique SMC (Smart Money Concepts) et Wyckoff.
 Analyse ce backtest et propose des optimisations précises et actionnables.
 
@@ -2037,36 +2993,72 @@ RÉSULTATS DU BACKTEST:
 - Expectancy: {result.expectancy:.4f}
 - R Multiple: {result.r_multiple:.2f}R
 
-PARAMÈTRES ACTUELS DE LA STRATÉGIE:
-- Spring Wyckoff activé: {"Oui" if spring_on else "Non"}
-- UTAD (distribution) activé: {"Oui" if utad_on else "Non"}
-- Sensibilité BOS: {bos_sens}/10 (1=très réactif, 10=très conservateur)
-- Seuil Displacement: {disp_th} (force minimale du mouvement, 0.1-1.0)
-- Niveaux Fibonacci: {", ".join(str(f) for f in fib)}
-- Période RSI: {rsi_period}
-- RSI Surachat: {rsi_ob}
-- RSI Survente: {rsi_os}
-- Confirmation Volume activée: {"Oui" if vol_conf else "Non"}
-- Multiplicateur Volume: {vol_mult}x la moyenne
+PARAMÈTRES ACTUELS DE LA STRATÉGIE (27 champs):
+- enable_spring: {params.get('enable_spring', True)} (activer détection Spring Wyckoff)
+- enable_utad: {params.get('enable_utad', True)} (activer détection UTAD/distribution)
+- displacement_threshold: {params.get('displacement_threshold', 0.55)} (force min du mouvement, 0.3-0.9)
+- displacement_atr_min: {params.get('displacement_atr_min', 1.2)} (ATR min multiplier, 0.8-2.0)
+- bos_sensitivity: {params.get('bos_sensitivity', 7)} (1=très réactif, 10=très conservateur)
+- bos_close_confirmation: {params.get('bos_close_confirmation', True)} (exiger clôture au-delà du BOS)
+- fib_levels: {params.get('fib_levels', [0.5, 0.618, 0.786])} (niveaux Fibonacci, 3 valeurs entre 0.382-0.886)
+- fib_entry_split: {params.get('fib_entry_split', True)} (split 60/40 sur les niveaux Fib)
+- htf_alignment_required: {params.get('htf_alignment_required', True)} (exiger alignement HTF)
+- htf_long_min_bias: {params.get('htf_long_min_bias', 'neutral')} (filtre 4H directionnel LONG: "LONG","neutral","any")
+- htf_short_min_bias: {params.get('htf_short_min_bias', 'SHORT')} (filtre 4H directionnel SHORT: "SHORT","neutral","any")
+- tf1h_long_min_bias: {params.get('tf1h_long_min_bias', 'neutral')} (filtre 1H directionnel LONG: "LONG","neutral","any")
+- tf1h_short_min_bias: {params.get('tf1h_short_min_bias', 'neutral')} (filtre 1H directionnel SHORT: "SHORT","neutral","any")
+- volume_adaptive: {params.get('volume_adaptive', True)} (volume adaptatif activé)
+- volume_multiplier_active: {params.get('volume_multiplier_active', 1.8)} (seuil volume actif, 1.2-2.5)
+- volume_multiplier_offpeak: {params.get('volume_multiplier_offpeak', 1.25)} (seuil volume off-peak, 1.0-1.8)
+- rsi_period: {params.get('rsi_period', 14)} (période RSI, 5-30)
+- rsi_overbought: {params.get('rsi_overbought', 70)} (seuil RSI surachat, 60-85)
+- rsi_oversold: {params.get('rsi_oversold', 30)} (seuil RSI survente, 15-40)
+- rsi_divergence_only: {params.get('rsi_divergence_only', True)} (utiliser uniquement divergence RSI)
+- require_equal_highs_lows: {params.get('require_equal_highs_lows', True)} (exiger equal highs/lows pour valider structure)
+- stop_logic: {params.get('stop_logic', 'structure')} (logique de stop: "structure" ou "atr")
+- allow_weekend_trading: {params.get('allow_weekend_trading', False)} (autoriser trading weekend)
+- use_5m_refinement: {params.get('use_5m_refinement', False)} (utiliser raffinement 5min pour entrées)
+- risk_per_trade: {params.get('risk_per_trade', 0.01)} (risque par trade, 0.005-0.03)
+- take_profit_rr: {params.get('take_profit_rr', 2.5)} (ratio risk/reward TP, 1.5-5.0)
+- stop_loss_atr_mult: {params.get('stop_loss_atr_mult', 1.5)} (multiplicateur ATR pour SL, 1.0-3.0)
 
 ANALYSE ET RECOMMANDATIONS:
 Identifie les 4-5 problèmes principaux et donne des recommandations PRÉCISES avec des valeurs chiffrées.
 Génère aussi un nom de profil optimisé (incrémente la version, ex: si "SMC-v1" alors "SMC-v2").
+Tu DOIS fournir une valeur pour CHACUN des 27 champs ci-dessus dans suggested_params.
 Format attendu (respecte EXACTEMENT ce format JSON):
 {{
   "score": <note globale 0-100>,
   "verdict": "<une phrase de verdict en français>",
   "suggested_name": "<nom du profil optimisé, version incrémentée>",
   "suggested_params": {{
-    "bos_sensitivity": <int entre 1-10>,
-    "displacement_threshold": <float entre 0.1-1.0>,
-    "fib_levels": [<liste de floats parmi 0.5, 0.618, 0.786>],
-    "fib_entry_split": <true/false>,
-    "htf_alignment_required": <true/false>,
-    "rsi_divergence_only": true,
-    "volume_multiplier_active": <float entre 1.0-3.0>,
-    "displacement_atr_min": <float entre 0.8-2.5>,
-    "allow_weekend_trading": false
+    "enable_spring": <true|false>,
+    "enable_utad": <true|false>,
+    "displacement_threshold": <0.3-0.9>,
+    "displacement_atr_min": <0.8-2.0>,
+    "bos_sensitivity": <1-10>,
+    "bos_close_confirmation": <true|false>,
+    "fib_levels": [<3 valeurs entre 0.382 et 0.886>],
+    "fib_entry_split": <true|false>,
+    "htf_alignment_required": <true|false>,
+    "htf_long_min_bias": <"LONG"|"neutral"|"any">,
+    "htf_short_min_bias": <"SHORT"|"neutral"|"any">,
+    "tf1h_long_min_bias": <"LONG"|"neutral"|"any">,
+    "tf1h_short_min_bias": <"SHORT"|"neutral"|"any">,
+    "volume_adaptive": <true|false>,
+    "volume_multiplier_active": <1.2-2.5>,
+    "volume_multiplier_offpeak": <1.0-1.8>,
+    "rsi_period": <5-30>,
+    "rsi_overbought": <60-85>,
+    "rsi_oversold": <15-40>,
+    "rsi_divergence_only": <true|false>,
+    "require_equal_highs_lows": <true|false>,
+    "stop_logic": <"structure"|"atr">,
+    "allow_weekend_trading": <true|false>,
+    "use_5m_refinement": <true|false>,
+    "risk_per_trade": <0.005-0.03>,
+    "stop_loss_atr_mult": <1.0-3.0>,
+    "take_profit_rr": <1.5-5.0>
   }},
   "suggestions": [
     {{
@@ -2097,6 +3089,8 @@ Réponds UNIQUEMENT avec le JSON valide, rien d'autre."""
                 content = content[4:]
             content = content.strip()
         analysis = json.loads(content)
+        if "suggested_params" in analysis:
+            analysis["suggested_params"] = _sanitize_ai_params(analysis["suggested_params"])
         return {
             "ok": True,
             "backtest_id": backtest_id,
@@ -2104,6 +3098,123 @@ Réponds UNIQUEMENT avec le JSON valide, rien d'autre."""
             "profile_name": profile.name if profile else None,
             "analysis": analysis,
         }
+    except json.JSONDecodeError as e:
+        return {"ok": False, "reason": f"ai_parse_error: {e}"}
+    except Exception as e:
+        return {"ok": False, "reason": str(e)}
+
+
+@router.post("/backtest/{backtest_id}/optimize-overrides")
+def optimize_backtest_overrides(backtest_id: int) -> dict:
+    """Analyse GPT-4o des métriques du backtest → suggestions d'overrides optimisés."""
+    with Session(engine) as s:
+        result = s.get(BacktestResult, backtest_id)
+        if not result:
+            return {"ok": False, "reason": "backtest_not_found"}
+
+    base_url = os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
+    api_key  = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY", "replit")
+    if not base_url:
+        return {"ok": False, "reason": "openai_integration_not_configured"}
+
+    try:
+        cur_ov = json.loads(result.overrides_json) if result.overrides_json else {}
+    except Exception:
+        cur_ov = {}
+
+    prompt = f"""Tu es un expert en trading algorithmique SMC (Smart Money Concepts) et Wyckoff.
+Tu dois analyser les résultats d'un backtest walk-forward et proposer des valeurs optimisées
+pour les paramètres d'override du pipeline de backtesting.
+
+RÉSULTATS DU BACKTEST:
+- Symbole: {result.symbol}
+- Timeframe: {result.timeframe}
+- Stratégie: {result.strategy_version}
+- Win Rate: {result.win_rate:.1%}
+- Profit Factor: {result.profit_factor:.2f}
+- Max Drawdown: {result.drawdown:.1%}
+- Expectancy: {result.expectancy:.4f}
+- R Multiple moyen: {result.r_multiple:.2f}R
+- Nombre de signaux: {result.signal_count}
+- Période: {result.date_from} → {result.date_to}
+
+OVERRIDES ACTUELS UTILISÉS:
+{json.dumps(cur_ov, indent=2)}
+
+DESCRIPTION DES OVERRIDES:
+- enabled: Active/désactive les overrides (bool)
+- wyckoff_lookback: Fenêtre de scan Spring/UTAD en bougies 15m (int, 5-96). Défaut live=5.
+- displacement_threshold: Force min du displacement (float, 0.1-1.0). Défaut live=0.40.
+- displacement_atr_min: Taille min vs ATR (float, 0.1-3.0). Défaut live=0.75.
+- displacement_vol_min: Volume min en ×SMA20 (float, 0.3-3.0). Défaut live=1.2.
+- bos_sensitivity: Lookback pour swing points BOS (int, 2-30). Défaut live=7.
+- bos_close_confirmation: BOS exige clôture au-delà du swing (bool). Défaut live=true.
+- volume_multiplier_active: Multiplicateur vol sessions actives (float, 0.3-4.0). Défaut live=1.2.
+- volume_multiplier_offpeak: Multiplicateur vol hors session (float, 0.3-4.0). Défaut live=0.9.
+- skip_htf_1h_validation: Ignore validation 1H vs 4H (bool). Défaut live=false.
+- allow_weekend_trading: Autorise trading week-end (bool). Défaut live=false.
+- use_5m_refinement: Affine entrée sur bougies 5m (bool). Défaut live=false.
+
+OBJECTIF D'OPTIMISATION:
+- Win Rate cible: ≥ 50%
+- Profit Factor cible: ≥ 1.5
+- Drawdown cible: ≤ 15%
+- Signaux cible: ≥ 30 (pas trop restrictif)
+
+RÈGLES:
+- Un WR < 40% ou PF < 1 indique des filtres trop laxistes → renforcer la sélectivité.
+- Un signal_count < 20 indique des filtres trop stricts → assouplir.
+- Le displacement_threshold et bos_sensitivity ont le plus grand impact sur le WR.
+- Les multiplicateurs de volume ont le plus grand impact sur la qualité des signaux.
+
+Génère des suggestions précises et actionnables.
+Format attendu (JSON strict, UNIQUEMENT le JSON):
+{{
+  "score": <note globale 0-100 basée sur WR/PF/DD>,
+  "verdict": "<une phrase de verdict en français>",
+  "suggested_overrides": {{
+    "enabled": true,
+    "wyckoff_lookback": <int 5-96>,
+    "displacement_threshold": <float 0.1-1.0>,
+    "displacement_atr_min": <float 0.1-3.0>,
+    "displacement_vol_min": <float 0.3-3.0>,
+    "bos_sensitivity": <int 2-30>,
+    "bos_close_confirmation": <bool>,
+    "volume_multiplier_active": <float 0.3-4.0>,
+    "volume_multiplier_offpeak": <float 0.3-4.0>,
+    "skip_htf_1h_validation": <bool>,
+    "allow_weekend_trading": <bool>,
+    "use_5m_refinement": <bool>
+  }},
+  "suggestions": [
+    {{
+      "titre": "<paramètre ou groupe ciblé>",
+      "probleme": "<ce qui ne va pas avec la valeur actuelle>",
+      "action": "<changement précis avec valeurs chiffrées avant/après>",
+      "impact": "haut|moyen|faible"
+    }}
+  ]
+}}"""
+
+    from openai import OpenAI
+    client = OpenAI(base_url=base_url, api_key=api_key)
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            max_completion_tokens=1500,
+            messages=[
+                {"role": "system", "content": "Tu es un expert en trading algorithmique. Réponds uniquement en JSON valide, sans markdown."},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        content = (response.choices[0].message.content or "{}").strip()
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+            content = content.strip()
+        analysis = json.loads(content)
+        return {"ok": True, "backtest_id": backtest_id, "analysis": analysis}
     except json.JSONDecodeError as e:
         return {"ok": False, "reason": f"ai_parse_error: {e}"}
     except Exception as e:
@@ -2145,7 +3256,19 @@ def multi_optimize_backtests(req: MultiOptimizeRequest) -> dict:
         bt_lines.append(f"""
 Backtest #{r.id} — {r.symbol} / {r.timeframe} / profil "{r.strategy_version}":
   Win Rate: {r.win_rate:.1%} | Profit Factor: {r.profit_factor:.2f} | Drawdown: {r.drawdown:.1%} | Expectancy: {r.expectancy:.4f} | R Multiple: {r.r_multiple:.2f}R
-  Params: Spring={p.get('enable_spring', True)}, UTAD={p.get('enable_utad', True)}, BOS_sens={p.get('bos_sensitivity', 3)}, Displacement={p.get('displacement_threshold', 0.35)}, Fib={p.get('fib_levels', [0.5, 0.618, 0.705])}, RSI_period={p.get('rsi_period', 14)}, RSI_OB={p.get('rsi_overbought', 70)}, RSI_OS={p.get('rsi_oversold', 30)}, Vol_mult={p.get('volume_multiplier', 1.5)}, Vol_conf={p.get('volume_confirmation', False)}""")
+  Params (27 champs):
+    enable_spring={p.get('enable_spring', True)}, enable_utad={p.get('enable_utad', True)}
+    displacement_threshold={p.get('displacement_threshold', 0.55)}, displacement_atr_min={p.get('displacement_atr_min', 1.2)}
+    bos_sensitivity={p.get('bos_sensitivity', 7)}, bos_close_confirmation={p.get('bos_close_confirmation', True)}
+    fib_levels={p.get('fib_levels', [0.5, 0.618, 0.786])}, fib_entry_split={p.get('fib_entry_split', True)}
+    htf_alignment_required={p.get('htf_alignment_required', True)}
+    htf_long_min_bias={p.get('htf_long_min_bias', 'neutral')}, htf_short_min_bias={p.get('htf_short_min_bias', 'SHORT')}
+    tf1h_long_min_bias={p.get('tf1h_long_min_bias', 'neutral')}, tf1h_short_min_bias={p.get('tf1h_short_min_bias', 'neutral')}
+    volume_adaptive={p.get('volume_adaptive', True)}, volume_multiplier_active={p.get('volume_multiplier_active', 1.8)}, volume_multiplier_offpeak={p.get('volume_multiplier_offpeak', 1.25)}
+    rsi_period={p.get('rsi_period', 14)}, rsi_overbought={p.get('rsi_overbought', 70)}, rsi_oversold={p.get('rsi_oversold', 30)}, rsi_divergence_only={p.get('rsi_divergence_only', True)}
+    require_equal_highs_lows={p.get('require_equal_highs_lows', True)}, stop_logic={p.get('stop_logic', 'structure')}
+    allow_weekend_trading={p.get('allow_weekend_trading', False)}, use_5m_refinement={p.get('use_5m_refinement', False)}
+    risk_per_trade={p.get('risk_per_trade', 0.01)}, stop_loss_atr_mult={p.get('stop_loss_atr_mult', 1.5)}, take_profit_rr={p.get('take_profit_rr', 2.5)}""")
 
     prompt = f"""Tu es un expert en trading algorithmique SMC (Smart Money Concepts) et Wyckoff.
 Analyse comparativement ces {len(results)} backtests et synthétise une NOUVELLE stratégie optimale en combinant les meilleures caractéristiques.
@@ -2174,18 +3297,31 @@ Format attendu (JSON valide UNIQUEMENT, aucun texte avant ou après):
   "suggested_params": {{
     "enable_spring": <true|false>,
     "enable_utad": <true|false>,
+    "displacement_threshold": <0.3-0.9>,
+    "displacement_atr_min": <0.8-2.0>,
     "bos_sensitivity": <1-10>,
-    "displacement_threshold": <0.1-1.0>,
-    "fib_levels": [<valeurs entre 0 et 1>],
+    "bos_close_confirmation": <true|false>,
+    "fib_levels": [<3 valeurs entre 0.382 et 0.886>],
+    "fib_entry_split": <true|false>,
+    "htf_alignment_required": <true|false>,
+    "htf_long_min_bias": <"LONG"|"neutral"|"any">,
+    "htf_short_min_bias": <"SHORT"|"neutral"|"any">,
+    "tf1h_long_min_bias": <"LONG"|"neutral"|"any">,
+    "tf1h_short_min_bias": <"SHORT"|"neutral"|"any">,
+    "volume_adaptive": <true|false>,
+    "volume_multiplier_active": <1.2-2.5>,
+    "volume_multiplier_offpeak": <1.0-1.8>,
     "rsi_period": <5-30>,
     "rsi_overbought": <60-85>,
     "rsi_oversold": <15-40>,
-    "volume_confirmation": <true|false>,
-    "volume_multiplier": <1.0-3.0>,
-    "risk_per_trade": <0.01-0.05>,
-    "max_open_trades": <1-5>,
+    "rsi_divergence_only": <true|false>,
+    "require_equal_highs_lows": <true|false>,
+    "stop_logic": <"structure"|"atr">,
+    "allow_weekend_trading": <true|false>,
+    "use_5m_refinement": <true|false>,
+    "risk_per_trade": <0.005-0.03>,
     "stop_loss_atr_mult": <1.0-3.0>,
-    "take_profit_rr": <1.5-4.0>
+    "take_profit_rr": <1.5-5.0>
   }},
   "param_insights": [
     {{"param": "<nom du paramètre>", "from": "<valeur actuelle ou tendance>", "to": "<valeur recommandée>", "reason": "<pourquoi>"}}
@@ -2211,6 +3347,8 @@ Format attendu (JSON valide UNIQUEMENT, aucun texte avant ou après):
                 content = content[4:]
             content = content.strip()
         analysis = json.loads(content)
+        if "suggested_params" in analysis:
+            analysis["suggested_params"] = _sanitize_ai_params(analysis["suggested_params"])
         return {
             "ok": True,
             "backtest_ids": req.backtest_ids,
@@ -2261,7 +3399,7 @@ def _workshop_worker(job_id: str, req: AiWorkshopRequest) -> None:
             # ① Run backtest for this symbol
             with Session(engine) as s:
                 profile = s.get(StrategyProfile, req.profile_id) if req.profile_id else s.exec(
-                    select(StrategyProfile).where(StrategyProfile.name == "SMC-Wyckoff-Optimisé-v1")
+                    select(StrategyProfile).order_by(StrategyProfile.id.asc())
                 ).first()
                 candles = s.exec(
                     select(MarketCandle)
@@ -2290,7 +3428,7 @@ def _workshop_worker(job_id: str, req: AiWorkshopRequest) -> None:
             with Session(engine) as s:
                 bt_obj = BacktestResult(
                     symbol=sym, timeframe=req.timeframe,
-                    strategy_version=profile.name if profile else "SMC-Wyckoff-Optimisé-v1",
+                    strategy_version=profile.name if profile else "SMC/Wyckoff",
                     win_rate=round(wr, 4), profit_factor=round(pf, 4),
                     drawdown=round(dd, 4), expectancy=round(exp, 4),
                     r_multiple=round(rmult, 4),
@@ -2335,15 +3473,36 @@ RÉSULTATS BACKTEST SIMULÉ:
 - R Multiple moyen: {rmult:.2f}R
 - Nb trades: {len(outcomes)}
 
-PARAMÈTRES ACTUELS (profil optimisé):
-- Displacement threshold: {profile_params.get('displacement_threshold', 0.55)} | ATR min: {profile_params.get('displacement_atr_min', 1.2)}×
-- BOS sensibilité: {profile_params.get('bos_sensitivity', 7)}/10
-- HTF alignment obligatoire: {profile_params.get('htf_alignment_required', True)}
-- Volume multiplier: {profile_params.get('volume_multiplier_active', 1.8)}×SMA20
-- Fib niveaux: {profile_params.get('fib_levels', [0.5, 0.618, 0.786])} | Split 60/40: {profile_params.get('fib_entry_split', True)}
-- RSI divergence only: {profile_params.get('rsi_divergence_only', True)}
+PARAMÈTRES ACTUELS (profil optimisé — 27 champs):
+- enable_spring: {profile_params.get('enable_spring', True)} (activer détection Spring Wyckoff)
+- enable_utad: {profile_params.get('enable_utad', True)} (activer détection UTAD/distribution)
+- displacement_threshold: {profile_params.get('displacement_threshold', 0.55)} (force min du mouvement, 0.3-0.9)
+- displacement_atr_min: {profile_params.get('displacement_atr_min', 1.2)} (ATR min multiplier, 0.8-2.0)
+- bos_sensitivity: {profile_params.get('bos_sensitivity', 7)} (1=très réactif, 10=très conservateur)
+- bos_close_confirmation: {profile_params.get('bos_close_confirmation', True)} (exiger clôture au-delà du BOS)
+- fib_levels: {profile_params.get('fib_levels', [0.5, 0.618, 0.786])} (niveaux Fibonacci, 3 valeurs entre 0.382-0.886)
+- fib_entry_split: {profile_params.get('fib_entry_split', True)} (split 60/40 sur les niveaux Fib)
+- htf_alignment_required: {profile_params.get('htf_alignment_required', True)} (exiger alignement HTF)
+- htf_long_min_bias: {profile_params.get('htf_long_min_bias', 'neutral')} (filtre 4H directionnel LONG: "LONG","neutral","any")
+- htf_short_min_bias: {profile_params.get('htf_short_min_bias', 'SHORT')} (filtre 4H directionnel SHORT: "SHORT","neutral","any")
+- tf1h_long_min_bias: {profile_params.get('tf1h_long_min_bias', 'neutral')} (filtre 1H directionnel LONG: "LONG","neutral","any")
+- tf1h_short_min_bias: {profile_params.get('tf1h_short_min_bias', 'neutral')} (filtre 1H directionnel SHORT: "SHORT","neutral","any")
+- volume_adaptive: {profile_params.get('volume_adaptive', True)} (volume adaptatif activé)
+- volume_multiplier_active: {profile_params.get('volume_multiplier_active', 1.8)} (seuil volume actif, 1.2-2.5)
+- volume_multiplier_offpeak: {profile_params.get('volume_multiplier_offpeak', 1.25)} (seuil volume off-peak, 1.0-1.8)
+- rsi_period: {profile_params.get('rsi_period', 14)} (période RSI, 5-30)
+- rsi_overbought: {profile_params.get('rsi_overbought', 70)} (seuil RSI surachat, 60-85)
+- rsi_oversold: {profile_params.get('rsi_oversold', 30)} (seuil RSI survente, 15-40)
+- rsi_divergence_only: {profile_params.get('rsi_divergence_only', True)} (utiliser uniquement divergence RSI)
+- require_equal_highs_lows: {profile_params.get('require_equal_highs_lows', True)} (exiger equal highs/lows pour valider structure)
+- stop_logic: {profile_params.get('stop_logic', 'structure')} (logique de stop: "structure" ou "atr")
+- allow_weekend_trading: {profile_params.get('allow_weekend_trading', False)} (autoriser trading weekend)
+- use_5m_refinement: {profile_params.get('use_5m_refinement', False)} (utiliser raffinement 5min pour entrées)
+- risk_per_trade: {profile_params.get('risk_per_trade', 0.01)} (risque par trade, 0.005-0.03)
+- take_profit_rr: {profile_params.get('take_profit_rr', 2.5)} (ratio risk/reward TP, 1.5-5.0)
+- stop_loss_atr_mult: {profile_params.get('stop_loss_atr_mult', 1.5)} (multiplicateur ATR pour SL, 1.0-3.0)
 
-MISSION: Génère des paramètres SPÉCIFIQUES à {sym} qui maximisent le profit factor ET le win rate en tenant compte des caractéristiques propres à cette crypto.
+MISSION: Génère des paramètres SPÉCIFIQUES à {sym} qui maximisent le profit factor ET le win rate en tenant compte des caractéristiques propres à cette crypto. Tu DOIS fournir une valeur pour CHACUN des 27 champs ci-dessus.
 
 Réponds UNIQUEMENT en JSON valide:
 {{
@@ -2357,18 +3516,29 @@ Réponds UNIQUEMENT en JSON valide:
   "suggested_params": {{
     "enable_spring": <true|false>,
     "enable_utad": <true|false>,
-    "bos_sensitivity": <1-10>,
     "displacement_threshold": <0.3-0.9>,
     "displacement_atr_min": <0.8-2.0>,
+    "bos_sensitivity": <1-10>,
+    "bos_close_confirmation": <true|false>,
     "fib_levels": [<3 valeurs entre 0.382 et 0.886>],
     "fib_entry_split": <true|false>,
     "htf_alignment_required": <true|false>,
-    "volume_confirmation": <true|false>,
+    "htf_long_min_bias": <"LONG"|"neutral"|"any">,
+    "htf_short_min_bias": <"SHORT"|"neutral"|"any">,
+    "tf1h_long_min_bias": <"LONG"|"neutral"|"any">,
+    "tf1h_short_min_bias": <"SHORT"|"neutral"|"any">,
+    "volume_adaptive": <true|false>,
     "volume_multiplier_active": <1.2-2.5>,
     "volume_multiplier_offpeak": <1.0-1.8>,
-    "volume_adaptive": true,
-    "rsi_divergence_only": true,
-    "risk_per_trade": <0.01-0.03>,
+    "rsi_period": <5-30>,
+    "rsi_overbought": <60-85>,
+    "rsi_oversold": <15-40>,
+    "rsi_divergence_only": <true|false>,
+    "require_equal_highs_lows": <true|false>,
+    "stop_logic": <"structure"|"atr">,
+    "allow_weekend_trading": <true|false>,
+    "use_5m_refinement": <true|false>,
+    "risk_per_trade": <0.005-0.03>,
     "stop_loss_atr_mult": <1.0-3.0>,
     "take_profit_rr": <1.5-5.0>
   }}
@@ -2395,25 +3565,35 @@ Réponds UNIQUEMENT en JSON valide:
             p_name   = ai_data.get("suggested_name", f"{sym.replace('USDT','')}-SMC-IA-v1")
             # Merge AI suggestions onto a full default set so no field is ever missing
             _param_defaults = {
-                "allow_weekend_trading": False,
-                "use_5m_refinement": False,
-                "require_equal_highs_lows": True,
-                "bos_close_confirmation": True,
-                "fib_entry_split": True,
-                "htf_alignment_required": True,
-                "volume_adaptive": True,
-                "rsi_divergence_only": True,
+                "enable_spring": True,
+                "enable_utad": True,
                 "displacement_threshold": 0.55,
                 "displacement_atr_min": 1.2,
                 "bos_sensitivity": 7,
+                "bos_close_confirmation": True,
                 "fib_levels": [0.5, 0.618, 0.786],
+                "fib_entry_split": True,
+                "htf_alignment_required": True,
+                "htf_long_min_bias": "neutral",
+                "htf_short_min_bias": "SHORT",
+                "tf1h_long_min_bias": "neutral",
+                "tf1h_short_min_bias": "neutral",
+                "volume_adaptive": True,
                 "volume_multiplier_active": 1.8,
                 "volume_multiplier_offpeak": 1.25,
+                "rsi_period": 14,
+                "rsi_overbought": 70,
+                "rsi_oversold": 30,
+                "rsi_divergence_only": True,
+                "require_equal_highs_lows": True,
                 "stop_logic": "structure",
+                "allow_weekend_trading": False,
+                "use_5m_refinement": False,
                 "risk_per_trade": 0.01,
+                "stop_loss_atr_mult": 1.5,
                 "take_profit_rr": 2.5,
             }
-            _param_defaults.update(ai_data.get("suggested_params", {}))
+            _param_defaults.update(_sanitize_ai_params(ai_data.get("suggested_params", {})))
             p_params = _param_defaults
             with Session(engine) as s:
                 existing = s.exec(select(StrategyProfile).where(StrategyProfile.name == p_name)).first()
