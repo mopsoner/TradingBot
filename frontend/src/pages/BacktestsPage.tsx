@@ -349,6 +349,7 @@ function HistoryRow({ r }: { r: BacktestResult }) {
         </td>
         <td style={{ padding: '10px 8px', color: 'var(--text-muted)', fontSize: 11 }}>{r.timeframe}</td>
         <td style={{ padding: '10px 8px', color: 'var(--text-muted)', fontSize: 11 }}>{dateRange}</td>
+        <td style={{ padding: '10px 8px', color: 'var(--text-secondary)', fontSize: 11, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.strategy_version || '—'}</td>
         <td style={{ padding: '10px 8px', textAlign: 'center', color: 'var(--text-secondary)' }}>{r.signal_count ?? '-'}</td>
         <td style={{ padding: '10px 8px', textAlign: 'center', color: r.win_rate >= 0.5 ? '#22c55e' : r.win_rate >= 0.42 ? '#eab308' : '#ef4444', fontWeight: 700 }}>{pct(r.win_rate)}</td>
         <td style={{ padding: '10px 8px', textAlign: 'center', color: r.profit_factor >= 1.5 ? '#22c55e' : r.profit_factor >= 1.1 ? '#eab308' : '#ef4444', fontWeight: 700 }}>{num(r.profit_factor)}</td>
@@ -370,7 +371,7 @@ function HistoryRow({ r }: { r: BacktestResult }) {
       </tr>
       {expanded && trades.length > 0 && (
         <tr>
-          <td colSpan={9} style={{ padding: 0, background: 'rgba(6,9,15,0.6)', borderTop: '1px solid rgba(59,130,246,0.15)' }}>
+          <td colSpan={10} style={{ padding: 0, background: 'rgba(6,9,15,0.6)', borderTop: '1px solid rgba(59,130,246,0.15)' }}>
             <div style={{ maxHeight: 300, overflowY: 'auto' }}>
               <TradesTable trades={trades} />
             </div>
@@ -408,6 +409,7 @@ export function BacktestsPage({ onNavigate: _onNavigate }: { onNavigate?: (page:
                 <th style={{ padding: '10px 8px', textAlign: 'left' }}>Symbole</th>
                 <th style={{ padding: '10px 8px', textAlign: 'left' }}>TF</th>
                 <th style={{ padding: '10px 8px', textAlign: 'left' }}>Periode</th>
+                <th style={{ padding: '10px 8px', textAlign: 'left' }}>Profil</th>
                 <th style={{ padding: '10px 8px', textAlign: 'center' }}>Trades</th>
                 <th style={{ padding: '10px 8px', textAlign: 'center' }}>WR%</th>
                 <th style={{ padding: '10px 8px', textAlign: 'center' }}>PF</th>
