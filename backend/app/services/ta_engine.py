@@ -101,10 +101,16 @@ def validate_htf_1h(candles_1h: list, structure_4h: str) -> bool:
 
 # ── Step 0: Liquidity zone (Equal Highs / Equal Lows / HOD / LOD) ────────────
 
-def detect_liquidity_zone(candles_15m: list) -> tuple[str, float, bool]:
+def detect_liquidity_zone(
+    candles_15m: list,
+    require_eqhl: bool = True,
+) -> tuple[str, float, bool]:
     """
     Returns (zone_type, zone_price, is_high_zone).
-    Looks for Equal Highs/Lows (within 0.2%) then falls back to HOD/LOD.
+    Looks for Equal Highs/Lows (within 0.2%).
+    If require_eqhl=True (strict Wyckoff): rejects the candle (zone_price=0) when
+    no EQH/EQL is found — forces the engine to wait for a proper liquidity cluster.
+    If require_eqhl=False: falls back to HOD/LOD when no EQH/EQL exists.
     """
     if not candles_15m:
         return "LOD", 0.0, False
@@ -128,7 +134,12 @@ def detect_liquidity_zone(candles_15m: list) -> tuple[str, float, bool]:
                 zone_price = (lows[-1].low + lows[i].low) / 2
                 return "Equal Lows", round(zone_price, 6), False
 
-    # HOD / LOD
+    # No EQH/EQL found
+    if require_eqhl:
+        # Strict Wyckoff mode: only trade from proper equal-level clusters
+        return "None", 0.0, False
+
+    # HOD / LOD fallback (permissive mode only)
     last = recent[-1]
     hod_c = max(recent, key=lambda c: c.high)
     lod_c = min(recent, key=lambda c: c.low)

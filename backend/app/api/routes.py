@@ -1637,7 +1637,10 @@ def replay_start(req: ReplayStartRequest) -> dict:
     vol_mult        = 1.3
     sl_atr_mult     = 1.5
     allow_weekend   = True
-    use_weekly_trend_filter = False
+    use_weekly_trend_filter  = False
+    require_equal_highs_lows = True
+    fib_entry_split          = False
+    max_concurrent_trades    = 1
 
     if req.profile_id:
         with Session(engine) as s:
@@ -1659,7 +1662,10 @@ def replay_start(req: ReplayStartRequest) -> dict:
                     sl_atr_mult             = float(params.get("stop_loss_atr_mult", sl_atr_mult))
                     allow_weekend           = bool(params.get("allow_weekend_trading", allow_weekend))
                     wyckoff_lookback        = int(params.get("wyckoff_lookback", wyckoff_lookback))
-                    use_weekly_trend_filter = bool(params.get("use_weekly_trend_filter", use_weekly_trend_filter))
+                    use_weekly_trend_filter    = bool(params.get("use_weekly_trend_filter", use_weekly_trend_filter))
+                    require_equal_highs_lows   = bool(params.get("require_equal_highs_lows", True))
+                    fib_entry_split            = bool(params.get("fib_entry_split", False))
+                    max_concurrent_trades      = int(params.get("max_concurrent_trades", 1))
                     if req.htf_long_min_bias is None:
                         htf_long_min_bias = params.get("htf_long_min_bias", htf_long_min_bias)
                     if req.htf_short_min_bias is None:
@@ -1694,6 +1700,9 @@ def replay_start(req: ReplayStartRequest) -> dict:
         sl_atr_mult=sl_atr_mult,
         allow_weekend=allow_weekend,
         use_weekly_trend_filter=use_weekly_trend_filter,
+        require_equal_highs_lows=require_equal_highs_lows,
+        fib_entry_split=fib_entry_split,
+        max_concurrent_trades=max_concurrent_trades,
     )
     if session_id is None:
         return {"ok": False, "reason": "Trop de replays en cours. Réessayez dans quelques instants."}

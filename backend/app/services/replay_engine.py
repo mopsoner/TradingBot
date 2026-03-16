@@ -131,13 +131,15 @@ class ReplaySession:
             self.open_positions.remove(c)
 
     def _record_trade_close(self, pos: dict, result: str, r_multiple: float) -> None:
+        size_mult = pos.get("size_mult", 1.0)
+        effective_r = round(r_multiple * size_mult, 4)
         for trade in self.trades:
-            if trade.timestamp == pos["timestamp"] and trade.result == "OPEN":
+            if trade.timestamp == pos["timestamp"] and trade.direction == pos["direction"] and trade.result == "OPEN" and abs(trade.tp_price - pos["tp"]) < 1e-4:
                 trade.result = result
-                trade.r_multiple = r_multiple
+                trade.r_multiple = effective_r
                 break
 
-        self.equity += r_multiple
+        self.equity += effective_r
         if self.equity > self.peak:
             self.peak = self.equity
         dd = self.peak - self.equity
@@ -147,7 +149,7 @@ class ReplaySession:
     def _open_position(
         self, candle: CandleData, direction: str, atr: float,
         htf_bias: str, tf_1h: str, rr_ratio: float = 2.0,
-        sl_atr_mult: float = 1.5,
+        sl_atr_mult: float = 1.5, size_mult: float = 1.0,
     ) -> None:
         entry = candle.close
         if direction == "LONG":
@@ -163,6 +165,7 @@ class ReplaySession:
             "sl": sl,
             "tp": tp,
             "rr_ratio": rr_ratio,
+            "size_mult": size_mult,
             "timestamp": candle.timestamp.isoformat(),
         }
         self.open_positions.append(pos)
@@ -465,6 +468,10 @@ def _run_replay(
     sl_atr_mult: float = 1.5,
     allow_weekend: bool = True,
     use_weekly_trend_filter: bool = False,
+    # --- New params ---
+    require_equal_highs_lows: bool = True,
+    fib_entry_split: bool = False,
+    max_concurrent_trades: int = 1,
 ) -> None:
     _persist_running(session)
     try:
@@ -532,7 +539,7 @@ def _run_replay(
                 cooldown_bars -= 1
                 continue
 
-            if len(session.open_positions) >= 1:
+            if len(session.open_positions) >= max_concurrent_trades:
                 continue
 
             # Skip weekend candles if profile disables weekend trading
@@ -565,8 +572,10 @@ def _run_replay(
 
             # ── Pipeline complet via ta_engine (identique au scanner live) ──
 
-            # Step 0 — Liquidity Zone
-            _zone_type, zone_price, is_high_zone = ta.detect_liquidity_zone(window_15m)
+            # Step 0 — Liquidity Zone (EQH/EQL strict si require_equal_highs_lows=True)
+            _zone_type, zone_price, is_high_zone = ta.detect_liquidity_zone(
+                window_15m, require_eqhl=require_equal_highs_lows
+            )
             if zone_price <= 0:
                 rej["step0_liq"] += 1
                 continue
@@ -651,18 +660,41 @@ def _run_replay(
                 rej["step6_fib"] += 1
                 continue
 
-            # ── All steps passed → open position ──
+            # ── All steps passed → open position(s) ──
             atr_val = _compute_atr(window_15m)
             if atr_val <= 0:
                 continue
 
-            session._open_position(
-                current_candle, direction_15m, atr_val,
-                htf_bias=htf_bias or "neutral",
-                tf_1h=tf_1h_struct or "neutral",
-                rr_ratio=rr_ratio,
-                sl_atr_mult=sl_atr_mult,
-            )
+            if fib_entry_split:
+                # Fib entry split: 2 demi-positions depuis le même signal.
+                # Position A (scale-out) : TP = rr_ratio × 0.5, taille 0.5×
+                # Position B (runner)    : TP = rr_ratio,       taille 0.5×
+                # Résultat net si 2 wins : +0.25 × rr_ratio + 0.5 × rr_ratio = 0.75 × rr_ratio
+                # Résultat net si 2 loss : −0.5R − 0.5R = −1R (identique à 1 trade normal)
+                session._open_position(
+                    current_candle, direction_15m, atr_val,
+                    htf_bias=htf_bias or "neutral",
+                    tf_1h=tf_1h_struct or "neutral",
+                    rr_ratio=rr_ratio * 0.5,
+                    sl_atr_mult=sl_atr_mult,
+                    size_mult=0.5,
+                )
+                session._open_position(
+                    current_candle, direction_15m, atr_val,
+                    htf_bias=htf_bias or "neutral",
+                    tf_1h=tf_1h_struct or "neutral",
+                    rr_ratio=rr_ratio,
+                    sl_atr_mult=sl_atr_mult,
+                    size_mult=0.5,
+                )
+            else:
+                session._open_position(
+                    current_candle, direction_15m, atr_val,
+                    htf_bias=htf_bias or "neutral",
+                    tf_1h=tf_1h_struct or "neutral",
+                    rr_ratio=rr_ratio,
+                    sl_atr_mult=sl_atr_mult,
+                )
             cooldown_bars = 4
 
         # Merge local rejection counters into session
@@ -746,6 +778,9 @@ class ReplayManager:
         sl_atr_mult: float = 1.5,
         allow_weekend: bool = True,
         use_weekly_trend_filter: bool = False,
+        require_equal_highs_lows: bool = True,
+        fib_entry_split: bool = False,
+        max_concurrent_trades: int = 1,
     ) -> str | None:
         if fib_levels is None:
             fib_levels = [0.5, 0.618, 0.705]
@@ -791,6 +826,9 @@ class ReplayManager:
                 sl_atr_mult=sl_atr_mult,
                 allow_weekend=allow_weekend,
                 use_weekly_trend_filter=use_weekly_trend_filter,
+                require_equal_highs_lows=require_equal_highs_lows,
+                fib_entry_split=fib_entry_split,
+                max_concurrent_trades=max_concurrent_trades,
             ),
             daemon=True,
             name=f"replay-{session_id[:8]}",

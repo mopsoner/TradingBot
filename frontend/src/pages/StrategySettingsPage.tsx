@@ -64,12 +64,12 @@ export function StrategySettingsPage({ onNavigate }: Props) {
   const [asiaStart, setAsiaStart]                   = useState(0);
   const [asiaEnd, setAsiaEnd]                       = useState(6);
   // Filtres globaux
-  const [fakeBreakoutRequired, setFakeBreakoutRequired] = useState(true);
-  const [minVolumeUsd24h, setMinVolumeUsd24h]           = useState(0);
+  const [minVolumeUsd24h, setMinVolumeUsd24h] = useState(0);
   const [enableSpring, setEnableSpring] = useState(true);
   const [enableUtad, setEnableUtad]     = useState(true);
   const [displacementThreshold, setDisplacementThreshold] = useState(0.55);
   const [atrMin, setAtrMin]             = useState(1.2);
+  const [volMin, setVolMin]             = useState(0.8);
   const [bosSensitivity, setBosSensitivity] = useState(7);
   const [bosCloseConf, setBosCloseConf] = useState(true);
   const [fibLevels, setFibLevels]       = useState('0.5,0.618,0.786');
@@ -126,13 +126,13 @@ export function StrategySettingsPage({ onNavigate }: Props) {
     asia_start: asiaStart,
     asia_end: asiaEnd,
     // Filtres globaux
-    fake_breakout_required: fakeBreakoutRequired,
     min_volume_usd_24h: minVolumeUsd24h,
     // Wyckoff
     enable_spring: enableSpring,
     enable_utad: enableUtad,
     displacement_threshold: displacementThreshold,
     displacement_atr_min: atrMin,
+    displacement_vol_min: volMin,
     bos_sensitivity: bosSensitivity,
     bos_close_confirmation: bosCloseConf,
     fib_levels: fibLevels.split(',').map(v => Number(v.trim())).filter(v => !Number.isNaN(v)),
@@ -183,13 +183,13 @@ export function StrategySettingsPage({ onNavigate }: Props) {
     setAsiaStart(Number(params.asia_start ?? 0));
     setAsiaEnd(Number(params.asia_end ?? 6));
     // Filtres
-    setFakeBreakoutRequired(Boolean(params.fake_breakout_required ?? true));
     setMinVolumeUsd24h(Number(params.min_volume_usd_24h ?? 0));
     // Wyckoff
     setEnableSpring(Boolean(params.enable_spring ?? true));
     setEnableUtad(Boolean(params.enable_utad ?? true));
     setDisplacementThreshold(Number(params.displacement_threshold ?? 0.55));
     setAtrMin(Number(params.displacement_atr_min ?? 1.2));
+    setVolMin(Number(params.displacement_vol_min ?? 0.8));
     setBosSensitivity(Number(params.bos_sensitivity ?? 7));
     setBosCloseConf(Boolean(params.bos_close_confirmation ?? true));
     const fib = Array.isArray(params.fib_levels) ? (params.fib_levels as number[]).join(',') : '0.5,0.618,0.786';
@@ -235,9 +235,9 @@ export function StrategySettingsPage({ onNavigate }: Props) {
     setMaxOpenPositions(8); setDailyLossLimit(3.0); setWeeklyLossLimit(8.0);
     setActiveSessions(['london', 'newyork']);
     setLondonStart(7); setLondonEnd(11); setNewyorkStart(13); setNewyorkEnd(17); setAsiaStart(0); setAsiaEnd(6);
-    setFakeBreakoutRequired(true); setMinVolumeUsd24h(0);
+    setMinVolumeUsd24h(0);
     setEnableSpring(true); setEnableUtad(true);
-    setDisplacementThreshold(0.55); setAtrMin(1.2);
+    setDisplacementThreshold(0.55); setAtrMin(1.2); setVolMin(0.8);
     setBosSensitivity(7); setBosCloseConf(true);
     setFibLevels('0.5,0.618,0.786'); setFibSplit(true);
     setHtfRequired(true); setHtfLongMinBias('neutral'); setHtfShortMinBias('SHORT');
@@ -491,14 +491,6 @@ export function StrategySettingsPage({ onNavigate }: Props) {
           {/* ── Filtres globaux ─────────────────────────────────────────── */}
           <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid var(--border)' }}>
             <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Filtres globaux</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
-              <Toggle
-                checked={fakeBreakoutRequired}
-                onChange={setFakeBreakoutRequired}
-                label="Faux cassage obligatoire (Spring / UTAD)"
-                tip="Exige un faux cassage au-delà de la zone de liquidité avant de valider l'étape 2. Désactiver augmente les setups mais réduit la qualité."
-              />
-            </div>
             <div className="form-group" style={{ margin: 0 }}>
               <label style={{ fontSize: 12 }}>Volume minimum 24h (M USD) — 0 = désactivé</label>
               <input
@@ -527,7 +519,7 @@ export function StrategySettingsPage({ onNavigate }: Props) {
             <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>
               <Tooltip text="Force du mouvement directionnel pour valider une impulsion institutionnelle.">Displacement ATR-adaptatif</Tooltip>
             </div>
-            <div className="grid-2" style={{ gap: 8 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
               <div className="form-group" style={{ margin: 0 }}>
                 <label style={{ fontSize: 12 }}>
                   <Tooltip text="Force minimale (0.1–1.0). Plus haut = setups plus nets, moins fréquents.">Seuil force (0.1–1.0)</Tooltip>
@@ -539,6 +531,12 @@ export function StrategySettingsPage({ onNavigate }: Props) {
                   <Tooltip text="Range bougie ≥ N × ATR(14). 1.2 = bougie 20% plus large que l'ATR moyen.">ATR min (range ÷ ATR14)</Tooltip>
                 </label>
                 <input type="number" step="0.1" min="0.5" max="3.0" value={atrMin} onChange={e => setAtrMin(Number(e.target.value))} />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label style={{ fontSize: 12 }}>
+                  <Tooltip text="Volume bougie ÷ SMA20(volume). 0.8 = volume ≥ 80% de la moyenne. Filtre les displacements sans volume institutionnel.">Vol min (÷ SMA20)</Tooltip>
+                </label>
+                <input type="number" step="0.1" min="0.3" max="3.0" value={volMin} onChange={e => setVolMin(Number(e.target.value))} />
               </div>
             </div>
           </div>
