@@ -95,6 +95,15 @@ export function StrategySettingsPage({ onNavigate }: Props) {
   const [tpRR, setTpRR]                 = useState(2.5);
   const [enableAutoBorrowRepay, setEnableAutoBorrowRepay] = useState(false);
 
+  // ── AI Workshop modal state ───────────────────────────────────────────────
+  const [showWorkshopModal, setShowWorkshopModal] = useState(false);
+  const [workshopSymbols, setWorkshopSymbols]     = useState<string[]>(['FETUSDT', 'SOLUSDT', 'XRPUSDT']);
+  const [workshopBaseProfileId, setWorkshopBaseProfileId] = useState<number | null>(null);
+  const [workshopHorizon, setWorkshopHorizon]     = useState(1095);
+  const [workshopJobId, setWorkshopJobId]         = useState<string | null>(null);
+  const [workshopJob, setWorkshopJob]             = useState<Record<string, unknown> | null>(null);
+  const [workshopPolling, setWorkshopPolling]     = useState(false);
+
   // ── Profile list state ────────────────────────────────────────────────────
   const [editId, setEditId]               = useState<number | null>(null);
   const [status, setStatus]               = useState('');
@@ -273,6 +282,39 @@ export function StrategySettingsPage({ onNavigate }: Props) {
       reload();
     }
   };
+
+  const AVAILABLE_SYMBOLS = ['FETUSDT', 'SOLUSDT', 'XRPUSDT', 'ETHUSDT', 'BTCUSDT', 'BNBUSDT', 'ADAUSDT', 'DOGEUSDT'];
+
+  const startWorkshop = async () => {
+    if (workshopSymbols.length === 0) return;
+    const baseId = workshopBaseProfileId ?? (profiles.length > 0 ? Number(profiles[0].id) : null);
+    const res = await api.aiWorkshopStart({
+      symbols: workshopSymbols,
+      timeframe: '1h',
+      horizon_days: workshopHorizon,
+      profile_id: baseId,
+    });
+    if (res.ok && res.job_id) {
+      setWorkshopJobId(res.job_id);
+      setWorkshopJob({ status: 'running', done: 0, total: workshopSymbols.length, results: [] });
+      setWorkshopPolling(true);
+    }
+  };
+
+  useEffect(() => {
+    if (!workshopPolling || !workshopJobId) return;
+    const interval = setInterval(async () => {
+      const res = await api.aiWorkshopStatus(workshopJobId);
+      if (res) {
+        setWorkshopJob(res);
+        if (res.status === 'done' || res.status === 'error') {
+          setWorkshopPolling(false);
+          reload();
+        }
+      }
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [workshopPolling, workshopJobId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const runProfileBacktest = async (profileId: number) => {
     setBacktestStatus(prev => ({ ...prev, [profileId]: 'running' }));
@@ -719,6 +761,13 @@ export function StrategySettingsPage({ onNavigate }: Props) {
           <button className="btn btn-primary" style={{ width: '100%' }} onClick={saveProfile}>
             {editId !== null ? '💾 Enregistrer les modifications' : 'Sauvegarder le profil'}
           </button>
+          <button
+            className="btn"
+            style={{ width: '100%', marginTop: 8, background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', color: '#fff', border: 'none', fontWeight: 700 }}
+            onClick={() => { setShowWorkshopModal(true); setWorkshopJob(null); setWorkshopJobId(null); }}
+          >
+            🤖 Générer profil IA par crypto
+          </button>
           {status && <div style={{ marginTop: 10, fontSize: 13 }}>{status}</div>}
         </div>
 
@@ -891,6 +940,119 @@ export function StrategySettingsPage({ onNavigate }: Props) {
           </div>
         </div>
       </div>
+
+      {/* ── AI Workshop Modal ─────────────────────────────────────────────────── */}
+      {showWorkshopModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+          onClick={e => { if (e.target === e.currentTarget) setShowWorkshopModal(false); }}>
+          <div className="card" style={{ width: '100%', maxWidth: 620, maxHeight: '85vh', overflowY: 'auto', position: 'relative' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <h3 style={{ margin: 0 }}>🤖 Atelier IA — Génération de profils optimisés</h3>
+              <button className="btn" style={{ padding: '4px 12px' }} onClick={() => setShowWorkshopModal(false)}>✕</button>
+            </div>
+            <p style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 0, marginBottom: 16 }}>
+              Lance un backtest réel par crypto sur les données historiques Binance, puis demande à GPT-4o de générer des paramètres optimisés.
+              Un profil nommé <em>CRYPTO-SMC-IA-v1</em> est automatiquement créé pour chaque symbole.
+            </p>
+
+            {/* Symbole selector */}
+            <label style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, display: 'block' }}>Cryptos à analyser</label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+              {AVAILABLE_SYMBOLS.map(s => (
+                <button key={s}
+                  className="btn"
+                  style={{
+                    padding: '4px 12px', fontSize: 12,
+                    background: workshopSymbols.includes(s) ? 'var(--accent)' : 'var(--surface2)',
+                    color: workshopSymbols.includes(s) ? '#000' : 'var(--text)',
+                    fontWeight: workshopSymbols.includes(s) ? 700 : 400,
+                  }}
+                  onClick={() => setWorkshopSymbols(prev =>
+                    prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]
+                  )}>
+                  {s.replace('USDT', '')}
+                </button>
+              ))}
+            </div>
+
+            {/* Profil de base */}
+            <label style={{ fontSize: 12, fontWeight: 700, marginBottom: 4, display: 'block' }}>Profil de base (paramètres de départ)</label>
+            <select
+              style={{ width: '100%', marginBottom: 16, padding: '6px 10px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)' }}
+              value={workshopBaseProfileId ?? ''}
+              onChange={e => setWorkshopBaseProfileId(e.target.value ? Number(e.target.value) : null)}>
+              <option value="">— Premier profil disponible —</option>
+              {profiles.map(p => (
+                <option key={Number(p.id)} value={Number(p.id)}>{String(p.name)} ({String(p.symbol ?? 'N/A')})</option>
+              ))}
+            </select>
+
+            {/* Horizon */}
+            <label style={{ fontSize: 12, fontWeight: 700, marginBottom: 4, display: 'block' }}>Horizon historique</label>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+              {[365, 730, 1095, 1460].map(d => (
+                <button key={d} className="btn" style={{ padding: '4px 12px', fontSize: 12,
+                  background: workshopHorizon === d ? 'var(--accent)' : 'var(--surface2)',
+                  color: workshopHorizon === d ? '#000' : 'var(--text)', fontWeight: workshopHorizon === d ? 700 : 400 }}
+                  onClick={() => setWorkshopHorizon(d)}>
+                  {d === 365 ? '1 an' : d === 730 ? '2 ans' : d === 1095 ? '3 ans' : '4 ans'}
+                </button>
+              ))}
+            </div>
+
+            {/* Résultats en temps réel */}
+            {workshopJob && (
+              <div style={{ marginTop: 4, marginBottom: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 13 }}>
+                  <span>{String(workshopJob.status) === 'running' ? `⏳ En cours… (${String(workshopJob.current ?? '')})` : String(workshopJob.status) === 'done' ? '✅ Terminé' : `❌ Erreur`}</span>
+                  <span style={{ color: 'var(--text-muted)' }}>{Number(workshopJob.done ?? 0)}/{Number(workshopJob.total ?? workshopSymbols.length)}</span>
+                </div>
+                {/* Progress bar */}
+                <div style={{ height: 4, background: 'var(--surface2)', borderRadius: 2, overflow: 'hidden', marginBottom: 12 }}>
+                  <div style={{ height: '100%', background: 'var(--accent)', width: `${(Number(workshopJob.done ?? 0) / Math.max(Number(workshopJob.total ?? 1), 1)) * 100}%`, transition: 'width 0.5s' }} />
+                </div>
+                {/* Per-symbol results */}
+                {(workshopJob.results as Array<Record<string, unknown>> | undefined ?? []).map((r, i) => (
+                  <div key={i} style={{ padding: '10px 12px', background: 'var(--surface2)', borderRadius: 8, marginBottom: 8, border: '1px solid var(--border)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                      <span style={{ fontWeight: 700, fontFamily: 'monospace', fontSize: 13 }}>{String(r.symbol)}</span>
+                      <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, fontWeight: 700,
+                        background: r.status === 'done' ? 'rgba(63,185,80,0.18)' : r.status === 'error' ? 'rgba(248,81,73,0.18)' : 'rgba(255,166,0,0.18)',
+                        color: r.status === 'done' ? 'var(--accent-green)' : r.status === 'error' ? 'var(--accent-red)' : 'var(--accent-yellow)' }}>
+                        {r.status === 'done' ? '✅ Profil créé' : r.status === 'error' ? `❌ ${String(r.error)}` : '⏳ En cours…'}
+                      </span>
+                    </div>
+                    {r.status === 'done' && (
+                      <>
+                        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4, fontStyle: 'italic' }}>{String(r.verdict ?? '')}</div>
+                        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12 }}>
+                          <span>Trades: <strong>{Number(r.n_trades)}</strong></span>
+                          <span>WR: <strong>{(Number(r.win_rate) * 100).toFixed(1)}%</strong></span>
+                          <span>PF: <strong>{Number(r.profit_factor).toFixed(2)}</strong></span>
+                          <span>Total R: <strong style={{ color: Number(r.total_r) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>{Number(r.total_r) >= 0 ? '+' : ''}{Number(r.total_r).toFixed(1)}R</strong></span>
+                          <span>Score IA: <strong style={{ color: 'var(--accent)' }}>{Number(r.ai_score)}/100</strong></span>
+                        </div>
+                        {r.profile && <div style={{ fontSize: 11, marginTop: 4, color: 'var(--text-muted)' }}>Profil: <em>{String((r.profile as Record<string,unknown>).name)}</em></div>}
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                className="btn btn-primary"
+                style={{ flex: 1, fontWeight: 700 }}
+                disabled={workshopSymbols.length === 0 || workshopPolling}
+                onClick={startWorkshop}>
+                {workshopPolling ? '⏳ Génération en cours…' : '🚀 Lancer la génération'}
+              </button>
+              <button className="btn" onClick={() => setShowWorkshopModal(false)}>Fermer</button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

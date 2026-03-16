@@ -197,6 +197,11 @@ export const api = {
     post<{ ok: boolean; session_id?: string; reason?: string }>('/api/backtest/replay/start', body),
   replayStatus: (sessionId: string) =>
     get<ReplayStatusResponse>(`/api/backtest/replay/status/${sessionId}`),
+
+  aiWorkshopStart: (body: { symbols: string[]; timeframe: string; horizon_days: number; profile_id?: number | null }) =>
+    post<{ ok: boolean; job_id?: string; reason?: string }>('/api/strategy/ai-workshop/start', body),
+  aiWorkshopStatus: (jobId: string) =>
+    get<Record<string, unknown>>(`/api/strategy/ai-workshop/${jobId}`),
 };
 
 export type ReplayTrade = {

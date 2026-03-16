@@ -3432,6 +3432,7 @@ class AiWorkshopRequest(BaseModel):
 
 
 def _workshop_worker(job_id: str, req: AiWorkshopRequest) -> None:
+    from backend.app.services.replay_engine import _run_replay, ReplaySession, ReplayStatus as _ReplayStatus
     job = _workshop_jobs[job_id]
 
     base_url = os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
@@ -3454,50 +3455,12 @@ def _workshop_worker(job_id: str, req: AiWorkshopRequest) -> None:
         job["current"] = sym
 
         try:
-            # ① Run backtest for this symbol
+            # ① Load base profile params
             with Session(engine) as s:
                 profile = s.get(StrategyProfile, req.profile_id) if req.profile_id else s.exec(
                     select(StrategyProfile).order_by(StrategyProfile.id.asc())
                 ).first()
-                candles = s.exec(
-                    select(MarketCandle)
-                    .where(MarketCandle.symbol == sym, MarketCandle.timeframe == req.timeframe)
-                    .order_by(MarketCandle.timestamp.desc())
-                    .limit(500)
-                ).all()
 
-            outcomes = _simulate_outcomes(profile, sym, req.timeframe, req.horizon_days, list(candles))
-            if not outcomes:
-                entry["status"] = "error"
-                entry["error"]  = "no_outcomes"
-                job["done"] += 1
-                continue
-
-            wins   = [o for o in outcomes if o > 0]
-            losses = [o for o in outcomes if o <= 0]
-            wr     = len(wins) / len(outcomes) if outcomes else 0
-            gross_win  = sum(wins)
-            gross_loss = abs(sum(losses))
-            pf     = gross_win / gross_loss if gross_loss > 0 else 9.99
-            dd     = abs(min(losses)) / max(sum(wins) + abs(sum(losses)), 1e-9) * 0.12 if losses else 0.01
-            exp    = (wr * (gross_win / len(wins) if wins else 0) - (1 - wr) * (gross_loss / len(losses) if losses else 0))
-            rmult  = (gross_win / len(wins)) if wins else 0
-
-            with Session(engine) as s:
-                bt_obj = BacktestResult(
-                    symbol=sym, timeframe=req.timeframe,
-                    strategy_version=profile.name if profile else "SMC/Wyckoff",
-                    win_rate=round(wr, 4), profit_factor=round(pf, 4),
-                    drawdown=round(dd, 4), expectancy=round(exp, 4),
-                    r_multiple=round(rmult, 4),
-                    total_trades=len(outcomes), winning_trades=len(wins), losing_trades=len(losses),
-                )
-                s.add(bt_obj)
-                s.commit()
-                s.refresh(bt_obj)
-                bt_id = bt_obj.id
-
-            # ② AI analysis — symbol-specific prompt
             profile_params: dict = {}
             if profile and profile.parameters:
                 try:
@@ -3505,31 +3468,109 @@ def _workshop_worker(job_id: str, req: AiWorkshopRequest) -> None:
                 except Exception:
                     profile_params = {}
 
+            # ② Run REAL replay engine synchronously (we are already in a worker thread)
+            date_end_r   = datetime.now(timezone.utc)
+            date_start_r = date_end_r - timedelta(days=req.horizon_days)
+            replay_session = ReplaySession(
+                session_id=str(uuid.uuid4()),
+                symbol=sym,
+                date_start=date_start_r,
+                date_end=date_end_r,
+                profile_name=profile.name if profile else "workshop",
+            )
+            _run_replay(
+                session=replay_session,
+                fib_levels=profile_params.get("fib_levels", [0.5, 0.618, 0.786]),
+                rr_ratio=float(profile_params.get("take_profit_rr", 3.0)),
+                htf_long_min_bias=profile_params.get("htf_long_min_bias", "neutral"),
+                htf_short_min_bias=profile_params.get("htf_short_min_bias", "SHORT"),
+                tf1h_long_min_bias=profile_params.get("tf1h_long_min_bias", "neutral"),
+                tf1h_short_min_bias=profile_params.get("tf1h_short_min_bias", "neutral"),
+                enable_spring=bool(profile_params.get("enable_spring", True)),
+                enable_utad=bool(profile_params.get("enable_utad", True)),
+                disp_threshold=float(profile_params.get("displacement_threshold", 0.55)),
+                disp_atr_min=float(profile_params.get("displacement_atr_min", 1.2)),
+                disp_vol_min=float(profile_params.get("displacement_vol_min", 0.8)),
+                bos_sensitivity=int(profile_params.get("bos_sensitivity", 7)),
+                bos_close_conf=bool(profile_params.get("bos_close_confirmation", True)),
+                wyckoff_lookback=int(profile_params.get("wyckoff_lookback", 12)),
+                vol_mult=float(profile_params.get("volume_multiplier_active", 1.8)),
+                sl_atr_mult=float(profile_params.get("stop_loss_atr_mult", 1.4)),
+                allow_weekend=bool(profile_params.get("allow_weekend_trading", False)),
+                use_weekly_trend_filter=bool(profile_params.get("use_weekly_trend_filter", True)),
+                require_equal_highs_lows=False,  # permissif pour maximiser les données d'analyse
+                fib_entry_split=False,
+                max_concurrent_trades=int(profile_params.get("max_concurrent_trades", 1)),
+            )
+
+            # Extract real metrics from replay result
+            closed_trades = [t for t in replay_session.trades if t.result in ("TP", "SL")]
+            n_trades = len(closed_trades)
+            wins_list  = [t for t in closed_trades if t.result == "TP"]
+            losses_list = [t for t in closed_trades if t.result == "SL"]
+            wins_r = [t.r_multiple for t in wins_list]
+            loss_r = [abs(t.r_multiple) for t in losses_list]
+
+            wr         = len(wins_list) / n_trades if n_trades else 0.0
+            gross_win  = sum(wins_r)
+            gross_loss = sum(loss_r) or 1e-9
+            pf         = gross_win / gross_loss if gross_loss > 1e-9 else 0.0
+            dd         = replay_session.metrics.max_drawdown
+            total_r    = replay_session.metrics.total_r
+            exp        = (wr * (gross_win / len(wins_list) if wins_list else 0) -
+                         (1 - wr) * (gross_loss / len(losses_list) if losses_list else 0))
+            step_rej   = dict(replay_session.step_rejections)
+
+            if n_trades == 0:
+                entry["status"] = "error"
+                entry["error"]  = f"Aucun trade généré sur {sym} — vérifiez les données historiques"
+                job["done"] += 1
+                continue
+
+            bt_id = replay_session.backtest_result_id or 0
+
             # Crypto-specific context
             crypto_notes = {
-                "BTCUSDT": "BTC est moins volatil que les altcoins, tend à former des ranges étendus. Préférez des setups sur 4H avec displacement fort.",
-                "ETHUSDT": "ETH suit BTC avec un beta >1. Les Spring sont plus fréquents. Privilégiez des Fib profonds (0.786).",
-                "SOLUSDT": "SOL est très volatile (beta 1.6). BOS plus rapides. Displacement ATR souvent très fort.",
-                "BNBUSDT": "BNB a une corrélation forte avec les événements Binance. Volume institutionnel notable en London.",
-                "AVAXUSDT": "AVAX est fortement corrélé aux cycles DeFi. Spring/UTAD patterns très propres sur 4H.",
-                "XRPUSDT": "XRP a des mouvements erratiques liés aux événements réglementaires. BOS sensibilité à relever.",
-                "ADAUSDT": "ADA tend à former des ranges longs. Displacement moins intense, privilégiez BOS confirmé.",
-                "DOGEUSDT": "DOGE très volatil, spéculatif. Filtre HTF critique, beaucoup de faux BOS. Stricte sélection.",
+                "BTCUSDT":  "BTC est moins volatil que les altcoins, ranges étendus. Displacement fort sur 4H.",
+                "ETHUSDT":  "ETH suit BTC avec beta >1. Springs fréquents. Fib profonds (0.786).",
+                "SOLUSDT":  "SOL très volatile (beta 1.6). BOS rapides. Displacement ATR très fort. Réduire bos_sensitivity.",
+                "FETUSDT":  "FET (Fetch.AI) — altcoin IA très volatile. Rares EQH/EQL nets, préférer eqhl=False. RR élevé (4-5) pour capturer les moves narratifs.",
+                "BNBUSDT":  "BNB corrélé aux événements Binance. Volume institutionnel London.",
+                "AVAXUSDT": "AVAX corrélé aux cycles DeFi. Spring/UTAD patterns propres sur 4H.",
+                "XRPUSDT":  "XRP mouvements erratiques liés au réglementaire. BOS sensibilité à relever, filtre weekly clé.",
+                "ADAUSDT":  "ADA ranges longs. Displacement moins intense, BOS confirmé.",
+                "DOGEUSDT": "DOGE très spéculatif. HTF critique, faux BOS fréquents.",
             }
-            crypto_note = crypto_notes.get(sym, f"{sym} — actif crypto standard, paramètres de base applicables.")
+            crypto_note = crypto_notes.get(sym, f"{sym} — altcoin standard, paramètres de base applicables.")
+
+            # Format step rejections for AI
+            total_rej = sum(step_rej.values())
+            rej_summary = "\n".join(
+                f"  - {k}: {v} ({v/max(total_rej,1)*100:.0f}%)" for k, v in step_rej.items() if v > 0
+            )
 
             prompt = f"""Tu es un expert en trading algorithmique SMC/Wyckoff optimisant des profils par crypto.
 
-CRYPTO: {sym} (contexte spécifique: {crypto_note})
-TIMEFRAME: {req.timeframe.upper()} | HORIZON: {req.horizon_days} jours
+CRYPTO: {sym} (contexte: {crypto_note})
+HORIZON: {req.horizon_days} jours
 
-RÉSULTATS BACKTEST SIMULÉ:
+RÉSULTATS BACKTEST RÉEL (moteur de replay sur données Binance):
+- Trades fermés: {n_trades}
 - Win Rate: {wr:.1%}
 - Profit Factor: {pf:.2f}
-- Drawdown: {dd:.1%}
+- Max Drawdown: {dd:.1%}
+- Total R: {total_r:+.1f}R
 - Expectancy: {exp:.4f}R
-- R Multiple moyen: {rmult:.2f}R
-- Nb trades: {len(outcomes)}
+
+ANALYSE DES REJECTIONS PAR STEP (signaux filtrés):
+{rej_summary}
+Total rejections: {total_rej}
+
+Le step avec le plus de rejections représente le goulot d'étranglement principal.
+Si step0_liq est dominant → require_equal_highs_lows=False résoudra le problème.
+Si step2_wyckoff est dominant → ajuster enable_spring/enable_utad.
+Si weekly_trend est dominant → assouplir htf_long_min_bias/htf_short_min_bias.
+Si step4_bos est dominant → réduire bos_sensitivity.
 
 PARAMÈTRES ACTUELS (profil optimisé — 27 champs):
 - enable_spring: {profile_params.get('enable_spring', True)} (activer détection Spring Wyckoff)
@@ -3653,17 +3694,28 @@ Réponds UNIQUEMENT en JSON valide:
             }
             _param_defaults.update(_sanitize_ai_params(ai_data.get("suggested_params", {})))
             p_params = _param_defaults
+            # Ajouter les params essentiels pour ce symbole
+            p_params["use_weekly_trend_filter"] = bool(profile_params.get("use_weekly_trend_filter", True))
+            p_params["timeframe"] = profile_params.get("timeframe", "1h")
+            p_params["max_concurrent_trades"] = int(profile_params.get("max_concurrent_trades", 1))
+            p_params["capital_allocation"] = float(profile_params.get("capital_allocation", 100))
+            p_params["risk_per_trade"] = float(p_params.get("risk_per_trade", 0.01))
+
             with Session(engine) as s:
                 existing = s.exec(select(StrategyProfile).where(StrategyProfile.name == p_name)).first()
                 if existing:
-                    existing.parameters = json.dumps(p_params)
+                    existing.parameters  = json.dumps(p_params)
                     existing.description = ai_data.get("verdict", "")
+                    existing.symbol      = sym
+                    existing.direction   = "BOTH"
                     s.commit()
                     s.refresh(existing)
                     new_profile = existing
                 else:
                     new_profile = StrategyProfile(
                         name=p_name,
+                        symbol=sym,
+                        direction="BOTH",
                         mode="research",
                         description=ai_data.get("verdict", ""),
                         parameters=json.dumps(p_params),
@@ -3672,6 +3724,7 @@ Réponds UNIQUEMENT en JSON valide:
                     s.commit()
                     s.refresh(new_profile)
 
+            avg_r = (gross_win / len(wins_list)) if wins_list else 0.0
             entry["status"]        = "done"
             entry["backtest_id"]   = bt_id
             entry["ai_score"]      = ai_data.get("score", 0)
@@ -3683,8 +3736,10 @@ Réponds UNIQUEMENT en JSON valide:
             entry["profit_factor"] = round(pf, 4)
             entry["drawdown"]      = round(dd, 4)
             entry["expectancy"]    = round(exp, 4)
-            entry["r_multiple"]    = round(rmult, 4)
-            entry["n_trades"]      = len(outcomes)
+            entry["r_multiple"]    = round(avg_r, 4)
+            entry["total_r"]       = round(total_r, 2)
+            entry["n_trades"]      = n_trades
+            entry["step_rejections"] = step_rej
 
         except Exception as exc:
             entry["status"] = "error"
