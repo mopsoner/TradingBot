@@ -89,12 +89,17 @@ function TradesTable({ trades }: { trades: ReplayTrade[] }) {
 
 function ReplayLauncher({ onCompleted }: { onCompleted: () => void }) {
   const { data: loadedData } = useApi(() => api.loadedSymbols());
+  const { data: profilesData } = useApi(() => api.strategyProfiles());
   const loaded = Array.isArray(loadedData) ? loadedData : [];
   const availableSymbols = loaded.map(s => s.symbol);
+  const profiles: { id: number; name: string }[] = Array.isArray((profilesData as { rows?: unknown[] })?.rows)
+    ? ((profilesData as { rows: { id: number; name: string }[] }).rows)
+    : [];
 
   const [symbol, setSymbol] = useState('');
   const [dateStart, setDateStart] = useState('');
   const [dateEnd, setDateEnd] = useState('');
+  const [profileId, setProfileId] = useState<number | null>(null);
   const [running, setRunning] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [status, setStatus] = useState<ReplayStatusResponse | null>(null);
@@ -159,7 +164,7 @@ function ReplayLauncher({ onCompleted }: { onCompleted: () => void }) {
     setStatus(null);
     setSessionId(null);
     try {
-      const res = await api.replayStart({ symbol, date_start: dateStart, date_end: dateEnd });
+      const res = await api.replayStart({ symbol, date_start: dateStart, date_end: dateEnd, profile_id: profileId });
       if (!res.ok || !res.session_id) {
         setError(res.reason || 'Erreur au lancement.');
         setRunning(false);
@@ -225,6 +230,20 @@ function ReplayLauncher({ onCompleted }: { onCompleted: () => void }) {
                 width: '100%', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.15)',
                 borderRadius: 4, color: 'var(--text-primary)', fontSize: 12, padding: '5px 8px',
               }} />
+            </div>
+            <div style={{ flex: '1 1 200px' }}>
+              <div style={{ color: 'var(--text-muted)', fontSize: 11, marginBottom: 4 }}>Profil</div>
+              <select
+                value={profileId ?? ''}
+                onChange={e => setProfileId(e.target.value ? Number(e.target.value) : null)}
+                style={{
+                  width: '100%', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.15)',
+                  borderRadius: 4, color: 'var(--text-primary)', fontSize: 12, padding: '6px 10px',
+                }}
+              >
+                <option value=''>Profil actif (défaut)</option>
+                {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
             </div>
           </div>
 

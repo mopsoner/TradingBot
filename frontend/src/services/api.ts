@@ -193,7 +193,7 @@ export const api = {
   autonomousStatus: () => get<Record<string, unknown>>('/api/autonomous/status'),
   runWalkforward: (body: { symbol: string; years: number; timeframe: string; profile_id?: number | null }) =>
     post<Record<string, unknown>>('/api/backtest/walkforward', body),
-  replayStart: (body: { symbol: string; date_start: string; date_end: string }) =>
+  replayStart: (body: { symbol: string; date_start: string; date_end: string; profile_id?: number | null }) =>
     post<{ ok: boolean; session_id?: string; reason?: string }>('/api/backtest/replay/start', body),
   replayStatus: (sessionId: string) =>
     get<ReplayStatusResponse>(`/api/backtest/replay/status/${sessionId}`),
