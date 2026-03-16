@@ -7,12 +7,25 @@ from __future__ import annotations
 
 import io
 import math
+import time
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
-from typing import Literal
+from typing import Callable, Literal, Optional
 
 logger = logging.getLogger(__name__)
+
+# Public Binance market data endpoint — not geo-blocked, data from 2017-08-17
+BINANCE_DATA_API = "https://data-api.binance.vision/api/v3/klines"
+
+# Milliseconds per candle per interval (used to estimate total pages)
+_INTERVAL_MS: dict[str, int] = {
+    "5m": 5 * 60 * 1000,
+    "15m": 15 * 60 * 1000,
+    "1h": 60 * 60 * 1000,
+    "4h": 4 * 60 * 60 * 1000,
+    "1d": 24 * 60 * 60 * 1000,
+}
 
 BINANCE_TF_MAP: dict[str, str] = {
     "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d",
@@ -42,6 +55,9 @@ CANDLES_PER_DAY: dict[str, int] = {
     "5m": 288, "15m": 96, "1h": 24, "4h": 6, "1d": 1,
 }
 
+# Binance epoch: 2017-08-17 (earliest available data)
+BINANCE_EPOCH_MS = 1502928000000
+
 
 @dataclass
 class RawCandle:
@@ -53,13 +69,29 @@ class RawCandle:
     volume: float
 
 
+ProgressCallback = Optional[Callable[[int, int, int], None]]
+# progress_cb(page, estimated_total_pages, candles_so_far)
+
+
 # ── Binance ────────────────────────────────────────────────────────────────────
 
-def _binance_klines(symbol: str, interval: str, start_ms: int, end_ms: int) -> list[RawCandle]:
+def _binance_klines(
+    symbol: str,
+    interval: str,
+    start_ms: int,
+    end_ms: int,
+    progress_cb: ProgressCallback = None,
+) -> list[RawCandle]:
     import httpx
-    url = "https://api.binance.com/api/v3/klines"
+
     candles: list[RawCandle] = []
     chunk_start = start_ms
+    page = 0
+
+    interval_ms = _INTERVAL_MS.get(interval, _INTERVAL_MS["1h"])
+    duration_ms = max(end_ms - start_ms, 1)
+    estimated_pages = max(1, math.ceil(duration_ms / (1000 * interval_ms)))
+
     while chunk_start < end_ms:
         params = {
             "symbol": symbol,
@@ -69,14 +101,16 @@ def _binance_klines(symbol: str, interval: str, start_ms: int, end_ms: int) -> l
             "limit": 1000,
         }
         try:
-            resp = httpx.get(url, params=params, timeout=15)
+            resp = httpx.get(BINANCE_DATA_API, params=params, timeout=20)
             resp.raise_for_status()
             rows = resp.json()
         except Exception as exc:
             logger.warning("Binance klines failed %s %s: %s", symbol, interval, exc)
             break
+
         if not rows:
             break
+
         for row in rows:
             ts = datetime.fromtimestamp(row[0] / 1000, tz=timezone.utc)
             candles.append(RawCandle(
@@ -85,17 +119,38 @@ def _binance_klines(symbol: str, interval: str, start_ms: int, end_ms: int) -> l
                 low=float(row[3]), close=float(row[4]),
                 volume=float(row[5]),
             ))
+
+        page += 1
+        if progress_cb:
+            try:
+                progress_cb(page, estimated_pages, len(candles))
+            except Exception:
+                pass
+
         chunk_start = rows[-1][0] + 1
         if len(rows) < 1000:
             break
+
+        # Respect Binance rate limits (6000 weight/min → ~100 req/s; we stay conservative)
+        time.sleep(0.05)
+
     return candles
 
 
-def fetch_binance(symbol: str, timeframe: str, days: int) -> list[RawCandle]:
+def fetch_binance(
+    symbol: str,
+    timeframe: str,
+    days: int,
+    progress_cb: ProgressCallback = None,
+) -> list[RawCandle]:
     interval = BINANCE_TF_MAP.get(timeframe, "1h")
     end_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-    start_ms = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp() * 1000)
-    return _binance_klines(symbol, interval, start_ms, end_ms)
+    if days <= 0:
+        # Full history mode: fetch from Binance epoch (2017-08-17)
+        start_ms = BINANCE_EPOCH_MS
+    else:
+        start_ms = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp() * 1000)
+    return _binance_klines(symbol, interval, start_ms, end_ms, progress_cb=progress_cb)
 
 
 # ── yfinance ──────────────────────────────────────────────────────────────────
@@ -125,7 +180,7 @@ def fetch_yfinance(symbol: str, timeframe: str, days: int) -> list[RawCandle]:
     ticker = YF_TICKER_MAP.get(symbol.upper(), symbol.upper().replace("USDT", "-USD"))
     yf_interval = YF_TF_MAP.get(timeframe, "1h")
     max_days = YF_MAX_DAYS.get(timeframe, 729)
-    actual_days = min(days, max_days)
+    actual_days = min(days, max_days) if days > 0 else max_days
 
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=actual_days)
@@ -258,17 +313,19 @@ def import_candles(
     timeframe: str,
     days: int,
     source: Literal["binance", "yfinance"],
+    progress_cb: ProgressCallback = None,
 ) -> dict:
     """
     Download candles from the given source and store them in DB.
+    days=0 means full history (from Binance epoch 2017-08-17) — binance only.
     Returns a summary dict.
     """
     if source == "binance":
-        candles = fetch_binance(symbol, timeframe, days)
+        candles = fetch_binance(symbol, timeframe, days, progress_cb=progress_cb)
     elif source == "yfinance":
         candles = fetch_yfinance(symbol, timeframe, days)
     else:
-        raise ValueError(f"Unknown source: {source}. Use binance, yfinance, or POST CSV to /data/import/csv")
+        raise ValueError(f"Unknown source: {source}. Use binance or yfinance, or POST CSV to /data/import/csv")
 
     inserted = save_candles_to_db(candles, symbol, timeframe, source)
 
