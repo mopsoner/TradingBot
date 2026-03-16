@@ -217,35 +217,27 @@ class ReplaySession:
 def _load_candles_from_db(
     symbol: str, timeframe: str, date_start: datetime, date_end: datetime
 ) -> list[CandleData]:
+    from sqlalchemy import text as _text
+    with Session(db_engine) as s:
+        rows = s.exec(
+            select(MarketCandle)
+            .where(
+                MarketCandle.symbol == symbol,
+                MarketCandle.timeframe == timeframe,
+                MarketCandle.timestamp >= date_start,
+                MarketCandle.timestamp <= date_end,
+            )
+            .order_by(MarketCandle.timestamp)
+        ).all()
     candles: list[CandleData] = []
-    offset = 0
-    while True:
-        with Session(db_engine) as s:
-            rows = s.exec(
-                select(MarketCandle)
-                .where(
-                    MarketCandle.symbol == symbol,
-                    MarketCandle.timeframe == timeframe,
-                    MarketCandle.timestamp >= date_start,
-                    MarketCandle.timestamp <= date_end,
-                )
-                .order_by(MarketCandle.timestamp)
-                .offset(offset)
-                .limit(CHUNK_SIZE)
-            ).all()
-        if not rows:
-            break
-        for r in rows:
-            ts = r.timestamp
-            if ts.tzinfo is not None:
-                ts = ts.replace(tzinfo=None)
-            candles.append(CandleData(
-                timestamp=ts,
-                open=r.open, high=r.high, low=r.low, close=r.close, volume=r.volume,
-            ))
-        offset += len(rows)
-        if len(rows) < CHUNK_SIZE:
-            break
+    for r in rows:
+        ts = r.timestamp
+        if ts.tzinfo is not None:
+            ts = ts.replace(tzinfo=None)
+        candles.append(CandleData(
+            timestamp=ts,
+            open=r.open, high=r.high, low=r.low, close=r.close, volume=r.volume,
+        ))
     return candles
 
 
