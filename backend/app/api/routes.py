@@ -2966,6 +2966,8 @@ def _sanitize_ai_params(raw) -> dict:
         "enable_utad": (bool,),
         "displacement_threshold": (float, 0.1, 1.0),
         "displacement_atr_min": (float, 0.5, 3.0),
+        "displacement_vol_min": (float, 0.3, 2.0),
+        "wyckoff_lookback": (int, 3, 30),
         "bos_sensitivity": (int, 1, 10),
         "bos_close_confirmation": (bool,),
         "fib_entry_split": (bool,),
@@ -2982,6 +2984,8 @@ def _sanitize_ai_params(raw) -> dict:
         "rsi_oversold": (int, 5, 50),
         "rsi_divergence_only": (bool,),
         "require_equal_highs_lows": (bool,),
+        "use_weekly_trend_filter": (bool,),
+        "max_concurrent_trades": (int, 1, 10),
         "stop_logic": (str, ["structure", "atr"]),
         "allow_weekend_trading": (bool,),
         "use_5m_refinement": (bool,),
@@ -3051,11 +3055,13 @@ RÉSULTATS DU BACKTEST:
 - Expectancy: {result.expectancy:.4f}
 - R Multiple: {result.r_multiple:.2f}R
 
-PARAMÈTRES ACTUELS DE LA STRATÉGIE (27 champs):
+PARAMÈTRES ACTUELS DE LA STRATÉGIE (31 champs):
 - enable_spring: {params.get('enable_spring', True)} (activer détection Spring Wyckoff)
 - enable_utad: {params.get('enable_utad', True)} (activer détection UTAD/distribution)
 - displacement_threshold: {params.get('displacement_threshold', 0.55)} (force min du mouvement, 0.3-0.9)
 - displacement_atr_min: {params.get('displacement_atr_min', 1.2)} (ATR min multiplier, 0.8-2.0)
+- displacement_vol_min: {params.get('displacement_vol_min', 0.8)} (volume min multiplier pour displacement, 0.5-1.5)
+- wyckoff_lookback: {params.get('wyckoff_lookback', 12)} (barres de lookback pour structure Wyckoff, 6-24)
 - bos_sensitivity: {params.get('bos_sensitivity', 7)} (1=très réactif, 10=très conservateur)
 - bos_close_confirmation: {params.get('bos_close_confirmation', True)} (exiger clôture au-delà du BOS)
 - fib_levels: {params.get('fib_levels', [0.5, 0.618, 0.786])} (niveaux Fibonacci, 3 valeurs entre 0.382-0.886)
@@ -3065,6 +3071,7 @@ PARAMÈTRES ACTUELS DE LA STRATÉGIE (27 champs):
 - htf_short_min_bias: {params.get('htf_short_min_bias', 'SHORT')} (filtre 4H directionnel SHORT: "SHORT","neutral","any")
 - tf1h_long_min_bias: {params.get('tf1h_long_min_bias', 'neutral')} (filtre 1H directionnel LONG: "LONG","neutral","any")
 - tf1h_short_min_bias: {params.get('tf1h_short_min_bias', 'neutral')} (filtre 1H directionnel SHORT: "SHORT","neutral","any")
+- use_weekly_trend_filter: {params.get('use_weekly_trend_filter', False)} (filtre tendance weekly: true=exige alignement SMA10 weekly)
 - volume_adaptive: {params.get('volume_adaptive', True)} (volume adaptatif activé)
 - volume_multiplier_active: {params.get('volume_multiplier_active', 1.8)} (seuil volume actif, 1.2-2.5)
 - volume_multiplier_offpeak: {params.get('volume_multiplier_offpeak', 1.25)} (seuil volume off-peak, 1.0-1.8)
@@ -3073,6 +3080,7 @@ PARAMÈTRES ACTUELS DE LA STRATÉGIE (27 champs):
 - rsi_oversold: {params.get('rsi_oversold', 30)} (seuil RSI survente, 15-40)
 - rsi_divergence_only: {params.get('rsi_divergence_only', True)} (utiliser uniquement divergence RSI)
 - require_equal_highs_lows: {params.get('require_equal_highs_lows', True)} (exiger equal highs/lows pour valider structure)
+- max_concurrent_trades: {params.get('max_concurrent_trades', 1)} (nb max trades simultanés, 1-5)
 - stop_logic: {params.get('stop_logic', 'structure')} (logique de stop: "structure" ou "atr")
 - allow_weekend_trading: {params.get('allow_weekend_trading', False)} (autoriser trading weekend)
 - use_5m_refinement: {params.get('use_5m_refinement', False)} (utiliser raffinement 5min pour entrées)
@@ -3083,7 +3091,7 @@ PARAMÈTRES ACTUELS DE LA STRATÉGIE (27 champs):
 ANALYSE ET RECOMMANDATIONS:
 Identifie les 4-5 problèmes principaux et donne des recommandations PRÉCISES avec des valeurs chiffrées.
 Génère aussi un nom de profil optimisé (incrémente la version, ex: si "SMC-v1" alors "SMC-v2").
-Tu DOIS fournir une valeur pour CHACUN des 27 champs ci-dessus dans suggested_params.
+Tu DOIS fournir une valeur pour CHACUN des 31 champs ci-dessus dans suggested_params.
 Format attendu (respecte EXACTEMENT ce format JSON):
 {{
   "score": <note globale 0-100>,
@@ -3094,6 +3102,8 @@ Format attendu (respecte EXACTEMENT ce format JSON):
     "enable_utad": <true|false>,
     "displacement_threshold": <0.3-0.9>,
     "displacement_atr_min": <0.8-2.0>,
+    "displacement_vol_min": <0.5-1.5>,
+    "wyckoff_lookback": <6-24>,
     "bos_sensitivity": <1-10>,
     "bos_close_confirmation": <true|false>,
     "fib_levels": [<3 valeurs entre 0.382 et 0.886>],
@@ -3103,6 +3113,7 @@ Format attendu (respecte EXACTEMENT ce format JSON):
     "htf_short_min_bias": <"SHORT"|"neutral"|"any">,
     "tf1h_long_min_bias": <"LONG"|"neutral"|"any">,
     "tf1h_short_min_bias": <"SHORT"|"neutral"|"any">,
+    "use_weekly_trend_filter": <true|false>,
     "volume_adaptive": <true|false>,
     "volume_multiplier_active": <1.2-2.5>,
     "volume_multiplier_offpeak": <1.0-1.8>,
@@ -3111,6 +3122,7 @@ Format attendu (respecte EXACTEMENT ce format JSON):
     "rsi_oversold": <15-40>,
     "rsi_divergence_only": <true|false>,
     "require_equal_highs_lows": <true|false>,
+    "max_concurrent_trades": <1-5>,
     "stop_logic": <"structure"|"atr">,
     "allow_weekend_trading": <true|false>,
     "use_5m_refinement": <true|false>,
@@ -3314,17 +3326,19 @@ def multi_optimize_backtests(req: MultiOptimizeRequest) -> dict:
         bt_lines.append(f"""
 Backtest #{r.id} — {r.symbol} / {r.timeframe} / profil "{r.strategy_version}":
   Win Rate: {r.win_rate:.1%} | Profit Factor: {r.profit_factor:.2f} | Drawdown: {r.drawdown:.1%} | Expectancy: {r.expectancy:.4f} | R Multiple: {r.r_multiple:.2f}R
-  Params (27 champs):
+  Params (31 champs):
     enable_spring={p.get('enable_spring', True)}, enable_utad={p.get('enable_utad', True)}
     displacement_threshold={p.get('displacement_threshold', 0.55)}, displacement_atr_min={p.get('displacement_atr_min', 1.2)}
+    displacement_vol_min={p.get('displacement_vol_min', 0.8)}, wyckoff_lookback={p.get('wyckoff_lookback', 12)}
     bos_sensitivity={p.get('bos_sensitivity', 7)}, bos_close_confirmation={p.get('bos_close_confirmation', True)}
     fib_levels={p.get('fib_levels', [0.5, 0.618, 0.786])}, fib_entry_split={p.get('fib_entry_split', True)}
     htf_alignment_required={p.get('htf_alignment_required', True)}
     htf_long_min_bias={p.get('htf_long_min_bias', 'neutral')}, htf_short_min_bias={p.get('htf_short_min_bias', 'SHORT')}
     tf1h_long_min_bias={p.get('tf1h_long_min_bias', 'neutral')}, tf1h_short_min_bias={p.get('tf1h_short_min_bias', 'neutral')}
+    use_weekly_trend_filter={p.get('use_weekly_trend_filter', False)}
     volume_adaptive={p.get('volume_adaptive', True)}, volume_multiplier_active={p.get('volume_multiplier_active', 1.8)}, volume_multiplier_offpeak={p.get('volume_multiplier_offpeak', 1.25)}
     rsi_period={p.get('rsi_period', 14)}, rsi_overbought={p.get('rsi_overbought', 70)}, rsi_oversold={p.get('rsi_oversold', 30)}, rsi_divergence_only={p.get('rsi_divergence_only', True)}
-    require_equal_highs_lows={p.get('require_equal_highs_lows', True)}, stop_logic={p.get('stop_logic', 'structure')}
+    require_equal_highs_lows={p.get('require_equal_highs_lows', True)}, max_concurrent_trades={p.get('max_concurrent_trades', 1)}, stop_logic={p.get('stop_logic', 'structure')}
     allow_weekend_trading={p.get('allow_weekend_trading', False)}, use_5m_refinement={p.get('use_5m_refinement', False)}
     risk_per_trade={p.get('risk_per_trade', 0.01)}, stop_loss_atr_mult={p.get('stop_loss_atr_mult', 1.5)}, take_profit_rr={p.get('take_profit_rr', 2.5)}""")
 
@@ -3357,6 +3371,8 @@ Format attendu (JSON valide UNIQUEMENT, aucun texte avant ou après):
     "enable_utad": <true|false>,
     "displacement_threshold": <0.3-0.9>,
     "displacement_atr_min": <0.8-2.0>,
+    "displacement_vol_min": <0.5-1.5>,
+    "wyckoff_lookback": <6-24>,
     "bos_sensitivity": <1-10>,
     "bos_close_confirmation": <true|false>,
     "fib_levels": [<3 valeurs entre 0.382 et 0.886>],
@@ -3366,6 +3382,7 @@ Format attendu (JSON valide UNIQUEMENT, aucun texte avant ou après):
     "htf_short_min_bias": <"SHORT"|"neutral"|"any">,
     "tf1h_long_min_bias": <"LONG"|"neutral"|"any">,
     "tf1h_short_min_bias": <"SHORT"|"neutral"|"any">,
+    "use_weekly_trend_filter": <true|false>,
     "volume_adaptive": <true|false>,
     "volume_multiplier_active": <1.2-2.5>,
     "volume_multiplier_offpeak": <1.0-1.8>,
@@ -3374,6 +3391,7 @@ Format attendu (JSON valide UNIQUEMENT, aucun texte avant ou après):
     "rsi_oversold": <15-40>,
     "rsi_divergence_only": <true|false>,
     "require_equal_highs_lows": <true|false>,
+    "max_concurrent_trades": <1-5>,
     "stop_logic": <"structure"|"atr">,
     "allow_weekend_trading": <true|false>,
     "use_5m_refinement": <true|false>,
@@ -3572,11 +3590,13 @@ Si step2_wyckoff est dominant → ajuster enable_spring/enable_utad.
 Si weekly_trend est dominant → assouplir htf_long_min_bias/htf_short_min_bias.
 Si step4_bos est dominant → réduire bos_sensitivity.
 
-PARAMÈTRES ACTUELS (profil optimisé — 27 champs):
+PARAMÈTRES ACTUELS (profil de base — 31 champs):
 - enable_spring: {profile_params.get('enable_spring', True)} (activer détection Spring Wyckoff)
 - enable_utad: {profile_params.get('enable_utad', True)} (activer détection UTAD/distribution)
 - displacement_threshold: {profile_params.get('displacement_threshold', 0.55)} (force min du mouvement, 0.3-0.9)
 - displacement_atr_min: {profile_params.get('displacement_atr_min', 1.2)} (ATR min multiplier, 0.8-2.0)
+- displacement_vol_min: {profile_params.get('displacement_vol_min', 0.8)} (volume min multiplier pour displacement, 0.5-1.5)
+- wyckoff_lookback: {profile_params.get('wyckoff_lookback', 12)} (barres de lookback pour structure Wyckoff, 6-24)
 - bos_sensitivity: {profile_params.get('bos_sensitivity', 7)} (1=très réactif, 10=très conservateur)
 - bos_close_confirmation: {profile_params.get('bos_close_confirmation', True)} (exiger clôture au-delà du BOS)
 - fib_levels: {profile_params.get('fib_levels', [0.5, 0.618, 0.786])} (niveaux Fibonacci, 3 valeurs entre 0.382-0.886)
@@ -3586,6 +3606,7 @@ PARAMÈTRES ACTUELS (profil optimisé — 27 champs):
 - htf_short_min_bias: {profile_params.get('htf_short_min_bias', 'SHORT')} (filtre 4H directionnel SHORT: "SHORT","neutral","any")
 - tf1h_long_min_bias: {profile_params.get('tf1h_long_min_bias', 'neutral')} (filtre 1H directionnel LONG: "LONG","neutral","any")
 - tf1h_short_min_bias: {profile_params.get('tf1h_short_min_bias', 'neutral')} (filtre 1H directionnel SHORT: "SHORT","neutral","any")
+- use_weekly_trend_filter: {profile_params.get('use_weekly_trend_filter', False)} (filtre tendance weekly: true=exige alignement SMA10 weekly)
 - volume_adaptive: {profile_params.get('volume_adaptive', True)} (volume adaptatif activé)
 - volume_multiplier_active: {profile_params.get('volume_multiplier_active', 1.8)} (seuil volume actif, 1.2-2.5)
 - volume_multiplier_offpeak: {profile_params.get('volume_multiplier_offpeak', 1.25)} (seuil volume off-peak, 1.0-1.8)
@@ -3594,6 +3615,7 @@ PARAMÈTRES ACTUELS (profil optimisé — 27 champs):
 - rsi_oversold: {profile_params.get('rsi_oversold', 30)} (seuil RSI survente, 15-40)
 - rsi_divergence_only: {profile_params.get('rsi_divergence_only', True)} (utiliser uniquement divergence RSI)
 - require_equal_highs_lows: {profile_params.get('require_equal_highs_lows', True)} (exiger equal highs/lows pour valider structure)
+- max_concurrent_trades: {profile_params.get('max_concurrent_trades', 1)} (nb max trades simultanés, 1-5)
 - stop_logic: {profile_params.get('stop_logic', 'structure')} (logique de stop: "structure" ou "atr")
 - allow_weekend_trading: {profile_params.get('allow_weekend_trading', False)} (autoriser trading weekend)
 - use_5m_refinement: {profile_params.get('use_5m_refinement', False)} (utiliser raffinement 5min pour entrées)
@@ -3601,7 +3623,7 @@ PARAMÈTRES ACTUELS (profil optimisé — 27 champs):
 - take_profit_rr: {profile_params.get('take_profit_rr', 2.5)} (ratio risk/reward TP, 1.5-5.0)
 - stop_loss_atr_mult: {profile_params.get('stop_loss_atr_mult', 1.5)} (multiplicateur ATR pour SL, 1.0-3.0)
 
-MISSION: Génère des paramètres SPÉCIFIQUES à {sym} qui maximisent le profit factor ET le win rate en tenant compte des caractéristiques propres à cette crypto. Tu DOIS fournir une valeur pour CHACUN des 27 champs ci-dessus.
+MISSION: Génère des paramètres SPÉCIFIQUES à {sym} qui maximisent le profit factor ET le win rate en tenant compte des caractéristiques propres à cette crypto. Tu DOIS fournir une valeur pour CHACUN des 31 champs ci-dessus.
 
 Réponds UNIQUEMENT en JSON valide:
 {{
@@ -3617,6 +3639,8 @@ Réponds UNIQUEMENT en JSON valide:
     "enable_utad": <true|false>,
     "displacement_threshold": <0.3-0.9>,
     "displacement_atr_min": <0.8-2.0>,
+    "displacement_vol_min": <0.5-1.5>,
+    "wyckoff_lookback": <6-24>,
     "bos_sensitivity": <1-10>,
     "bos_close_confirmation": <true|false>,
     "fib_levels": [<3 valeurs entre 0.382 et 0.886>],
@@ -3626,6 +3650,7 @@ Réponds UNIQUEMENT en JSON valide:
     "htf_short_min_bias": <"SHORT"|"neutral"|"any">,
     "tf1h_long_min_bias": <"LONG"|"neutral"|"any">,
     "tf1h_short_min_bias": <"SHORT"|"neutral"|"any">,
+    "use_weekly_trend_filter": <true|false>,
     "volume_adaptive": <true|false>,
     "volume_multiplier_active": <1.2-2.5>,
     "volume_multiplier_offpeak": <1.0-1.8>,
@@ -3634,6 +3659,7 @@ Réponds UNIQUEMENT en JSON valide:
     "rsi_oversold": <15-40>,
     "rsi_divergence_only": <true|false>,
     "require_equal_highs_lows": <true|false>,
+    "max_concurrent_trades": <1-5>,
     "stop_logic": <"structure"|"atr">,
     "allow_weekend_trading": <true|false>,
     "use_5m_refinement": <true|false>,
@@ -3668,6 +3694,8 @@ Réponds UNIQUEMENT en JSON valide:
                 "enable_utad": True,
                 "displacement_threshold": 0.55,
                 "displacement_atr_min": 1.2,
+                "displacement_vol_min": 0.8,
+                "wyckoff_lookback": 12,
                 "bos_sensitivity": 7,
                 "bos_close_confirmation": True,
                 "fib_levels": [0.5, 0.618, 0.786],
@@ -3677,6 +3705,7 @@ Réponds UNIQUEMENT en JSON valide:
                 "htf_short_min_bias": "SHORT",
                 "tf1h_long_min_bias": "neutral",
                 "tf1h_short_min_bias": "neutral",
+                "use_weekly_trend_filter": False,
                 "volume_adaptive": True,
                 "volume_multiplier_active": 1.8,
                 "volume_multiplier_offpeak": 1.25,
@@ -3691,13 +3720,13 @@ Réponds UNIQUEMENT en JSON valide:
                 "risk_per_trade": 0.01,
                 "stop_loss_atr_mult": 1.5,
                 "take_profit_rr": 2.5,
+                "max_concurrent_trades": int(profile_params.get("max_concurrent_trades", 1)),
             }
+            # Apply AI suggestions — these override defaults (including max_concurrent_trades, use_weekly_trend_filter)
             _param_defaults.update(_sanitize_ai_params(ai_data.get("suggested_params", {})))
             p_params = _param_defaults
-            # Ajouter les params essentiels pour ce symbole
-            p_params["use_weekly_trend_filter"] = bool(profile_params.get("use_weekly_trend_filter", True))
+            # Preserve non-AI-tunable operational params from the base profile
             p_params["timeframe"] = profile_params.get("timeframe", "1h")
-            p_params["max_concurrent_trades"] = int(profile_params.get("max_concurrent_trades", 1))
             p_params["capital_allocation"] = float(profile_params.get("capital_allocation", 100))
             p_params["risk_per_trade"] = float(p_params.get("risk_per_trade", 0.01))
 
