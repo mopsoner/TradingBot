@@ -64,6 +64,7 @@ export function StrategySettingsPage({ onNavigate }: Props) {
   const [rsiOb, setRsiOb]               = useState(70);
   const [rsiOs, setRsiOs]               = useState(30);
   const [rsiDivOnly, setRsiDivOnly]     = useState(true);
+  const [useWeeklyFilter, setUseWeeklyFilter] = useState(false);
   const [allowWeekend, setAllowWeekend] = useState(false);
   const [use5m, setUse5m]               = useState(false);
   const [requireEqHL, setRequireEqHL]   = useState(true);
@@ -112,6 +113,7 @@ export function StrategySettingsPage({ onNavigate }: Props) {
     stop_logic: stopLoss,
     risk_per_trade: riskPerTrade / 100,
     take_profit_rr: tpRR,
+    use_weekly_trend_filter: useWeeklyFilter,
   });
 
   const loadProfileIntoForm = (p: Record<string, unknown>) => {
@@ -140,6 +142,7 @@ export function StrategySettingsPage({ onNavigate }: Props) {
     setRsiOb(Number(params.rsi_overbought ?? 70));
     setRsiOs(Number(params.rsi_oversold ?? 30));
     setRsiDivOnly(Boolean(params.rsi_divergence_only ?? true));
+    setUseWeeklyFilter(Boolean(params.use_weekly_trend_filter ?? false));
     setAllowWeekend(Boolean(params.allow_weekend_trading ?? false));
     setUse5m(Boolean(params.use_5m_refinement ?? false));
     setRequireEqHL(Boolean(params.require_equal_highs_lows ?? true));
@@ -170,6 +173,7 @@ export function StrategySettingsPage({ onNavigate }: Props) {
     setTf1hShortMinBias('SHORT'); setTf1hLongMinBias('neutral'); setVolAdaptive(true);
     setVolMultActive(1.8); setVolMultOff(1.25);
     setRsiPeriod(14); setRsiOb(70); setRsiOs(30); setRsiDivOnly(true);
+    setUseWeeklyFilter(false);
     setAllowWeekend(false); setUse5m(false); setRequireEqHL(true);
     setStopLoss('structure'); setRiskPerTrade(1.0); setTpRR(2.5);
     setEnableAutoBorrowRepay(false);
@@ -440,6 +444,49 @@ export function StrategySettingsPage({ onNavigate }: Props) {
             </div>
           </div>
 
+          {/* Weekly Trend Filter */}
+          <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid var(--border)' }}>
+            <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Tooltip text="Filtre validé par backtest 4 ans (2022→2026). Bloque les trades contre la tendance weekly. LONG interdit si le marché est en tendance baissière weekly, SHORT interdit si tendance haussière.">
+                Filtre Tendance Weekly
+              </Tooltip>
+              <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, background: 'rgba(63,185,80,0.15)', color: 'var(--accent-green)', fontWeight: 700 }}>
+                Validé BT 4 ans ★
+              </span>
+            </div>
+            <Toggle
+              checked={useWeeklyFilter}
+              onChange={setUseWeeklyFilter}
+              label="Activer le filtre tendance Weekly"
+              tip="Valide sur ETHUSDT 2022→2026 : +67% P&L (€97k→€163k), MaxDD ÷2 (€118k→€54k), WR +4.3pts (24.6%→28.9%)"
+            />
+            {useWeeklyFilter && (
+              <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 8, background: 'rgba(63,185,80,0.06)', border: '1px solid rgba(63,185,80,0.2)', fontSize: 11 }}>
+                <div style={{ fontWeight: 700, marginBottom: 6, color: 'var(--accent-green)' }}>Règles appliquées :</div>
+                <div style={{ marginBottom: 4, display: 'flex', gap: 6 }}>
+                  <span style={{ color: 'var(--accent-green)', fontWeight: 700, flexShrink: 0 }}>F1a LONG</span>
+                  <span style={{ color: 'var(--text-muted)' }}>autorisé si <code style={{ background: 'var(--surface2)', padding: '1px 4px', borderRadius: 3 }}>close_weekly &gt; SMA(10 semaines)</code> ET <code style={{ background: 'var(--surface2)', padding: '1px 4px', borderRadius: 3 }}>close_weekly &gt; close_4_semaines_avant</code></span>
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <span style={{ color: 'var(--accent-red)', fontWeight: 700, flexShrink: 0 }}>F1b SHORT</span>
+                  <span style={{ color: 'var(--text-muted)' }}>autorisé si <code style={{ background: 'var(--surface2)', padding: '1px 4px', borderRadius: 3 }}>close_weekly &lt; SMA(10 semaines)</code> ET <code style={{ background: 'var(--surface2)', padding: '1px 4px', borderRadius: 3 }}>close_weekly &lt; close_4_semaines_avant</code></span>
+                </div>
+                <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(63,185,80,0.15)', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
+                  {[
+                    { label: 'Trades filtrés', val: '−49%' },
+                    { label: '+P&L', val: '+67%' },
+                    { label: 'MaxDD', val: '÷2' },
+                  ].map(({ label, val }) => (
+                    <div key={label} style={{ textAlign: 'center', padding: '4px 0', background: 'var(--surface2)', borderRadius: 6 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--accent-green)' }}>{val}</div>
+                      <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{label}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Rules configurable */}
           <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid var(--border)' }}>
             <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Règles avancées</div>
@@ -525,9 +572,11 @@ export function StrategySettingsPage({ onNavigate }: Props) {
               // Parse profile params to show badges
               let params: Record<string, unknown> = {};
               try { params = JSON.parse(String(p.parameters ?? '{}')); } catch { params = {}; }
-              const hasWeekend   = Boolean(params.allow_weekend_trading);
-              const has5m        = Boolean(params.use_5m_refinement);
-              const hasHtf       = Boolean(params.htf_alignment_required ?? true);
+              const hasWeekend      = Boolean(params.allow_weekend_trading);
+              const has5m           = Boolean(params.use_5m_refinement);
+              const hasHtf          = Boolean(params.htf_alignment_required ?? true);
+              const hasWeeklyFilter = Boolean(params.use_weekly_trend_filter);
+              const desc            = String(p.description ?? '');
 
               return (
                 <div key={pid} style={{ borderBottom: '1px solid var(--border)', paddingBottom: 14, marginBottom: 14 }}>
@@ -536,9 +585,10 @@ export function StrategySettingsPage({ onNavigate }: Props) {
                       <strong style={{ fontSize: 13 }}>{String(p.name)}</strong>
                       {Boolean(p.approved_for_live) && <span className="badge badge-green" style={{ marginLeft: 6 }}>Live ✅</span>}
                       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 5 }}>
-                        {hasHtf  && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, background: 'rgba(88,166,255,0.15)', color: 'var(--accent)' }}>HTF ✓</span>}
-                        {hasWeekend && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, background: 'rgba(248,166,0,0.15)', color: 'var(--accent-yellow)' }}>WE</span>}
-                        {has5m   && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, background: 'rgba(139,92,246,0.15)', color: '#c4b5fd' }}>5m</span>}
+                        {hasHtf          && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, background: 'rgba(88,166,255,0.15)', color: 'var(--accent)' }}>HTF ✓</span>}
+                        {hasWeeklyFilter && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, background: 'rgba(63,185,80,0.18)', color: 'var(--accent-green)', fontWeight: 700 }}>Weekly ★</span>}
+                        {hasWeekend      && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, background: 'rgba(248,166,0,0.15)', color: 'var(--accent-yellow)' }}>WE</span>}
+                        {has5m           && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, background: 'rgba(139,92,246,0.15)', color: '#c4b5fd' }}>5m</span>}
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: 6, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -585,6 +635,38 @@ export function StrategySettingsPage({ onNavigate }: Props) {
                   )}
                   {bt && bt !== 'running' && (
                     <div style={{ fontSize: 12, marginTop: 4, color: 'var(--accent-green)' }}>{bt}</div>
+                  )}
+
+                  {/* Weekly filter validation block */}
+                  {hasWeeklyFilter && desc && (
+                    <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 8, background: 'rgba(63,185,80,0.05)', border: '1px solid rgba(63,185,80,0.2)', fontSize: 11 }}>
+                      <div style={{ fontWeight: 700, marginBottom: 6, color: 'var(--accent-green)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span>Filtre Weekly — règles appliquées</span>
+                        <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 8, background: 'rgba(63,185,80,0.2)', color: 'var(--accent-green)' }}>Validé BT 4 ans</span>
+                      </div>
+                      <div style={{ marginBottom: 4, display: 'flex', gap: 6, alignItems: 'baseline' }}>
+                        <span style={{ color: 'var(--accent-green)', fontWeight: 700, minWidth: 60 }}>F1a LONG</span>
+                        <span style={{ color: 'var(--text-muted)' }}>autorisé si close_weekly &gt; SMA(10wk) ET close_weekly &gt; close_4wk_avant</span>
+                      </div>
+                      <div style={{ marginBottom: 8, display: 'flex', gap: 6, alignItems: 'baseline' }}>
+                        <span style={{ color: 'var(--accent-red)', fontWeight: 700, minWidth: 60 }}>F1b SHORT</span>
+                        <span style={{ color: 'var(--text-muted)' }}>autorisé si close_weekly &lt; SMA(10wk) ET close_weekly &lt; close_4wk_avant</span>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6, paddingTop: 8, borderTop: '1px solid rgba(63,185,80,0.15)' }}>
+                        {[
+                          { label: 'P&L', sans: '€97k', avec: '€163k', up: true },
+                          { label: 'Win Rate', sans: '24.6%', avec: '28.9%', up: true },
+                          { label: 'MaxDD', sans: '€118k', avec: '€54k', up: false },
+                          { label: 'Trades filtrés', sans: '455', avec: '232', up: false },
+                        ].map(({ label, sans, avec, up }) => (
+                          <div key={label} style={{ textAlign: 'center', background: 'var(--surface2)', borderRadius: 6, padding: '4px 2px' }}>
+                            <div style={{ fontSize: 9, color: 'var(--text-muted)', marginBottom: 2 }}>{label}</div>
+                            <div style={{ fontSize: 9, color: 'var(--text-muted)', textDecoration: 'line-through' }}>{sans}</div>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: up ? 'var(--accent-green)' : 'var(--accent-red)' }}>{avec}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   )}
 
                   {/* AI analysis results */}
