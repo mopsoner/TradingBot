@@ -2274,7 +2274,7 @@ def _run_live_scan(
     - TradeJournal loggé pour chaque décision
     """
     # ── Mode du signal (pour filtrage dans la page Signaux) ───────────────────
-    signal_mode: str = "backtest" if is_backtest else config.mode
+    signal_mode: str = "backtest" if is_backtest else config.system.mode
 
     # ── En mode backtest, surcharge via config.backtest.overrides ─────────────
     bt_ov = config.backtest.overrides

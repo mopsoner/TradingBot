@@ -1,4 +1,4 @@
-modules = ["python-3.11", "nodejs-20"]
+modules = ["python-3.11", "nodejs-20", "postgresql-16"]
 [agent]
 expertMode = true
 
@@ -51,5 +51,18 @@ localPort = 3000
 externalPort = 80
 
 [[ports]]
+localPort = 3001
+externalPort = 3001
+
+[[ports]]
 localPort = 8000
 externalPort = 8000
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 120000
+
+[deployment]
+build = ["sh", "-c", "bash -c \"cd frontend && npm install && npm run build\""]
+run = ["sh", "-c", "uvicorn backend.app.main:app --host 0.0.0.0 --port 3000 --workers 1"]
+deploymentTarget = "gce"
