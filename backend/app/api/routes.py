@@ -471,6 +471,8 @@ class StrategyProfileIn(BaseModel):
     name: str
     mode: str = "research"
     description: Optional[str] = None
+    symbol: str = "ETHUSDT"
+    direction: str = "BOTH"
     parameters: dict[str, object] = Field(default_factory=dict)
     enable_auto_borrow_repay: bool = False
 
@@ -707,12 +709,15 @@ def save_strategy_profile(payload: StrategyProfileIn) -> dict:
         profile = StrategyProfile(
             name=payload.name,
             mode=payload.mode,
+            description=payload.description,
+            symbol=payload.symbol,
+            direction=payload.direction,
             parameters=json.dumps(payload.parameters),
             is_active=False,
             enable_auto_borrow_repay=payload.enable_auto_borrow_repay,
         )
         s.add(profile)
-        s.add(Log(level="INFO", message=f"Strategy profile saved: {payload.name} ({payload.mode})"))
+        s.add(Log(level="INFO", message=f"Strategy profile saved: {payload.name} ({payload.mode}) {payload.symbol} {payload.direction}"))
         s.commit()
         s.refresh(profile)
     return {"ok": True, "profile": profile.model_dump()}
@@ -724,12 +729,15 @@ def update_strategy_profile(profile_id: int, payload: StrategyProfileIn) -> dict
         profile = s.get(StrategyProfile, profile_id)
         if not profile:
             return {"ok": False, "reason": "profile_not_found"}
-        profile.name       = payload.name
-        profile.mode       = payload.mode
-        profile.parameters = json.dumps(payload.parameters)
+        profile.name        = payload.name
+        profile.mode        = payload.mode
+        profile.description = payload.description
+        profile.symbol      = payload.symbol
+        profile.direction   = payload.direction
+        profile.parameters  = json.dumps(payload.parameters)
         profile.enable_auto_borrow_repay = payload.enable_auto_borrow_repay
         s.add(profile)
-        s.add(Log(level="INFO", message=f"Strategy profile updated: {payload.name} ({payload.mode})"))
+        s.add(Log(level="INFO", message=f"Strategy profile updated: {payload.name} ({payload.mode}) {payload.symbol} {payload.direction}"))
         s.commit()
         s.refresh(profile)
     return {"ok": True, "profile": profile.model_dump()}

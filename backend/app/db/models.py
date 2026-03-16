@@ -181,3 +181,5 @@ class StrategyProfile(SQLModel, table=True):
     last_backtest_id: Optional[int] = None
     description: Optional[str] = None
     enable_auto_borrow_repay: bool = False
+    symbol: Optional[str] = Field(default="ETHUSDT")
+    direction: Optional[str] = Field(default="BOTH")

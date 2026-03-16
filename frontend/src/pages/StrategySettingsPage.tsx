@@ -44,6 +44,28 @@ export function StrategySettingsPage({ onNavigate }: Props) {
 
   // ── Profile creation form ──────────────────────────────────────────────────
   const [name, setName]                 = useState('SMC Wyckoff v1');
+  const [symbol, setSymbol]             = useState('ETHUSDT');
+  const [direction, setDirection]       = useState('BOTH');
+  const [description, setDescription]   = useState('');
+  // Univers de trading
+  const [timeframe, setTimeframe]                   = useState('1h');
+  const [maxConcurrentTrades, setMaxConcurrentTrades] = useState(3);
+  const [capitalAllocation, setCapitalAllocation]   = useState(100);
+  // Gestionnaire de risque
+  const [maxOpenPositions, setMaxOpenPositions]     = useState(8);
+  const [dailyLossLimit, setDailyLossLimit]         = useState(3.0);
+  const [weeklyLossLimit, setWeeklyLossLimit]       = useState(8.0);
+  // Sessions de trading
+  const [activeSessions, setActiveSessions]         = useState<string[]>(['london', 'newyork']);
+  const [londonStart, setLondonStart]               = useState(7);
+  const [londonEnd, setLondonEnd]                   = useState(11);
+  const [newyorkStart, setNewyorkStart]             = useState(13);
+  const [newyorkEnd, setNewyorkEnd]                 = useState(17);
+  const [asiaStart, setAsiaStart]                   = useState(0);
+  const [asiaEnd, setAsiaEnd]                       = useState(6);
+  // Filtres globaux
+  const [fakeBreakoutRequired, setFakeBreakoutRequired] = useState(true);
+  const [minVolumeUsd24h, setMinVolumeUsd24h]           = useState(0);
   const [enableSpring, setEnableSpring] = useState(true);
   const [enableUtad, setEnableUtad]     = useState(true);
   const [displacementThreshold, setDisplacementThreshold] = useState(0.55);
@@ -87,6 +109,26 @@ export function StrategySettingsPage({ onNavigate }: Props) {
   const profiles = (profilesData?.rows as Array<Record<string, unknown>> | undefined) ?? [];
 
   const _buildParams = () => ({
+    // Univers
+    timeframe,
+    max_concurrent_trades: maxConcurrentTrades,
+    capital_allocation: capitalAllocation / 100,
+    // Gestionnaire de risque
+    max_open_positions: maxOpenPositions,
+    daily_loss_limit: dailyLossLimit / 100,
+    weekly_loss_limit: weeklyLossLimit / 100,
+    // Sessions
+    active_sessions: activeSessions,
+    london_start: londonStart,
+    london_end: londonEnd,
+    newyork_start: newyorkStart,
+    newyork_end: newyorkEnd,
+    asia_start: asiaStart,
+    asia_end: asiaEnd,
+    // Filtres globaux
+    fake_breakout_required: fakeBreakoutRequired,
+    min_volume_usd_24h: minVolumeUsd24h,
+    // Wyckoff
     enable_spring: enableSpring,
     enable_utad: enableUtad,
     displacement_threshold: displacementThreshold,
@@ -120,7 +162,30 @@ export function StrategySettingsPage({ onNavigate }: Props) {
     let params: Record<string, unknown> = {};
     try { params = JSON.parse(String(p.parameters ?? '{}')); } catch { /**/ }
     setName(String(p.name ?? ''));
+    setSymbol(String(p.symbol ?? 'ETHUSDT'));
+    setDirection(String(p.direction ?? 'BOTH'));
+    setDescription(String(p.description ?? ''));
     setEnableAutoBorrowRepay(Boolean(p.enable_auto_borrow_repay ?? false));
+    // Univers
+    setTimeframe(String(params.timeframe ?? '1h'));
+    setMaxConcurrentTrades(Number(params.max_concurrent_trades ?? 3));
+    setCapitalAllocation(Math.round(Number(params.capital_allocation ?? 1) * 100));
+    // Risk
+    setMaxOpenPositions(Number(params.max_open_positions ?? 8));
+    setDailyLossLimit(Math.round(Number(params.daily_loss_limit ?? 0.03) * 1000) / 10);
+    setWeeklyLossLimit(Math.round(Number(params.weekly_loss_limit ?? 0.08) * 1000) / 10);
+    // Sessions
+    setActiveSessions(Array.isArray(params.active_sessions) ? (params.active_sessions as string[]) : ['london', 'newyork']);
+    setLondonStart(Number(params.london_start ?? 7));
+    setLondonEnd(Number(params.london_end ?? 11));
+    setNewyorkStart(Number(params.newyork_start ?? 13));
+    setNewyorkEnd(Number(params.newyork_end ?? 17));
+    setAsiaStart(Number(params.asia_start ?? 0));
+    setAsiaEnd(Number(params.asia_end ?? 6));
+    // Filtres
+    setFakeBreakoutRequired(Boolean(params.fake_breakout_required ?? true));
+    setMinVolumeUsd24h(Number(params.min_volume_usd_24h ?? 0));
+    // Wyckoff
     setEnableSpring(Boolean(params.enable_spring ?? true));
     setEnableUtad(Boolean(params.enable_utad ?? true));
     setDisplacementThreshold(Number(params.displacement_threshold ?? 0.55));
@@ -165,6 +230,12 @@ export function StrategySettingsPage({ onNavigate }: Props) {
   const cancelEdit = () => {
     setEditId(null);
     setName('SMC Wyckoff v1');
+    setSymbol('ETHUSDT'); setDirection('BOTH'); setDescription('');
+    setTimeframe('1h'); setMaxConcurrentTrades(3); setCapitalAllocation(100);
+    setMaxOpenPositions(8); setDailyLossLimit(3.0); setWeeklyLossLimit(8.0);
+    setActiveSessions(['london', 'newyork']);
+    setLondonStart(7); setLondonEnd(11); setNewyorkStart(13); setNewyorkEnd(17); setAsiaStart(0); setAsiaEnd(6);
+    setFakeBreakoutRequired(true); setMinVolumeUsd24h(0);
     setEnableSpring(true); setEnableUtad(true);
     setDisplacementThreshold(0.55); setAtrMin(1.2);
     setBosSensitivity(7); setBosCloseConf(true);
@@ -181,7 +252,7 @@ export function StrategySettingsPage({ onNavigate }: Props) {
   };
 
   const saveProfile = async () => {
-    const body = { name, mode: 'research', parameters: _buildParams(), enable_auto_borrow_repay: enableAutoBorrowRepay };
+    const body = { name, mode: 'research', symbol, direction, description, parameters: _buildParams(), enable_auto_borrow_repay: enableAutoBorrowRepay };
     const res = editId !== null
       ? await api.updateStrategyProfile(editId, body)
       : await api.saveStrategyProfile(body);
@@ -289,6 +360,153 @@ export function StrategySettingsPage({ onNavigate }: Props) {
           <div className="form-group">
             <label>Nom du profil</label>
             <input value={name} onChange={e => setName(e.target.value)} placeholder="SMC Wyckoff v1" />
+          </div>
+
+          {/* ── Identité du profil ──────────────────────────────────────── */}
+          <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid var(--border)' }}>
+            <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Identité du profil</div>
+            <div className="grid-2" style={{ gap: 8 }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label style={{ fontSize: 12 }}>Crypto (symbol)</label>
+                <input
+                  value={symbol}
+                  onChange={e => setSymbol(e.target.value.toUpperCase())}
+                  placeholder="ETHUSDT"
+                  style={{ fontFamily: 'monospace', fontWeight: 600 }}
+                />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label style={{ fontSize: 12 }}>Direction</label>
+                <select value={direction} onChange={e => setDirection(e.target.value)}>
+                  <option value="BOTH">↕ LONG + SHORT (les deux)</option>
+                  <option value="LONG">↑ LONG uniquement</option>
+                  <option value="SHORT">↓ SHORT uniquement</option>
+                </select>
+              </div>
+            </div>
+            <div className="form-group" style={{ marginTop: 8, marginBottom: 0 }}>
+              <label style={{ fontSize: 12 }}>Description (notes, contexte, conditions)</label>
+              <textarea
+                value={description}
+                onChange={e => setDescription(e.target.value)}
+                placeholder="Ex: Profil bull validé BT 4 ans, filtre weekly actif, session London uniquement…"
+                rows={2}
+                style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit' }}
+              />
+            </div>
+          </div>
+
+          {/* ── Univers de trading ──────────────────────────────────────── */}
+          <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid var(--border)' }}>
+            <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Univers de trading</div>
+            <div className="grid-2" style={{ gap: 8 }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label style={{ fontSize: 12 }}>Timeframe principal</label>
+                <select value={timeframe} onChange={e => setTimeframe(e.target.value)}>
+                  <option value="5m">5 minutes</option>
+                  <option value="15m">15 minutes</option>
+                  <option value="1h">1 heure</option>
+                  <option value="4h">4 heures</option>
+                  <option value="1d">1 jour</option>
+                </select>
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label style={{ fontSize: 12 }}>Trades simultanés max</label>
+                <input type="number" min={1} max={50} step={1} value={maxConcurrentTrades} onChange={e => setMaxConcurrentTrades(Number(e.target.value))} />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label style={{ fontSize: 12 }}>Allocation capital (%)</label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input type="number" min={1} max={100} step={1} value={capitalAllocation} onChange={e => setCapitalAllocation(Number(e.target.value))} style={{ flex: 1 }} />
+                  <span className="muted" style={{ fontSize: 12 }}>%</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ── Gestionnaire de risque ──────────────────────────────────── */}
+          <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid var(--border)' }}>
+            <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Gestionnaire de risque (limites)</div>
+            <div className="grid-2" style={{ gap: 8 }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label style={{ fontSize: 12 }}>Positions ouvertes max</label>
+                <input type="number" min={1} max={100} step={1} value={maxOpenPositions} onChange={e => setMaxOpenPositions(Number(e.target.value))} />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label style={{ fontSize: 12 }}>Perte journalière max (%)</label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input type="number" min={0.1} max={50} step={0.1} value={dailyLossLimit} onChange={e => setDailyLossLimit(Number(e.target.value))} style={{ flex: 1 }} />
+                  <span className="muted" style={{ fontSize: 12 }}>%</span>
+                </div>
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label style={{ fontSize: 12 }}>Perte hebdomadaire max (%)</label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input type="number" min={0.1} max={100} step={0.1} value={weeklyLossLimit} onChange={e => setWeeklyLossLimit(Number(e.target.value))} style={{ flex: 1 }} />
+                  <span className="muted" style={{ fontSize: 12 }}>%</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ── Sessions de trading ─────────────────────────────────────── */}
+          <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid var(--border)' }}>
+            <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Sessions de trading</div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+              {['london', 'newyork', 'asia'].map(s => (
+                <label key={s} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', padding: '5px 12px', borderRadius: 6, border: `1px solid ${activeSessions.includes(s) ? 'var(--accent)' : 'var(--border)'}`, background: activeSessions.includes(s) ? 'rgba(88,166,255,0.1)' : 'transparent', fontSize: 13 }}>
+                  <input type="checkbox" style={{ width: 'auto' }} checked={activeSessions.includes(s)} onChange={() => setActiveSessions(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s])} />
+                  {s === 'london' ? '🇬🇧 London' : s === 'newyork' ? '🇺🇸 New York' : '🌏 Asie'}
+                </label>
+              ))}
+            </div>
+            <div className="grid-2" style={{ gap: 8 }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label style={{ fontSize: 12 }}>London début (UTC)</label>
+                <input type="number" min={0} max={23} step={1} value={londonStart} onChange={e => setLondonStart(Number(e.target.value))} />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label style={{ fontSize: 12 }}>London fin (UTC)</label>
+                <input type="number" min={0} max={23} step={1} value={londonEnd} onChange={e => setLondonEnd(Number(e.target.value))} />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label style={{ fontSize: 12 }}>New York début (UTC)</label>
+                <input type="number" min={0} max={23} step={1} value={newyorkStart} onChange={e => setNewyorkStart(Number(e.target.value))} />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label style={{ fontSize: 12 }}>New York fin (UTC)</label>
+                <input type="number" min={0} max={23} step={1} value={newyorkEnd} onChange={e => setNewyorkEnd(Number(e.target.value))} />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label style={{ fontSize: 12 }}>Asie début (UTC)</label>
+                <input type="number" min={0} max={23} step={1} value={asiaStart} onChange={e => setAsiaStart(Number(e.target.value))} />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label style={{ fontSize: 12 }}>Asie fin (UTC)</label>
+                <input type="number" min={0} max={23} step={1} value={asiaEnd} onChange={e => setAsiaEnd(Number(e.target.value))} />
+              </div>
+            </div>
+          </div>
+
+          {/* ── Filtres globaux ─────────────────────────────────────────── */}
+          <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid var(--border)' }}>
+            <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Filtres globaux</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
+              <Toggle
+                checked={fakeBreakoutRequired}
+                onChange={setFakeBreakoutRequired}
+                label="Faux cassage obligatoire (Spring / UTAD)"
+                tip="Exige un faux cassage au-delà de la zone de liquidité avant de valider l'étape 2. Désactiver augmente les setups mais réduit la qualité."
+              />
+            </div>
+            <div className="form-group" style={{ margin: 0 }}>
+              <label style={{ fontSize: 12 }}>Volume minimum 24h (M USD) — 0 = désactivé</label>
+              <input
+                type="number" min={0} step={10} value={minVolumeUsd24h}
+                onChange={e => setMinVolumeUsd24h(Number(e.target.value))}
+                placeholder="0 = désactivé"
+              />
+            </div>
           </div>
 
           {/* Wyckoff events */}
@@ -577,12 +795,27 @@ export function StrategySettingsPage({ onNavigate }: Props) {
               const hasHtf          = Boolean(params.htf_alignment_required ?? true);
               const hasWeeklyFilter = Boolean(params.use_weekly_trend_filter);
 
+              const profileSymbol    = String(p.symbol ?? 'ETHUSDT');
+              const profileDirection = String(p.direction ?? 'BOTH');
+              const profileDesc      = String(p.description ?? '');
+              const dirColor = profileDirection === 'LONG' ? 'var(--accent-green)' : profileDirection === 'SHORT' ? 'var(--accent-red)' : 'var(--accent)';
+              const dirLabel = profileDirection === 'LONG' ? '↑ LONG' : profileDirection === 'SHORT' ? '↓ SHORT' : '↕ LONG+SHORT';
+
               return (
                 <div key={pid} style={{ borderBottom: '1px solid var(--border)', paddingBottom: 14, marginBottom: 14 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
+                        <span style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 13, background: 'var(--surface2)', padding: '2px 8px', borderRadius: 6, border: '1px solid var(--border)' }}>{profileSymbol}</span>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: dirColor, padding: '2px 8px', borderRadius: 6, background: `${dirColor}18`, border: `1px solid ${dirColor}33` }}>{dirLabel}</span>
+                        {Boolean(p.approved_for_live) && <span className="badge badge-green">Live ✅</span>}
+                      </div>
                       <strong style={{ fontSize: 13 }}>{String(p.name)}</strong>
-                      {Boolean(p.approved_for_live) && <span className="badge badge-green" style={{ marginLeft: 6 }}>Live ✅</span>}
+                      {profileDesc && (
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 3, fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 260 }} title={profileDesc}>
+                          {profileDesc}
+                        </div>
+                      )}
                       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 5 }}>
                         {hasHtf          && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, background: 'rgba(88,166,255,0.15)', color: 'var(--accent)' }}>HTF ✓</span>}
                         {hasWeeklyFilter && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, background: 'rgba(63,185,80,0.18)', color: 'var(--accent-green)', fontWeight: 700 }}>Weekly ★</span>}
