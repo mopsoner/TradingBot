@@ -832,7 +832,7 @@ def create_optimized_profile(profile_id: int, payload: CreateOptimizedProfileIn)
                 src_params = json.loads(source.parameters) if isinstance(source.parameters, str) else source.parameters
             except Exception:
                 src_params = {}
-        merged = {**src_params, **payload.suggested_params}
+        merged = {**src_params, **_sanitize_ai_params(payload.suggested_params)}
         new_name = (payload.new_name or _next_profile_version(source.name)).strip()
         # Ensure name is unique (append timestamp if conflict)
         existing = s.exec(select(StrategyProfile).where(StrategyProfile.name == new_name)).first()
@@ -2900,6 +2900,66 @@ def get_journal(
     }
 
 
+def _sanitize_ai_params(raw) -> dict:
+    if not isinstance(raw, dict):
+        return {}
+    _VALID_RANGES: dict[str, tuple] = {
+        "enable_spring": (bool,),
+        "enable_utad": (bool,),
+        "displacement_threshold": (float, 0.1, 1.0),
+        "displacement_atr_min": (float, 0.5, 3.0),
+        "bos_sensitivity": (int, 1, 10),
+        "bos_close_confirmation": (bool,),
+        "fib_entry_split": (bool,),
+        "htf_alignment_required": (bool,),
+        "htf_long_min_bias": (str, ["LONG", "neutral", "any"]),
+        "htf_short_min_bias": (str, ["SHORT", "neutral", "any"]),
+        "tf1h_long_min_bias": (str, ["LONG", "neutral", "any"]),
+        "tf1h_short_min_bias": (str, ["SHORT", "neutral", "any"]),
+        "volume_adaptive": (bool,),
+        "volume_multiplier_active": (float, 1.0, 3.0),
+        "volume_multiplier_offpeak": (float, 0.8, 2.0),
+        "rsi_period": (int, 2, 50),
+        "rsi_overbought": (int, 50, 95),
+        "rsi_oversold": (int, 5, 50),
+        "rsi_divergence_only": (bool,),
+        "require_equal_highs_lows": (bool,),
+        "stop_logic": (str, ["structure", "atr"]),
+        "allow_weekend_trading": (bool,),
+        "use_5m_refinement": (bool,),
+        "risk_per_trade": (float, 0.001, 0.10),
+        "stop_loss_atr_mult": (float, 0.5, 5.0),
+        "take_profit_rr": (float, 1.0, 10.0),
+    }
+    cleaned: dict = {}
+    for key, val in raw.items():
+        spec = _VALID_RANGES.get(key)
+        if spec is None:
+            if key == "fib_levels" and isinstance(val, list):
+                cleaned[key] = [max(0.1, min(0.99, float(v))) for v in val if isinstance(v, (int, float))]
+            continue
+        typ = spec[0]
+        if typ is bool:
+            if isinstance(val, bool):
+                cleaned[key] = val
+        elif typ is int:
+            try:
+                v = int(val)
+                cleaned[key] = max(spec[1], min(spec[2], v))
+            except (ValueError, TypeError):
+                pass
+        elif typ is float:
+            try:
+                v = float(val)
+                cleaned[key] = max(spec[1], min(spec[2], v))
+            except (ValueError, TypeError):
+                pass
+        elif typ is str:
+            if isinstance(val, str) and val in spec[1]:
+                cleaned[key] = val
+    return cleaned
+
+
 @router.post("/backtest/{backtest_id}/optimize")
 def optimize_backtest(backtest_id: int) -> dict:
     with Session(engine) as s:
@@ -2920,17 +2980,6 @@ def optimize_backtest(backtest_id: int) -> dict:
     from openai import OpenAI
     client = OpenAI(base_url=base_url, api_key=api_key)
 
-    spring_on = params.get("enable_spring", True)
-    utad_on = params.get("enable_utad", True)
-    bos_sens = params.get("bos_sensitivity", 3)
-    disp_th = params.get("displacement_threshold", 0.35)
-    fib = params.get("fib_levels", [0.5, 0.618, 0.705])
-    rsi_period = params.get("rsi_period", 14)
-    rsi_ob = params.get("rsi_overbought", 70)
-    rsi_os = params.get("rsi_oversold", 30)
-    vol_mult = params.get("volume_multiplier", 1.5)
-    vol_conf = params.get("volume_confirmation", False)
-
     prompt = f"""Tu es un expert en trading algorithmique SMC (Smart Money Concepts) et Wyckoff.
 Analyse ce backtest et propose des optimisations précises et actionnables.
 
@@ -2944,36 +2993,72 @@ RÉSULTATS DU BACKTEST:
 - Expectancy: {result.expectancy:.4f}
 - R Multiple: {result.r_multiple:.2f}R
 
-PARAMÈTRES ACTUELS DE LA STRATÉGIE:
-- Spring Wyckoff activé: {"Oui" if spring_on else "Non"}
-- UTAD (distribution) activé: {"Oui" if utad_on else "Non"}
-- Sensibilité BOS: {bos_sens}/10 (1=très réactif, 10=très conservateur)
-- Seuil Displacement: {disp_th} (force minimale du mouvement, 0.1-1.0)
-- Niveaux Fibonacci: {", ".join(str(f) for f in fib)}
-- Période RSI: {rsi_period}
-- RSI Surachat: {rsi_ob}
-- RSI Survente: {rsi_os}
-- Confirmation Volume activée: {"Oui" if vol_conf else "Non"}
-- Multiplicateur Volume: {vol_mult}x la moyenne
+PARAMÈTRES ACTUELS DE LA STRATÉGIE (27 champs):
+- enable_spring: {params.get('enable_spring', True)} (activer détection Spring Wyckoff)
+- enable_utad: {params.get('enable_utad', True)} (activer détection UTAD/distribution)
+- displacement_threshold: {params.get('displacement_threshold', 0.55)} (force min du mouvement, 0.3-0.9)
+- displacement_atr_min: {params.get('displacement_atr_min', 1.2)} (ATR min multiplier, 0.8-2.0)
+- bos_sensitivity: {params.get('bos_sensitivity', 7)} (1=très réactif, 10=très conservateur)
+- bos_close_confirmation: {params.get('bos_close_confirmation', True)} (exiger clôture au-delà du BOS)
+- fib_levels: {params.get('fib_levels', [0.5, 0.618, 0.786])} (niveaux Fibonacci, 3 valeurs entre 0.382-0.886)
+- fib_entry_split: {params.get('fib_entry_split', True)} (split 60/40 sur les niveaux Fib)
+- htf_alignment_required: {params.get('htf_alignment_required', True)} (exiger alignement HTF)
+- htf_long_min_bias: {params.get('htf_long_min_bias', 'neutral')} (filtre 4H directionnel LONG: "LONG","neutral","any")
+- htf_short_min_bias: {params.get('htf_short_min_bias', 'SHORT')} (filtre 4H directionnel SHORT: "SHORT","neutral","any")
+- tf1h_long_min_bias: {params.get('tf1h_long_min_bias', 'neutral')} (filtre 1H directionnel LONG: "LONG","neutral","any")
+- tf1h_short_min_bias: {params.get('tf1h_short_min_bias', 'neutral')} (filtre 1H directionnel SHORT: "SHORT","neutral","any")
+- volume_adaptive: {params.get('volume_adaptive', True)} (volume adaptatif activé)
+- volume_multiplier_active: {params.get('volume_multiplier_active', 1.8)} (seuil volume actif, 1.2-2.5)
+- volume_multiplier_offpeak: {params.get('volume_multiplier_offpeak', 1.25)} (seuil volume off-peak, 1.0-1.8)
+- rsi_period: {params.get('rsi_period', 14)} (période RSI, 5-30)
+- rsi_overbought: {params.get('rsi_overbought', 70)} (seuil RSI surachat, 60-85)
+- rsi_oversold: {params.get('rsi_oversold', 30)} (seuil RSI survente, 15-40)
+- rsi_divergence_only: {params.get('rsi_divergence_only', True)} (utiliser uniquement divergence RSI)
+- require_equal_highs_lows: {params.get('require_equal_highs_lows', True)} (exiger equal highs/lows pour valider structure)
+- stop_logic: {params.get('stop_logic', 'structure')} (logique de stop: "structure" ou "atr")
+- allow_weekend_trading: {params.get('allow_weekend_trading', False)} (autoriser trading weekend)
+- use_5m_refinement: {params.get('use_5m_refinement', False)} (utiliser raffinement 5min pour entrées)
+- risk_per_trade: {params.get('risk_per_trade', 0.01)} (risque par trade, 0.005-0.03)
+- take_profit_rr: {params.get('take_profit_rr', 2.5)} (ratio risk/reward TP, 1.5-5.0)
+- stop_loss_atr_mult: {params.get('stop_loss_atr_mult', 1.5)} (multiplicateur ATR pour SL, 1.0-3.0)
 
 ANALYSE ET RECOMMANDATIONS:
 Identifie les 4-5 problèmes principaux et donne des recommandations PRÉCISES avec des valeurs chiffrées.
 Génère aussi un nom de profil optimisé (incrémente la version, ex: si "SMC-v1" alors "SMC-v2").
+Tu DOIS fournir une valeur pour CHACUN des 27 champs ci-dessus dans suggested_params.
 Format attendu (respecte EXACTEMENT ce format JSON):
 {{
   "score": <note globale 0-100>,
   "verdict": "<une phrase de verdict en français>",
   "suggested_name": "<nom du profil optimisé, version incrémentée>",
   "suggested_params": {{
-    "bos_sensitivity": <int entre 1-10>,
-    "displacement_threshold": <float entre 0.1-1.0>,
-    "fib_levels": [<liste de floats parmi 0.5, 0.618, 0.786>],
-    "fib_entry_split": <true/false>,
-    "htf_alignment_required": <true/false>,
-    "rsi_divergence_only": true,
-    "volume_multiplier_active": <float entre 1.0-3.0>,
-    "displacement_atr_min": <float entre 0.8-2.5>,
-    "allow_weekend_trading": false
+    "enable_spring": <true|false>,
+    "enable_utad": <true|false>,
+    "displacement_threshold": <0.3-0.9>,
+    "displacement_atr_min": <0.8-2.0>,
+    "bos_sensitivity": <1-10>,
+    "bos_close_confirmation": <true|false>,
+    "fib_levels": [<3 valeurs entre 0.382 et 0.886>],
+    "fib_entry_split": <true|false>,
+    "htf_alignment_required": <true|false>,
+    "htf_long_min_bias": <"LONG"|"neutral"|"any">,
+    "htf_short_min_bias": <"SHORT"|"neutral"|"any">,
+    "tf1h_long_min_bias": <"LONG"|"neutral"|"any">,
+    "tf1h_short_min_bias": <"SHORT"|"neutral"|"any">,
+    "volume_adaptive": <true|false>,
+    "volume_multiplier_active": <1.2-2.5>,
+    "volume_multiplier_offpeak": <1.0-1.8>,
+    "rsi_period": <5-30>,
+    "rsi_overbought": <60-85>,
+    "rsi_oversold": <15-40>,
+    "rsi_divergence_only": <true|false>,
+    "require_equal_highs_lows": <true|false>,
+    "stop_logic": <"structure"|"atr">,
+    "allow_weekend_trading": <true|false>,
+    "use_5m_refinement": <true|false>,
+    "risk_per_trade": <0.005-0.03>,
+    "stop_loss_atr_mult": <1.0-3.0>,
+    "take_profit_rr": <1.5-5.0>
   }},
   "suggestions": [
     {{
@@ -3004,6 +3089,8 @@ Réponds UNIQUEMENT avec le JSON valide, rien d'autre."""
                 content = content[4:]
             content = content.strip()
         analysis = json.loads(content)
+        if "suggested_params" in analysis:
+            analysis["suggested_params"] = _sanitize_ai_params(analysis["suggested_params"])
         return {
             "ok": True,
             "backtest_id": backtest_id,
@@ -3169,7 +3256,19 @@ def multi_optimize_backtests(req: MultiOptimizeRequest) -> dict:
         bt_lines.append(f"""
 Backtest #{r.id} — {r.symbol} / {r.timeframe} / profil "{r.strategy_version}":
   Win Rate: {r.win_rate:.1%} | Profit Factor: {r.profit_factor:.2f} | Drawdown: {r.drawdown:.1%} | Expectancy: {r.expectancy:.4f} | R Multiple: {r.r_multiple:.2f}R
-  Params: Spring={p.get('enable_spring', True)}, UTAD={p.get('enable_utad', True)}, BOS_sens={p.get('bos_sensitivity', 3)}, Displacement={p.get('displacement_threshold', 0.35)}, Fib={p.get('fib_levels', [0.5, 0.618, 0.705])}, RSI_period={p.get('rsi_period', 14)}, RSI_OB={p.get('rsi_overbought', 70)}, RSI_OS={p.get('rsi_oversold', 30)}, Vol_mult={p.get('volume_multiplier', 1.5)}, Vol_conf={p.get('volume_confirmation', False)}""")
+  Params (27 champs):
+    enable_spring={p.get('enable_spring', True)}, enable_utad={p.get('enable_utad', True)}
+    displacement_threshold={p.get('displacement_threshold', 0.55)}, displacement_atr_min={p.get('displacement_atr_min', 1.2)}
+    bos_sensitivity={p.get('bos_sensitivity', 7)}, bos_close_confirmation={p.get('bos_close_confirmation', True)}
+    fib_levels={p.get('fib_levels', [0.5, 0.618, 0.786])}, fib_entry_split={p.get('fib_entry_split', True)}
+    htf_alignment_required={p.get('htf_alignment_required', True)}
+    htf_long_min_bias={p.get('htf_long_min_bias', 'neutral')}, htf_short_min_bias={p.get('htf_short_min_bias', 'SHORT')}
+    tf1h_long_min_bias={p.get('tf1h_long_min_bias', 'neutral')}, tf1h_short_min_bias={p.get('tf1h_short_min_bias', 'neutral')}
+    volume_adaptive={p.get('volume_adaptive', True)}, volume_multiplier_active={p.get('volume_multiplier_active', 1.8)}, volume_multiplier_offpeak={p.get('volume_multiplier_offpeak', 1.25)}
+    rsi_period={p.get('rsi_period', 14)}, rsi_overbought={p.get('rsi_overbought', 70)}, rsi_oversold={p.get('rsi_oversold', 30)}, rsi_divergence_only={p.get('rsi_divergence_only', True)}
+    require_equal_highs_lows={p.get('require_equal_highs_lows', True)}, stop_logic={p.get('stop_logic', 'structure')}
+    allow_weekend_trading={p.get('allow_weekend_trading', False)}, use_5m_refinement={p.get('use_5m_refinement', False)}
+    risk_per_trade={p.get('risk_per_trade', 0.01)}, stop_loss_atr_mult={p.get('stop_loss_atr_mult', 1.5)}, take_profit_rr={p.get('take_profit_rr', 2.5)}""")
 
     prompt = f"""Tu es un expert en trading algorithmique SMC (Smart Money Concepts) et Wyckoff.
 Analyse comparativement ces {len(results)} backtests et synthétise une NOUVELLE stratégie optimale en combinant les meilleures caractéristiques.
@@ -3198,18 +3297,31 @@ Format attendu (JSON valide UNIQUEMENT, aucun texte avant ou après):
   "suggested_params": {{
     "enable_spring": <true|false>,
     "enable_utad": <true|false>,
+    "displacement_threshold": <0.3-0.9>,
+    "displacement_atr_min": <0.8-2.0>,
     "bos_sensitivity": <1-10>,
-    "displacement_threshold": <0.1-1.0>,
-    "fib_levels": [<valeurs entre 0 et 1>],
+    "bos_close_confirmation": <true|false>,
+    "fib_levels": [<3 valeurs entre 0.382 et 0.886>],
+    "fib_entry_split": <true|false>,
+    "htf_alignment_required": <true|false>,
+    "htf_long_min_bias": <"LONG"|"neutral"|"any">,
+    "htf_short_min_bias": <"SHORT"|"neutral"|"any">,
+    "tf1h_long_min_bias": <"LONG"|"neutral"|"any">,
+    "tf1h_short_min_bias": <"SHORT"|"neutral"|"any">,
+    "volume_adaptive": <true|false>,
+    "volume_multiplier_active": <1.2-2.5>,
+    "volume_multiplier_offpeak": <1.0-1.8>,
     "rsi_period": <5-30>,
     "rsi_overbought": <60-85>,
     "rsi_oversold": <15-40>,
-    "volume_confirmation": <true|false>,
-    "volume_multiplier": <1.0-3.0>,
-    "risk_per_trade": <0.01-0.05>,
-    "max_open_trades": <1-5>,
+    "rsi_divergence_only": <true|false>,
+    "require_equal_highs_lows": <true|false>,
+    "stop_logic": <"structure"|"atr">,
+    "allow_weekend_trading": <true|false>,
+    "use_5m_refinement": <true|false>,
+    "risk_per_trade": <0.005-0.03>,
     "stop_loss_atr_mult": <1.0-3.0>,
-    "take_profit_rr": <1.5-4.0>
+    "take_profit_rr": <1.5-5.0>
   }},
   "param_insights": [
     {{"param": "<nom du paramètre>", "from": "<valeur actuelle ou tendance>", "to": "<valeur recommandée>", "reason": "<pourquoi>"}}
@@ -3235,6 +3347,8 @@ Format attendu (JSON valide UNIQUEMENT, aucun texte avant ou après):
                 content = content[4:]
             content = content.strip()
         analysis = json.loads(content)
+        if "suggested_params" in analysis:
+            analysis["suggested_params"] = _sanitize_ai_params(analysis["suggested_params"])
         return {
             "ok": True,
             "backtest_ids": req.backtest_ids,
@@ -3359,15 +3473,36 @@ RÉSULTATS BACKTEST SIMULÉ:
 - R Multiple moyen: {rmult:.2f}R
 - Nb trades: {len(outcomes)}
 
-PARAMÈTRES ACTUELS (profil optimisé):
-- Displacement threshold: {profile_params.get('displacement_threshold', 0.55)} | ATR min: {profile_params.get('displacement_atr_min', 1.2)}×
-- BOS sensibilité: {profile_params.get('bos_sensitivity', 7)}/10
-- HTF alignment obligatoire: {profile_params.get('htf_alignment_required', True)}
-- Volume multiplier: {profile_params.get('volume_multiplier_active', 1.8)}×SMA20
-- Fib niveaux: {profile_params.get('fib_levels', [0.5, 0.618, 0.786])} | Split 60/40: {profile_params.get('fib_entry_split', True)}
-- RSI divergence only: {profile_params.get('rsi_divergence_only', True)}
+PARAMÈTRES ACTUELS (profil optimisé — 27 champs):
+- enable_spring: {profile_params.get('enable_spring', True)} (activer détection Spring Wyckoff)
+- enable_utad: {profile_params.get('enable_utad', True)} (activer détection UTAD/distribution)
+- displacement_threshold: {profile_params.get('displacement_threshold', 0.55)} (force min du mouvement, 0.3-0.9)
+- displacement_atr_min: {profile_params.get('displacement_atr_min', 1.2)} (ATR min multiplier, 0.8-2.0)
+- bos_sensitivity: {profile_params.get('bos_sensitivity', 7)} (1=très réactif, 10=très conservateur)
+- bos_close_confirmation: {profile_params.get('bos_close_confirmation', True)} (exiger clôture au-delà du BOS)
+- fib_levels: {profile_params.get('fib_levels', [0.5, 0.618, 0.786])} (niveaux Fibonacci, 3 valeurs entre 0.382-0.886)
+- fib_entry_split: {profile_params.get('fib_entry_split', True)} (split 60/40 sur les niveaux Fib)
+- htf_alignment_required: {profile_params.get('htf_alignment_required', True)} (exiger alignement HTF)
+- htf_long_min_bias: {profile_params.get('htf_long_min_bias', 'neutral')} (filtre 4H directionnel LONG: "LONG","neutral","any")
+- htf_short_min_bias: {profile_params.get('htf_short_min_bias', 'SHORT')} (filtre 4H directionnel SHORT: "SHORT","neutral","any")
+- tf1h_long_min_bias: {profile_params.get('tf1h_long_min_bias', 'neutral')} (filtre 1H directionnel LONG: "LONG","neutral","any")
+- tf1h_short_min_bias: {profile_params.get('tf1h_short_min_bias', 'neutral')} (filtre 1H directionnel SHORT: "SHORT","neutral","any")
+- volume_adaptive: {profile_params.get('volume_adaptive', True)} (volume adaptatif activé)
+- volume_multiplier_active: {profile_params.get('volume_multiplier_active', 1.8)} (seuil volume actif, 1.2-2.5)
+- volume_multiplier_offpeak: {profile_params.get('volume_multiplier_offpeak', 1.25)} (seuil volume off-peak, 1.0-1.8)
+- rsi_period: {profile_params.get('rsi_period', 14)} (période RSI, 5-30)
+- rsi_overbought: {profile_params.get('rsi_overbought', 70)} (seuil RSI surachat, 60-85)
+- rsi_oversold: {profile_params.get('rsi_oversold', 30)} (seuil RSI survente, 15-40)
+- rsi_divergence_only: {profile_params.get('rsi_divergence_only', True)} (utiliser uniquement divergence RSI)
+- require_equal_highs_lows: {profile_params.get('require_equal_highs_lows', True)} (exiger equal highs/lows pour valider structure)
+- stop_logic: {profile_params.get('stop_logic', 'structure')} (logique de stop: "structure" ou "atr")
+- allow_weekend_trading: {profile_params.get('allow_weekend_trading', False)} (autoriser trading weekend)
+- use_5m_refinement: {profile_params.get('use_5m_refinement', False)} (utiliser raffinement 5min pour entrées)
+- risk_per_trade: {profile_params.get('risk_per_trade', 0.01)} (risque par trade, 0.005-0.03)
+- take_profit_rr: {profile_params.get('take_profit_rr', 2.5)} (ratio risk/reward TP, 1.5-5.0)
+- stop_loss_atr_mult: {profile_params.get('stop_loss_atr_mult', 1.5)} (multiplicateur ATR pour SL, 1.0-3.0)
 
-MISSION: Génère des paramètres SPÉCIFIQUES à {sym} qui maximisent le profit factor ET le win rate en tenant compte des caractéristiques propres à cette crypto.
+MISSION: Génère des paramètres SPÉCIFIQUES à {sym} qui maximisent le profit factor ET le win rate en tenant compte des caractéristiques propres à cette crypto. Tu DOIS fournir une valeur pour CHACUN des 27 champs ci-dessus.
 
 Réponds UNIQUEMENT en JSON valide:
 {{
@@ -3381,18 +3516,29 @@ Réponds UNIQUEMENT en JSON valide:
   "suggested_params": {{
     "enable_spring": <true|false>,
     "enable_utad": <true|false>,
-    "bos_sensitivity": <1-10>,
     "displacement_threshold": <0.3-0.9>,
     "displacement_atr_min": <0.8-2.0>,
+    "bos_sensitivity": <1-10>,
+    "bos_close_confirmation": <true|false>,
     "fib_levels": [<3 valeurs entre 0.382 et 0.886>],
     "fib_entry_split": <true|false>,
     "htf_alignment_required": <true|false>,
-    "volume_confirmation": <true|false>,
+    "htf_long_min_bias": <"LONG"|"neutral"|"any">,
+    "htf_short_min_bias": <"SHORT"|"neutral"|"any">,
+    "tf1h_long_min_bias": <"LONG"|"neutral"|"any">,
+    "tf1h_short_min_bias": <"SHORT"|"neutral"|"any">,
+    "volume_adaptive": <true|false>,
     "volume_multiplier_active": <1.2-2.5>,
     "volume_multiplier_offpeak": <1.0-1.8>,
-    "volume_adaptive": true,
-    "rsi_divergence_only": true,
-    "risk_per_trade": <0.01-0.03>,
+    "rsi_period": <5-30>,
+    "rsi_overbought": <60-85>,
+    "rsi_oversold": <15-40>,
+    "rsi_divergence_only": <true|false>,
+    "require_equal_highs_lows": <true|false>,
+    "stop_logic": <"structure"|"atr">,
+    "allow_weekend_trading": <true|false>,
+    "use_5m_refinement": <true|false>,
+    "risk_per_trade": <0.005-0.03>,
     "stop_loss_atr_mult": <1.0-3.0>,
     "take_profit_rr": <1.5-5.0>
   }}
@@ -3419,25 +3565,35 @@ Réponds UNIQUEMENT en JSON valide:
             p_name   = ai_data.get("suggested_name", f"{sym.replace('USDT','')}-SMC-IA-v1")
             # Merge AI suggestions onto a full default set so no field is ever missing
             _param_defaults = {
-                "allow_weekend_trading": False,
-                "use_5m_refinement": False,
-                "require_equal_highs_lows": True,
-                "bos_close_confirmation": True,
-                "fib_entry_split": True,
-                "htf_alignment_required": True,
-                "volume_adaptive": True,
-                "rsi_divergence_only": True,
+                "enable_spring": True,
+                "enable_utad": True,
                 "displacement_threshold": 0.55,
                 "displacement_atr_min": 1.2,
                 "bos_sensitivity": 7,
+                "bos_close_confirmation": True,
                 "fib_levels": [0.5, 0.618, 0.786],
+                "fib_entry_split": True,
+                "htf_alignment_required": True,
+                "htf_long_min_bias": "neutral",
+                "htf_short_min_bias": "SHORT",
+                "tf1h_long_min_bias": "neutral",
+                "tf1h_short_min_bias": "neutral",
+                "volume_adaptive": True,
                 "volume_multiplier_active": 1.8,
                 "volume_multiplier_offpeak": 1.25,
+                "rsi_period": 14,
+                "rsi_overbought": 70,
+                "rsi_oversold": 30,
+                "rsi_divergence_only": True,
+                "require_equal_highs_lows": True,
                 "stop_logic": "structure",
+                "allow_weekend_trading": False,
+                "use_5m_refinement": False,
                 "risk_per_trade": 0.01,
+                "stop_loss_atr_mult": 1.5,
                 "take_profit_rr": 2.5,
             }
-            _param_defaults.update(ai_data.get("suggested_params", {}))
+            _param_defaults.update(_sanitize_ai_params(ai_data.get("suggested_params", {})))
             p_params = _param_defaults
             with Session(engine) as s:
                 existing = s.exec(select(StrategyProfile).where(StrategyProfile.name == p_name)).first()

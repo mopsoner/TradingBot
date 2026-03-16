@@ -16,3 +16,6 @@ __pycache__/
 
 # Node
 node_modules/
+*.db-shm
+*.db-wal
+*.db-journal
