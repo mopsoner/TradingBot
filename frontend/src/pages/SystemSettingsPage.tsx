@@ -320,11 +320,12 @@ export function SystemSettingsPage() {
   if (error)   return <section><h2>Paramètres</h2><p className="red">Erreur: {error}</p></section>;
   if (!draft)  return null;
 
-  const sys     = grp('system');
-  const trading = grp('trading');
-  const risk    = grp('risk');
-  const sess    = grp('session');
-  const dat     = grp('data');
+  const sys      = grp('system');
+  const trading  = grp('trading');
+  const risk     = grp('risk');
+  const sess     = grp('session');
+  const dat      = grp('data');
+  const strategy = grp('strategy');
   const activeSessions = (sess.active_sessions as string[]) ?? [];
 
   function toggleSession(s: string) {
@@ -407,7 +408,7 @@ export function SystemSettingsPage() {
       <SectionCard title="Sessions de trading" icon="🕐">
         <div style={{ marginBottom: 16 }}>
           <label style={{ fontWeight: 600, marginBottom: 8, display: 'block' }}>Sessions actives</label>
-          <div style={{ display: 'flex', gap: 12 }}>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             {['london', 'newyork', 'asia'].map(s => (
               <label key={s} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', padding: '6px 14px', borderRadius: 6, border: `1px solid ${activeSessions.includes(s) ? 'var(--accent)' : 'var(--border)'}`, background: activeSessions.includes(s) ? 'rgba(88,166,255,0.1)' : 'transparent' }}>
                 <input type="checkbox" checked={activeSessions.includes(s)} onChange={() => toggleSession(s)} style={{ width: 'auto' }} />
@@ -415,6 +416,27 @@ export function SystemSettingsPage() {
               </label>
             ))}
           </div>
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <label style={{
+            display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
+            background: 'var(--surface2)', borderRadius: 6, cursor: 'pointer',
+            border: `1px solid ${strategy.allow_weekend_trading ? 'var(--accent)' : 'var(--border)'}`,
+          }}>
+            <input
+              type="checkbox"
+              checked={Boolean(strategy.allow_weekend_trading ?? false)}
+              onChange={e => setGroup('strategy', 'allow_weekend_trading', e.target.checked)}
+              style={{ width: 'auto' }}
+            />
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>Trading week-end autorisé</div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                Défaut global — désactivé par défaut. Le crypto trade 24/7 mais la liquidité institutionnelle est réduite en week-end.
+                Chaque profil de stratégie peut surcharger ce réglage individuellement.
+              </div>
+            </div>
+          </label>
         </div>
         <div className="grid-2">
           <Field label="London — heure début (UTC)" desc="Heure UTC de début de la session London">
@@ -435,6 +457,47 @@ export function SystemSettingsPage() {
           <Field label="Asie — heure fin (UTC)" desc="Heure UTC de fin de la session Asie">
             <Num val={Number(sess.asia_end ?? 6)} min={0} max={23} step={1} onChange={v => setGroup('session', 'asia_end', v)} />
           </Field>
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Filtres stratégie (défauts globaux)" icon="🔬">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 14 }}>
+          <label style={{
+            display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
+            background: 'var(--surface2)', borderRadius: 6, cursor: 'pointer',
+            border: `1px solid ${strategy.fake_breakout_required ? 'var(--accent)' : 'var(--border)'}`,
+          }}>
+            <input
+              type="checkbox"
+              checked={Boolean(strategy.fake_breakout_required ?? true)}
+              onChange={e => setGroup('strategy', 'fake_breakout_required', e.target.checked)}
+              style={{ width: 'auto' }}
+            />
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>Faux cassage obligatoire (Spring / UTAD)</div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                Exige un faux cassage au-delà de la zone de liquidité avant de valider l'étape 2 (Spring/UTAD). Désactiver augmente le nombre de setups mais réduit leur qualité.
+              </div>
+            </div>
+          </label>
+        </div>
+        <div className="grid-2">
+          <Field
+            label="Volume minimum 24h (USD)"
+            desc="Filtre les actifs avec un volume journalier inférieur à ce seuil (en millions USD). 0 = pas de filtre. Ex: 50 = exige 50M USD/24h."
+          >
+            <input
+              type="number"
+              min={0}
+              step={10}
+              value={Number(strategy.min_volume_usd_24h ?? 0)}
+              onChange={e => setGroup('strategy', 'min_volume_usd_24h', Number(e.target.value))}
+              placeholder="0 = désactivé"
+            />
+          </Field>
+        </div>
+        <div style={{ marginTop: 8, padding: '8px 12px', borderRadius: 6, background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.15)', fontSize: 11, color: 'var(--text-muted)' }}>
+          Ces réglages sont les <strong>défauts globaux</strong> du système. Chaque profil de stratégie peut les surcharger individuellement depuis la page <strong>Stratégie</strong>.
         </div>
       </SectionCard>
 
