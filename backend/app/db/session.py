@@ -9,8 +9,15 @@ logger = logging.getLogger(__name__)
 engine = create_engine(
     "sqlite:///trading_platform.db",
     echo=False,
-    connect_args={"check_same_thread": False},
+    connect_args={"check_same_thread": False, "timeout": 30},
+    pool_pre_ping=True,
 )
+
+# Enable WAL mode for concurrent read/write access (multi-thread safety)
+with engine.connect() as _conn:
+    _conn.execute(text("PRAGMA journal_mode=WAL"))
+    _conn.execute(text("PRAGMA busy_timeout=30000"))
+    _conn.commit()
 
 _CONFIG_KEY = "app_config"
 
