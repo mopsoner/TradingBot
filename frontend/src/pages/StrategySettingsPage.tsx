@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
 import { Tooltip } from '../components/Tooltip';
@@ -147,6 +147,17 @@ export function StrategySettingsPage({ onNavigate }: Props) {
     setRiskPerTrade(Number(params.risk_per_trade ?? 0.01) * 100);
     setTpRR(Number(params.take_profit_rr ?? 2.5));
   };
+
+  const autoLoaded = useRef(false);
+  useEffect(() => {
+    if (autoLoaded.current || profiles.length === 0) return;
+    const active = profiles.find(p => p.is_active) ?? profiles[0];
+    if (active) {
+      loadProfileIntoForm(active);
+      setEditId(Number(active.id));
+      autoLoaded.current = true;
+    }
+  }, [profiles]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const cancelEdit = () => {
     setEditId(null);

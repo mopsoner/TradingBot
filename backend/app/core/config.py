@@ -4,31 +4,30 @@ from pydantic import BaseModel, Field
 class StrategySettings(BaseModel):
     enable_spring: bool = True
     enable_utad: bool = True
-    # ETH-SMC-IA-v1 BT#22 — validé +12.5R/an, WR=31%, PF=1.21
-    fib_levels: list[float] = Field(default_factory=lambda: [0.5, 0.707, 0.786])
-    displacement_threshold: float = 0.65
-    displacement_atr_min: float = 1.4
-    bos_sensitivity: int = 6
+    fib_levels: list[float] = Field(default_factory=lambda: [0.5, 0.618, 0.786])
+    displacement_threshold: float = 0.40
+    displacement_atr_min: float = 0.75
+    bos_sensitivity: int = 7
     htf_alignment_required: bool = True
     volume_adaptive: bool = True
-    volume_multiplier_active: float = 1.9
-    volume_multiplier_offpeak: float = 1.3
+    volume_multiplier_active: float = 1.2
+    volume_multiplier_offpeak: float = 0.9
     fib_entry_split: bool = True
     rsi_divergence_only: bool = True
     stop_logic: str = "structure"
-    target_r_multiples: list[float] = Field(default_factory=lambda: [2.75, 3.5])
+    target_r_multiples: list[float] = Field(default_factory=lambda: [2.0, 3.0])
     fake_breakout_required: bool = True
     equal_highs_lows_filter: bool = True
     # ── Configurable rules (previously hardcoded) ──────────────────────────
     allow_weekend_trading: bool = False           # Désactivé par défaut — activable par profil
-    use_5m_refinement: bool = True                # Affinement 5m activé (validé BT#22)
+    use_5m_refinement: bool = False               # Affiner l'entrée sur bougies 5m
     min_volume_usd_24h: float = 0.0               # 0 = pas de filtre liquidité
     require_equal_highs_lows: bool = True         # EQH/EQL obligatoires pour définir liquidité
     bos_close_confirmation: bool = True           # BOS = clôture au-delà du swing (pas juste wick)
 
 
 class RiskSettings(BaseModel):
-    risk_per_trade: float = 0.012  # validé BT#22 — 1.2% du capital
+    risk_per_trade: float = 0.01
     max_open_positions: int = 8
     daily_loss_limit: float = 0.03
     weekly_loss_limit: float = 0.08
@@ -59,20 +58,19 @@ class BacktestOverrides(BaseModel):
     # ── Wyckoff ────────────────────────────────────────────────────────────
     wyckoff_lookback: int = Field(20, description="Bougies 15m scannées pour Spring/UTAD (live=5)")
     # ── Displacement ────────────────────────────────────────────────────────
-    # ETH-SMC-IA-v1 BT#22 — validé +12.5R/an
-    displacement_threshold: float = Field(0.65, description="Force displacement minimale (BT#22: 0.65)")
-    displacement_atr_min: float = Field(1.4, description="Ratio ATR minimal (BT#22: 1.4)")
-    displacement_vol_min: float = Field(1.00, description="Volume minimal displacement ×SMA20")
+    displacement_threshold: float = Field(0.35, description="Force displacement minimale (live défaut: 0.40)")
+    displacement_atr_min: float = Field(0.60, description="Ratio ATR minimal (live défaut: 0.75)")
+    displacement_vol_min: float = Field(1.00, description="Volume minimal displacement ×SMA20 (live défaut: 1.2)")
     # ── BOS ─────────────────────────────────────────────────────────────────
-    bos_sensitivity: int = Field(6, description="Lookback BOS en bougies (BT#22: 6)")
-    bos_close_confirmation: bool = Field(True, description="BOS = clôture obligatoire au-delà du swing")
+    bos_sensitivity: int = Field(9, description="Lookback BOS en bougies (live défaut: 7)")
+    bos_close_confirmation: bool = Field(False, description="BOS = clôture obligatoire au-delà du swing")
     # ── Volume ──────────────────────────────────────────────────────────────
-    volume_multiplier_active: float = Field(1.9, description="Multiplicateur volume session active (BT#22: 1.9)")
-    volume_multiplier_offpeak: float = Field(1.3, description="Multiplicateur volume hors-session (BT#22: 1.3)")
+    volume_multiplier_active: float = Field(1.00, description="Multiplicateur volume session active (live défaut: 1.2)")
+    volume_multiplier_offpeak: float = Field(0.80, description="Multiplicateur volume hors-session (live défaut: 0.9)")
     # ── Filtres HTF / session ────────────────────────────────────────────────
-    skip_htf_1h_validation: bool = Field(False, description="Validation 1H vs 4H activée (filtre validé BT#21+BT#22)")
-    use_5m_refinement: bool = Field(True, description="Affinement 5m activé (BT#22)")
-    allow_weekend_trading: bool = Field(False, description="Weekend désactivé (validé BT#22)")
+    skip_htf_1h_validation: bool = Field(True, description="Ignorer la validation 1H vs 4H (élimine 30% des rejets)")
+    use_5m_refinement: bool = Field(False, description="Affiner l'entrée sur bougies 5m")
+    allow_weekend_trading: bool = Field(True, description="Autoriser les signaux les weekends")
 
 
 class BacktestSettings(BaseModel):
