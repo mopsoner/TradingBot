@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
-import type { PipelineEntry, PipelineStep } from '../services/api';
-import { TIMEFRAMES } from '../constants';
-import { nowTime, fmtSym } from '../utils/dateUtils';
+import type { PipelineEntry, PipelineStep, PipelineRunRecord, ProcessStatus } from '../services/api';
+import { nowTime, fmtSym, fmtDateTime } from '../utils/dateUtils';
+import { PipelineRunDetailModal } from '../components/PipelineRunDetail';
 
 const STEP_LABELS_SHORT = ['LIQ', 'SWEEP', 'WYK', 'DISP', 'BOS', 'EXP', 'FIB'];
 const STEP_FULL = [
@@ -79,7 +79,117 @@ function StepDot({ step, index }: { step: PipelineStep; index: number }) {
   );
 }
 
-function SymbolRow({ entry }: { entry: PipelineEntry }) {
+const PROC_COLOR: Record<string, string> = {
+  scanner:  'var(--accent-green)',
+  pipeline: 'var(--accent)',
+  backtest: '#a855f7',
+  live:     'var(--accent-red)',
+  import:   '#06b6d4',
+};
+
+function PipelineProcessCard() {
+  const [processes, setProcesses] = useState<ProcessStatus[]>([]);
+  const [totalRunning, setTotalRunning] = useState(0);
+  const [stopping, setStopping] = useState<string | null>(null);
+
+  const load = () => {
+    api.systemProcesses().then(d => {
+      setProcesses(d.processes);
+      setTotalRunning(d.total_running);
+    }).catch(() => {});
+  };
+
+  useEffect(() => {
+    load();
+    const poll = setInterval(load, 4000);
+    return () => clearInterval(poll);
+  }, []);
+
+  const handleStop = async (procId: string) => {
+    setStopping(procId);
+    try { await api.autonomousStop(); } catch { /**/ }
+    setTimeout(() => { load(); setStopping(null); }, 800);
+  };
+
+  if (processes.length === 0) return null;
+
+  return (
+    <div className="card" style={{ marginBottom: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <h3 style={{ margin: 0, fontSize: 14 }}>Processus actifs</h3>
+        <span style={{
+          fontSize: 11, fontWeight: 700, padding: '2px 10px', borderRadius: 10,
+          background: totalRunning > 0 ? 'rgba(59,130,246,0.15)' : 'rgba(100,116,139,0.12)',
+          color: totalRunning > 0 ? 'var(--accent)' : 'var(--text-muted)',
+        }}>
+          {totalRunning} actif{totalRunning !== 1 ? 's' : ''}
+        </span>
+      </div>
+      {processes.map((p: ProcessStatus) => {
+        const color = PROC_COLOR[p.type] ?? 'var(--text-muted)';
+        const running = p.status === 'running';
+        const isImport = p.type === 'import';
+        const canStop = running && (p.type === 'scanner' || p.type === 'pipeline' || p.type === 'live');
+        const rgb = p.type === 'scanner' ? '34,197,94' : p.type === 'pipeline' ? '59,130,246' : p.type === 'live' ? '248,81,73' : p.type === 'import' ? '6,182,212' : '168,85,247';
+        return (
+          <div key={p.id} style={{
+            display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px',
+            borderRadius: 8, marginBottom: 6,
+            background: running ? `rgba(${rgb},0.06)` : 'rgba(100,116,139,0.07)',
+            border: `1px solid ${running ? color + '44' : 'var(--border)'}`,
+          }}>
+            <span style={{
+              width: 10, height: 10, borderRadius: '50%', flexShrink: 0,
+              background: running ? color : 'var(--text-muted)',
+              boxShadow: running ? `0 0 8px ${color}` : 'none',
+              animation: running ? 'pulse 2s infinite' : 'none',
+            }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, color: running ? 'var(--text)' : 'var(--text-muted)' }}>
+                {p.label}
+              </div>
+              {p.detail && (
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {p.detail}
+                </div>
+              )}
+              {isImport && p.pct_done !== undefined && (
+                <div style={{ marginTop: 4, height: 4, borderRadius: 2, background: 'rgba(100,116,139,0.15)', overflow: 'hidden' }}>
+                  <div style={{
+                    height: '100%', borderRadius: 2,
+                    width: `${p.pct_done}%`,
+                    background: p.status === 'error' ? 'var(--accent-red)' : '#06b6d4',
+                    transition: 'width 0.3s ease',
+                  }} />
+                </div>
+              )}
+            </div>
+            {canStop ? (
+              <button
+                onClick={() => handleStop(p.id)}
+                disabled={stopping === p.id}
+                style={{
+                  padding: '5px 12px', borderRadius: 6, fontSize: 11, fontWeight: 700, flexShrink: 0,
+                  border: '1px solid rgba(239,68,68,0.45)',
+                  background: stopping === p.id ? 'rgba(239,68,68,0.06)' : 'rgba(239,68,68,0.13)',
+                  color: 'var(--accent-red)',
+                  cursor: stopping === p.id ? 'default' : 'pointer',
+                  opacity: stopping === p.id ? 0.6 : 1,
+                }}
+              >
+                {stopping === p.id ? 'Arrêt…' : '⏹ Arrêter'}
+              </button>
+            ) : !running ? (
+              <span style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0 }}>Terminé</span>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function SymbolRow({ entry, passedCount = 0 }: { entry: PipelineEntry; passedCount?: number }) {
   const sym = fmtSym(entry.symbol);
   const isRunning  = entry.final_status === null;
   const isAccepted = entry.final_status === 'accepted';
@@ -98,7 +208,24 @@ function SymbolRow({ entry }: { entry: PipelineEntry }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ minWidth: 90 }}>
           <div style={{ fontWeight: 700, fontSize: 15 }}>{sym}</div>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{entry.timeframe}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
+            <span style={{
+              fontSize: 10, fontWeight: 800, fontFamily: 'monospace',
+              color: passedCount >= 7 ? 'var(--accent-green)' : passedCount >= 4 ? 'var(--accent)' : passedCount >= 1 ? 'var(--accent-yellow,#f0b429)' : 'var(--text-muted)',
+            }}>
+              {passedCount}/7
+            </span>
+            <div style={{ display: 'flex', gap: 2 }}>
+              {Array.from({ length: 7 }).map((_, i) => (
+                <div key={i} style={{
+                  width: 5, height: 5, borderRadius: 1,
+                  background: i < passedCount
+                    ? passedCount >= 7 ? 'var(--accent-green)' : passedCount >= 4 ? 'var(--accent)' : 'var(--accent-yellow,#f0b429)'
+                    : 'var(--border)',
+                }} />
+              ))}
+            </div>
+          </div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flex: 1, flexWrap: 'wrap' }}>
           {entry.steps.map((step, i) => <StepDot key={i} step={step} index={i} />)}
@@ -156,7 +283,6 @@ export function PipelinePage() {
   const universe            = (byQuote ?? {})[quote] ?? [];
 
   const [selected, setSelected]   = useState<string[]>([]);
-  const [timeframe, setTimeframe] = useState('1h');
   const [profileId, setProfileId] = useState<number | null>(null);
   const [mode, setMode]           = useState<Mode>('paper');
 
@@ -169,6 +295,13 @@ export function PipelinePage() {
   const [liveConfirm, setLiveConfirm]         = useState(false);
   const [liveStatus, setLiveStatus]           = useState<string | null>(null);
   const [liveSubmitting, setLiveSubmitting]   = useState(false);
+
+  const [history, setHistory]           = useState<PipelineRunRecord[]>([]);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyOpen, setHistoryOpen]   = useState(false);
+  const [historyPage, setHistoryPage]   = useState(0);
+  const [detailRunId, setDetailRunId]   = useState<string | null>(null);
+  const HISTORY_PAGE_SIZE = 20;
 
   const profileRows = (profiles?.rows as Array<Record<string, unknown>> | undefined) ?? [];
 
@@ -194,6 +327,7 @@ export function PipelinePage() {
       if (res.in_progress === 0 && res.total > 0) {
         setRunning(false);
         stopPolling();
+        fetchHistory();
         if (mode === 'live' && res.accepted > 0) setLiveConfirm(true);
       }
     } catch { /* network hiccup */ }
@@ -209,8 +343,8 @@ export function PipelinePage() {
     setLiveStatus(null);
     stopPolling();
     try {
-      await api.runPipeline({ symbols: selected, timeframe, profile_id: profileId });
-      pollRef.current = setInterval(poll, 500);
+      await api.runPipeline({ symbols: selected, profile_id: profileId, mode });
+      pollRef.current = setInterval(poll, 2000);
     } catch {
       setRunning(false);
     }
@@ -221,7 +355,7 @@ export function PipelinePage() {
     try {
       const res = await api.startBot({
         symbols: selected,
-        timeframe,
+        timeframe: '1h',
         strategy_profile_id: profileId,
         mode: 'live',
         execute_orders: true,
@@ -241,15 +375,49 @@ export function PipelinePage() {
     }
   };
 
+  const fetchHistory = (page = historyPage) => {
+    const offset = page * HISTORY_PAGE_SIZE;
+    api.pipelineRuns(`?limit=${HISTORY_PAGE_SIZE}&offset=${offset}`).then(data => {
+      setHistory(data.rows);
+      setHistoryTotal(data.total);
+    }).catch(() => {});
+  };
+
+  useEffect(() => { fetchHistory(0); }, []);
+
   useEffect(() => () => stopPolling(), []);
 
   const toggleSymbol = (sym: string) => {
     setSelected(prev => prev.includes(sym) ? prev.filter(s => s !== sym) : [...prev, sym]);
   };
 
+  const [sortBy, setSortBy] = useState<'steps' | 'status' | 'alpha'>('steps');
+
   const entries = Object.values(state);
   const allDone = stats.total > 0 && stats.in_progress === 0;
   const acceptedEntries = entries.filter(e => e.final_status === 'accepted');
+
+  const passedCount = (e: PipelineEntry) => e.steps.filter(s => s.status === 'passed').length;
+  const statusOrder = (e: PipelineEntry) => {
+    if (e.final_status === 'accepted') return 0;
+    if (e.final_status === null)       return 1;
+    if (e.final_status === 'rejected') return 2;
+    return 3;
+  };
+
+  const sortedEntries = [...entries].sort((a, b) => {
+    if (sortBy === 'steps') {
+      const diff = passedCount(b) - passedCount(a);
+      if (diff !== 0) return diff;
+      return statusOrder(a) - statusOrder(b);
+    }
+    if (sortBy === 'status') {
+      const diff = statusOrder(a) - statusOrder(b);
+      if (diff !== 0) return diff;
+      return passedCount(b) - passedCount(a);
+    }
+    return fmtSym(a.symbol).localeCompare(fmtSym(b.symbol));
+  });
 
   return (
     <section>
@@ -275,6 +443,8 @@ export function PipelinePage() {
           </button>
         </div>
       </div>
+
+      <PipelineProcessCard />
 
       <div className="grid-2" style={{ marginBottom: 20 }}>
         {/* Config card */}
@@ -315,13 +485,6 @@ export function PipelinePage() {
                 Mode LIVE — ordres réels sur Binance après confirmation explicite.
               </p>
             )}
-          </div>
-
-          <div className="form-group">
-            <label>Timeframe</label>
-            <select value={timeframe} onChange={e => setTimeframe(e.target.value)}>
-              {TIMEFRAMES.map(tf => <option key={tf.value} value={tf.value}>{tf.label} — {tf.desc}</option>)}
-            </select>
           </div>
 
           <div className="form-group" style={{ marginBottom: 0 }}>
@@ -533,23 +696,154 @@ export function PipelinePage() {
       {/* Résultats */}
       {entries.length > 0 && (
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, padding: '4px 16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, padding: '4px 16px', flexWrap: 'wrap' }}>
             <div style={{ minWidth: 90, fontSize: 11, color: 'var(--text-muted)', fontWeight: 600 }}>CRYPTO</div>
             <div style={{ flex: 1, display: 'flex', gap: 8, paddingLeft: 4 }}>
               {STEP_LABELS_SHORT.map((s, i) => (
                 <div key={i} style={{ width: 28, textAlign: 'center', fontSize: 9, color: 'var(--text-muted)', fontWeight: 700 }}>{s}</div>
               ))}
             </div>
-            <div style={{ minWidth: 120, textAlign: 'right', fontSize: 11, color: 'var(--text-muted)', fontWeight: 600 }}>STATUT</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600 }}>TRIER :</span>
+              {([
+                ['steps',  '✓ Étapes'],
+                ['status', '◎ Statut'],
+                ['alpha',  'A–Z'],
+              ] as [typeof sortBy, string][]).map(([val, label]) => (
+                <button
+                  key={val}
+                  onClick={() => setSortBy(val)}
+                  style={{
+                    fontSize: 10, fontWeight: 700, padding: '3px 9px', borderRadius: 5, cursor: 'pointer',
+                    border: `1px solid ${sortBy === val ? 'var(--accent)' : 'var(--border)'}`,
+                    background: sortBy === val ? 'rgba(59,130,246,0.12)' : 'transparent',
+                    color: sortBy === val ? 'var(--accent)' : 'var(--text-muted)',
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
-          {entries
-            .sort((a, b) => {
-              const order = { accepted: 0, rejected: 2, null: 1, error: 3 };
-              return (order[String(a.final_status) as keyof typeof order] ?? 1) - (order[String(b.final_status) as keyof typeof order] ?? 1);
-            })
-            .map(entry => <SymbolRow key={entry.symbol} entry={entry} />)}
+          {sortedEntries.map(entry => (
+            <SymbolRow key={entry.symbol} entry={entry} passedCount={passedCount(entry)} />
+          ))}
         </div>
       )}
+
+      {detailRunId && <PipelineRunDetailModal runId={detailRunId} onClose={() => setDetailRunId(null)} />}
+
+      {/* Historique */}
+      <div className="card" style={{ marginTop: 20, padding: 0, overflow: 'hidden' }}>
+        <div
+          onClick={() => setHistoryOpen(!historyOpen)}
+          style={{
+            padding: '12px 16px', cursor: 'pointer', display: 'flex',
+            alignItems: 'center', justifyContent: 'space-between',
+            borderBottom: historyOpen ? '1px solid var(--border)' : 'none',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontWeight: 700, fontSize: 14 }}>Historique des runs</span>
+            <span className="tag" style={{ fontSize: 10 }}>{historyTotal}</span>
+          </div>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)', transition: 'transform 0.2s', transform: historyOpen ? 'rotate(180deg)' : 'none' }}>▼</span>
+        </div>
+        {historyOpen && (
+          <div>
+            <div style={{ maxHeight: 350, overflowY: 'auto' }}>
+              {history.length === 0 ? (
+                <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>
+                  Aucun run enregistré
+                </div>
+              ) : (
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--border-mid)' }}>
+                      {['RUN', 'DATE', 'MODE', 'TF', 'SYMBOLES', 'OK', 'KO', 'DURÉE'].map(h => (
+                        <th key={h} style={{ padding: '7px 10px', fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textAlign: 'left', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {history.map(r => {
+                      let syms: string[] = [];
+                      try { syms = JSON.parse(r.symbols_json); } catch { /**/ }
+                      const dur = r.completed_at
+                        ? Math.round((new Date(r.completed_at).getTime() - new Date(r.started_at).getTime()) / 1000)
+                        : null;
+                      const shortId = `#${r.run_id.slice(0, 4)}`;
+                      return (
+                        <tr
+                          key={r.run_id}
+                          onClick={() => setDetailRunId(r.run_id)}
+                          style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', transition: 'background 0.12s' }}
+                          onMouseEnter={e => (e.currentTarget.style.background = 'rgba(59,130,246,0.04)')}
+                          onMouseLeave={e => (e.currentTarget.style.background = '')}
+                        >
+                          <td style={{ padding: '8px 10px' }}>
+                            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)', fontFamily: 'monospace' }}>{shortId}</span>
+                          </td>
+                          <td style={{ padding: '8px 10px', fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{fmtDateTime(r.started_at)}</td>
+                          <td style={{ padding: '8px 10px' }}>
+                            <span style={{
+                              fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 4,
+                              background: r.mode === 'live' ? 'rgba(248,81,73,0.15)' : 'rgba(59,130,246,0.12)',
+                              color: r.mode === 'live' ? 'var(--accent-red)' : 'var(--accent)',
+                            }}>{r.mode}</span>
+                          </td>
+                          <td style={{ padding: '8px 10px' }}><span className="tag" style={{ fontSize: 10 }}>{r.timeframe}</span></td>
+                          <td style={{ padding: '8px 10px', fontSize: 12, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {syms.map(s => fmtSym(s)).join(', ')}
+                          </td>
+                          <td style={{ padding: '8px 10px' }}>
+                            <span style={{ fontWeight: 700, color: r.accepted_count > 0 ? 'var(--accent-green)' : 'var(--text-muted)' }}>
+                              {r.accepted_count}
+                            </span>
+                          </td>
+                          <td style={{ padding: '8px 10px' }}>
+                            <span style={{ fontWeight: 700, color: r.rejected_count > 0 ? 'var(--accent-red)' : 'var(--text-muted)' }}>
+                              {r.rejected_count}
+                            </span>
+                          </td>
+                          <td style={{ padding: '8px 10px', fontSize: 12, color: 'var(--text-muted)' }}>
+                            {dur !== null ? `${dur}s` : '—'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            {historyTotal > HISTORY_PAGE_SIZE && (
+              <div style={{ padding: '8px 16px', borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                  Page {historyPage + 1} / {Math.ceil(historyTotal / HISTORY_PAGE_SIZE)} ({historyTotal} runs)
+                </span>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    className="btn btn-secondary"
+                    style={{ fontSize: 11, padding: '3px 10px' }}
+                    disabled={historyPage === 0}
+                    onClick={() => { const p = historyPage - 1; setHistoryPage(p); fetchHistory(p); }}
+                  >
+                    ← Préc.
+                  </button>
+                  <button
+                    className="btn btn-secondary"
+                    style={{ fontSize: 11, padding: '3px 10px' }}
+                    disabled={(historyPage + 1) * HISTORY_PAGE_SIZE >= historyTotal}
+                    onClick={() => { const p = historyPage + 1; setHistoryPage(p); fetchHistory(p); }}
+                  >
+                    Suiv. →
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Légende */}
       <div style={{ marginTop: 20, padding: 14, borderRadius: 8, background: 'var(--surface2)', fontSize: 12 }}>
