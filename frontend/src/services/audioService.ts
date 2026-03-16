@@ -26,7 +26,7 @@ type NoteConfig = {
 
 function _getAudioContext(): AudioContext | null {
   try {
-    const Ctx = window.AudioContext ?? (window as Record<string, unknown>)['webkitAudioContext'] as typeof AudioContext;
+    const Ctx = window.AudioContext ?? (window as unknown as Record<string, unknown>)['webkitAudioContext'] as typeof AudioContext;
     if (!Ctx) return null;
     return new Ctx();
   } catch {
