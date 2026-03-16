@@ -5,13 +5,13 @@ class StrategySettings(BaseModel):
     enable_spring: bool = True
     enable_utad: bool = True
     fib_levels: list[float] = Field(default_factory=lambda: [0.5, 0.618, 0.786])
-    displacement_threshold: float = 0.55
-    displacement_atr_min: float = 1.2
+    displacement_threshold: float = 0.40
+    displacement_atr_min: float = 0.75
     bos_sensitivity: int = 7
     htf_alignment_required: bool = True
     volume_adaptive: bool = True
-    volume_multiplier_active: float = 1.8
-    volume_multiplier_offpeak: float = 1.25
+    volume_multiplier_active: float = 1.2
+    volume_multiplier_offpeak: float = 0.9
     fib_entry_split: bool = True
     rsi_divergence_only: bool = True
     stop_logic: str = "structure"
@@ -43,11 +43,7 @@ class SystemSettings(BaseModel):
 
 class TradingSettings(BaseModel):
     enabled_symbols: list[str] = Field(default_factory=lambda: [
-        "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "AVAXUSDT",
-        "XRPUSDT", "ADAUSDT", "DOGEUSDT", "DOTUSDT", "MATICUSDT",
-        "LINKUSDT", "UNIUSDT", "LTCUSDT", "ATOMUSDT", "NEARUSDT",
-        "AAVEUSDT", "FILUSDT", "APTUSDT", "ARBUSDT", "OPUSDT",
-        "SUIUSDT", "INJUSDT", "TIAUSDT", "SEIUSDT", "WLDUSDT",
+        "BTCUSDT", "ETHUSDT",
     ])
     risk_per_symbol: dict[str, float] = Field(default_factory=dict)
     max_open_per_symbol: dict[str, int] = Field(default_factory=dict)
@@ -56,7 +52,29 @@ class TradingSettings(BaseModel):
     capital_allocation: float = 1.0
 
 
+class BacktestOverrides(BaseModel):
+    """Paramètres assouplis appliqués automatiquement en mode is_backtest=True."""
+    enabled: bool = Field(True, description="Activer les overrides backtest (désactiver = pipeline live identique)")
+    # ── Wyckoff ────────────────────────────────────────────────────────────
+    wyckoff_lookback: int = Field(20, description="Bougies 15m scannées pour Spring/UTAD (live=5)")
+    # ── Displacement ────────────────────────────────────────────────────────
+    displacement_threshold: float = Field(0.35, description="Force displacement minimale (live défaut: 0.40)")
+    displacement_atr_min: float = Field(0.60, description="Ratio ATR minimal (live défaut: 0.75)")
+    displacement_vol_min: float = Field(1.00, description="Volume minimal displacement ×SMA20 (live défaut: 1.2)")
+    # ── BOS ─────────────────────────────────────────────────────────────────
+    bos_sensitivity: int = Field(9, description="Lookback BOS en bougies (live défaut: 7)")
+    bos_close_confirmation: bool = Field(False, description="BOS = clôture obligatoire au-delà du swing")
+    # ── Volume ──────────────────────────────────────────────────────────────
+    volume_multiplier_active: float = Field(1.00, description="Multiplicateur volume session active (live défaut: 1.2)")
+    volume_multiplier_offpeak: float = Field(0.80, description="Multiplicateur volume hors-session (live défaut: 0.9)")
+    # ── Filtres HTF / session ────────────────────────────────────────────────
+    skip_htf_1h_validation: bool = Field(True, description="Ignorer la validation 1H vs 4H (élimine 30% des rejets)")
+    use_5m_refinement: bool = Field(False, description="Affiner l'entrée sur bougies 5m")
+    allow_weekend_trading: bool = Field(True, description="Autoriser les signaux les weekends")
+
+
 class BacktestSettings(BaseModel):
+    overrides: BacktestOverrides = Field(default_factory=BacktestOverrides)
     base_win_rate: float = Field(0.51, description="WR de base — optimisé avec filtre HTF 4H (IA opt ①②③)")
     spring_bonus: float = Field(0.06, description="Bonus WR si Spring activé")
     utad_bonus: float = Field(0.05, description="Bonus WR si UTAD activé")
@@ -94,7 +112,7 @@ class SessionSettings(BaseModel):
 
 class DataSettings(BaseModel):
     candle_source: str = Field(
-        "yfinance",
+        "binance",
         description="Source de données bougies : 'binance' (API Binance), 'yfinance' (Yahoo Finance)",
     )
 
