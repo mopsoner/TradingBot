@@ -504,6 +504,10 @@ def _run_replay(
     rsi4h_period: int = 14,
     rsi4h_bull_min: float = 55.0,
     rsi4h_bear_max: float = 45.0,
+    # --- Dual mode (bull_config + bear_config) ---
+    use_dual_mode: bool = False,
+    dual_bull_config: dict | None = None,
+    dual_bear_config: dict | None = None,
 ) -> None:
     _persist_running(session)
     try:
@@ -537,15 +541,15 @@ def _run_replay(
         ts_4h = _build_ts_index(candles_4h)
         ts_1h = _build_ts_index(candles_1h)
 
-        # ── RSI 4H — pré-calcul sur toutes les bougies 4H chargées ──────────
+        # ── RSI 4H — pré-calcul (direction selector ou dual mode) ──────────
         rsi4h_values: list[float] = []
-        if use_rsi4h_direction and candles_4h:
+        if (use_rsi4h_direction or use_dual_mode) and candles_4h:
             closes_4h = [c.close for c in candles_4h]
             rsi4h_values = _compute_rsi(closes_4h, period=rsi4h_period)
             logger.info(
-                "Replay %s — RSI 4H pré-calculé: %d valeurs (période=%d, bull>%.0f / bear<%.0f)",
+                "Replay %s — RSI 4H pré-calculé: %d valeurs (période=%d, bull>%.0f / bear<%.0f, dual=%s)",
                 session.session_id[:8], len(rsi4h_values), rsi4h_period,
-                rsi4h_bull_min, rsi4h_bear_max,
+                rsi4h_bull_min, rsi4h_bear_max, use_dual_mode,
             )
 
         # Bougies weekly (resamplées depuis 1H, incluent le buffer 90j)
@@ -613,6 +617,64 @@ def _run_replay(
                 window_1h = candles_1h[max(0, idx_1h - WINDOW_1H): idx_1h]
                 tf_1h_struct = _get_1h_structure(window_1h)
 
+            # ── Paramètres effectifs (peuvent être surchargés par le dual mode) ──
+            eff_rr             = rr_ratio
+            eff_spring         = enable_spring
+            eff_utad           = enable_utad
+            eff_fib_lvls       = fib_levels
+            eff_disp_thr       = disp_threshold
+            eff_disp_atr_min   = disp_atr_min
+            eff_disp_vol_min   = disp_vol_min
+            eff_bos_sens       = bos_sensitivity
+            eff_bos_conf       = bos_close_conf
+            eff_wyckoff_lb     = wyckoff_lookback
+            eff_vol_mult       = vol_mult
+            eff_sl_atr_mult    = sl_atr_mult
+            eff_fib_split      = fib_entry_split
+            eff_htf_long_min   = htf_long_min_bias
+            eff_htf_short_min  = htf_short_min_bias
+            eff_tf1h_long_min  = tf1h_long_min_bias
+            eff_tf1h_short_min = tf1h_short_min_bias
+
+            # ── Dual mode — sélection de config AVANT step 0 ──────────────────
+            # Le RSI 4H choisit bull_config (LONG) ou bear_config (SHORT).
+            # La zone neutre (45-55) est exclue. Chaque config peut avoir des
+            # params différents (RR, Wyckoff patterns, Fib entry, etc.)
+            import math as _math_loop
+            rsi4h_val = float("nan")
+            rsi4h_dir = ""
+            if use_dual_mode and rsi4h_values and idx_4h >= 0:
+                rsi4h_val = rsi4h_values[idx_4h] if idx_4h < len(rsi4h_values) else float("nan")
+                if not _math_loop.isnan(rsi4h_val):
+                    if rsi4h_val >= rsi4h_bull_min:
+                        rsi4h_dir = "LONG"
+                        _cfg = dual_bull_config or {}
+                    elif rsi4h_val <= rsi4h_bear_max:
+                        rsi4h_dir = "SHORT"
+                        _cfg = dual_bear_config or {}
+                    else:
+                        rsi4h_dir = "NEUTRAL"
+                        rej["rsi4h_filter"] += 1
+                        continue
+                    # Appliquer la config sélectionnée sur les params effectifs
+                    eff_rr            = float(_cfg.get("take_profit_rr", eff_rr))
+                    eff_spring        = bool(_cfg.get("enable_spring", eff_spring))
+                    eff_utad          = bool(_cfg.get("enable_utad", eff_utad))
+                    eff_fib_lvls      = _cfg.get("fib_levels", eff_fib_lvls)
+                    eff_disp_thr      = float(_cfg.get("displacement_threshold", eff_disp_thr))
+                    eff_disp_atr_min  = float(_cfg.get("displacement_atr_min", eff_disp_atr_min))
+                    eff_disp_vol_min  = float(_cfg.get("displacement_vol_min", eff_disp_vol_min))
+                    eff_bos_sens      = int(_cfg.get("bos_sensitivity", eff_bos_sens))
+                    eff_bos_conf      = bool(_cfg.get("bos_close_confirmation", eff_bos_conf))
+                    eff_wyckoff_lb    = int(_cfg.get("wyckoff_lookback", eff_wyckoff_lb))
+                    eff_vol_mult      = float(_cfg.get("volume_multiplier_active", eff_vol_mult))
+                    eff_sl_atr_mult   = float(_cfg.get("stop_loss_atr_mult", eff_sl_atr_mult))
+                    eff_fib_split     = bool(_cfg.get("fib_entry_split", eff_fib_split))
+                    eff_htf_long_min  = _cfg.get("htf_long_min_bias", eff_htf_long_min)
+                    eff_htf_short_min = _cfg.get("htf_short_min_bias", eff_htf_short_min)
+                    eff_tf1h_long_min = _cfg.get("tf1h_long_min_bias", eff_tf1h_long_min)
+                    eff_tf1h_short_min= _cfg.get("tf1h_short_min_bias", eff_tf1h_short_min)
+
             # ── Pipeline complet via ta_engine (identique au scanner live) ──
 
             # Step 0 — Liquidity Zone (EQH/EQL strict si require_equal_highs_lows=True)
@@ -629,33 +691,33 @@ def _run_replay(
                 rej["step1_sweep"] += 1
                 continue
 
-            # Step 2 — Wyckoff (Spring / UTAD)
+            # Step 2 — Wyckoff (Spring / UTAD) — utilise les params effectifs
             htf_str = _HTF_BIAS_TO_STRUCT.get(htf_bias, "Neutre / Range")
             _spring, _utad, direction_15m, _wyckoff_event = ta.detect_wyckoff(
                 window_15m, htf_str,
-                enable_spring=enable_spring,
-                enable_utad=enable_utad,
-                lookback=wyckoff_lookback,
+                enable_spring=eff_spring,
+                enable_utad=eff_utad,
+                lookback=eff_wyckoff_lb,
             )
             if direction_15m is None:
                 rej["step2_wyckoff"] += 1
                 continue
 
-            # HTF / 1H alignment filter
+            # HTF / 1H alignment filter — utilise les params effectifs
             htf_rejected = False
             if direction_15m == "LONG":
                 if htf_bias == "SHORT":
                     htf_rejected = True
-                elif htf_long_min_bias == "LONG" and htf_bias != "LONG":
+                elif eff_htf_long_min == "LONG" and htf_bias != "LONG":
                     htf_rejected = True
-                elif tf1h_long_min_bias == "LONG" and tf_1h_struct != "LONG":
+                elif eff_tf1h_long_min == "LONG" and tf_1h_struct != "LONG":
                     htf_rejected = True
             else:
                 if htf_bias == "LONG":
                     htf_rejected = True
-                elif htf_short_min_bias == "SHORT" and htf_bias != "SHORT":
+                elif eff_htf_short_min == "SHORT" and htf_bias != "SHORT":
                     htf_rejected = True
-                elif tf1h_short_min_bias == "SHORT" and tf_1h_struct != "SHORT":
+                elif eff_tf1h_short_min == "SHORT" and tf_1h_struct != "SHORT":
                     htf_rejected = True
             if htf_rejected:
                 rej["htf_filter"] += 1
@@ -669,17 +731,12 @@ def _run_replay(
                     rej["weekly_trend"] += 1
                     continue
 
-            # ── RSI 4H Direction Selector (sélecteur de profil transparent) ──
-            # Calculé sur les bougies 4H déjà chargées — n'affecte PAS les 7 étapes.
-            # RSI > rsi4h_bull_min → LONG autorisé
-            # RSI < rsi4h_bear_max → SHORT autorisé
-            # Neutre (entre les deux seuils) → skip
-            rsi4h_val = float("nan")
-            rsi4h_dir = ""
-            if use_rsi4h_direction and rsi4h_values and idx_4h >= 0:
+            # ── RSI 4H Direction Selector (mode simple, non-dual) ─────────────
+            # Activé seulement quand use_rsi4h_direction=True et use_dual_mode=False
+            # (le dual mode a déjà fait la sélection avant step 0)
+            if use_rsi4h_direction and not use_dual_mode and rsi4h_values and idx_4h >= 0:
                 rsi4h_val = rsi4h_values[idx_4h] if idx_4h < len(rsi4h_values) else float("nan")
-                import math
-                if not math.isnan(rsi4h_val):
+                if not _math_loop.isnan(rsi4h_val):
                     if rsi4h_val >= rsi4h_bull_min:
                         rsi4h_dir = "LONG"
                     elif rsi4h_val <= rsi4h_bear_max:
@@ -690,36 +747,42 @@ def _run_replay(
                         rej["rsi4h_filter"] += 1
                         continue
 
-            # Step 3 — Displacement
+            # ── En dual mode: vérifier cohérence direction ────────────────────
+            # Le Wyckoff peut générer direction_15m différente du RSI direction
+            if use_dual_mode and rsi4h_dir in ("LONG", "SHORT") and direction_15m != rsi4h_dir:
+                rej["rsi4h_filter"] += 1
+                continue
+
+            # Step 3 — Displacement — utilise les params effectifs
             disp_ok, _disp_val, _atr_r, _vol_r = ta.detect_displacement(
                 window_15m, direction_15m,
-                disp_threshold=disp_threshold,
-                atr_min=disp_atr_min,
-                vol_min=disp_vol_min,
+                disp_threshold=eff_disp_thr,
+                atr_min=eff_disp_atr_min,
+                vol_min=eff_disp_vol_min,
             )
             if not disp_ok:
                 rej["step3_disp"] += 1
                 continue
 
-            # Step 4 — BOS
+            # Step 4 — BOS — utilise les params effectifs
             bos_ok, _bos_level = ta.detect_bos(
                 window_15m, direction_15m,
-                bos_sens=bos_sensitivity,
-                close_confirmation=bos_close_conf,
+                bos_sens=eff_bos_sens,
+                close_confirmation=eff_bos_conf,
             )
             if not bos_ok:
                 rej["step4_bos"] += 1
                 continue
 
-            # Step 5 — Volume + Expansion
-            vol_ok, _vol_ratio = ta.detect_volume(window_15m, vol_mult=vol_mult)
+            # Step 5 — Volume + Expansion — utilise les params effectifs
+            vol_ok, _vol_ratio = ta.detect_volume(window_15m, vol_mult=eff_vol_mult)
             exp_ok, _next_liq = ta.detect_expansion(window_15m, direction_15m)
             if not vol_ok and not exp_ok:
                 rej["step5_vol_exp"] += 1
                 continue
 
-            # Step 6 — Fibonacci
-            _fib_level, fib_ok = ta.detect_fibonacci(window_15m, direction_15m, fib_levels)
+            # Step 6 — Fibonacci — utilise les niveaux effectifs
+            _fib_level, fib_ok = ta.detect_fibonacci(window_15m, direction_15m, eff_fib_lvls)
             if not fib_ok:
                 rej["step6_fib"] += 1
                 continue
@@ -729,18 +792,16 @@ def _run_replay(
             if atr_val <= 0:
                 continue
 
-            if fib_entry_split:
+            if eff_fib_split:
                 # Fib entry split: 2 demi-positions depuis le même signal.
-                # Position A (scale-out) : TP = rr_ratio × 0.5, taille 0.5×
-                # Position B (runner)    : TP = rr_ratio,       taille 0.5×
-                # Résultat net si 2 wins : +0.25 × rr_ratio + 0.5 × rr_ratio = 0.75 × rr_ratio
-                # Résultat net si 2 loss : −0.5R − 0.5R = −1R (identique à 1 trade normal)
+                # Position A (scale-out) : TP = eff_rr × 0.5, taille 0.5×
+                # Position B (runner)    : TP = eff_rr,       taille 0.5×
                 session._open_position(
                     current_candle, direction_15m, atr_val,
                     htf_bias=htf_bias or "neutral",
                     tf_1h=tf_1h_struct or "neutral",
-                    rr_ratio=rr_ratio * 0.5,
-                    sl_atr_mult=sl_atr_mult,
+                    rr_ratio=eff_rr * 0.5,
+                    sl_atr_mult=eff_sl_atr_mult,
                     size_mult=0.5,
                     rsi4h_value=rsi4h_val,
                     rsi4h_direction=rsi4h_dir,
@@ -749,8 +810,8 @@ def _run_replay(
                     current_candle, direction_15m, atr_val,
                     htf_bias=htf_bias or "neutral",
                     tf_1h=tf_1h_struct or "neutral",
-                    rr_ratio=rr_ratio,
-                    sl_atr_mult=sl_atr_mult,
+                    rr_ratio=eff_rr,
+                    sl_atr_mult=eff_sl_atr_mult,
                     size_mult=0.5,
                     rsi4h_value=rsi4h_val,
                     rsi4h_direction=rsi4h_dir,
@@ -760,8 +821,8 @@ def _run_replay(
                     current_candle, direction_15m, atr_val,
                     htf_bias=htf_bias or "neutral",
                     tf_1h=tf_1h_struct or "neutral",
-                    rr_ratio=rr_ratio,
-                    sl_atr_mult=sl_atr_mult,
+                    rr_ratio=eff_rr,
+                    sl_atr_mult=eff_sl_atr_mult,
                     rsi4h_value=rsi4h_val,
                     rsi4h_direction=rsi4h_dir,
                 )
@@ -859,6 +920,10 @@ class ReplayManager:
         rsi4h_period: int = 14,
         rsi4h_bull_min: float = 55.0,
         rsi4h_bear_max: float = 45.0,
+        # --- Dual mode ---
+        use_dual_mode: bool = False,
+        dual_bull_config: dict | None = None,
+        dual_bear_config: dict | None = None,
     ) -> str | None:
         if fib_levels is None:
             fib_levels = [0.5, 0.618, 0.705]
@@ -911,6 +976,9 @@ class ReplayManager:
                 rsi4h_period=rsi4h_period,
                 rsi4h_bull_min=rsi4h_bull_min,
                 rsi4h_bear_max=rsi4h_bear_max,
+                use_dual_mode=use_dual_mode,
+                dual_bull_config=dual_bull_config,
+                dual_bear_config=dual_bear_config,
             ),
             daemon=True,
             name=f"replay-{session_id[:8]}",

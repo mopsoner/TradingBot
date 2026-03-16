@@ -68,6 +68,31 @@ Each skill is an isolated service class in `backend/app/services/`:
 
 Any missing step returns `None` (no trade).
 
+### RSI 4H Direction Selector + Dual Profile Mode
+
+The `replay_engine.py` supports two advanced filtering modes, both transparent to the 7 mandatory pipeline steps:
+
+**Simple RSI filter** (`use_rsi4h_direction=True`): Computes RSI 14-period on 4H candles before the pipeline. Only allows LONG when RSI > `rsi4h_bull_min` (default 55), SHORT when RSI < `rsi4h_bear_max` (default 45). Neutral zone skipped.
+
+**Dual Profile mode** (`use_dual_mode=True`): A single profile contains `bull_config` and `bear_config` sub-dicts. The RSI 4H value routes each signal to the appropriate config block **before step 2 (Wyckoff)**, so Wyckoff pattern selection (Spring vs UTAD) and all other params (RR, SL mult, fib levels, lookback) can differ per regime. Steps 1-7 use `eff_*` (effective) variables populated from the selected config.
+
+Profile structure for dual mode:
+```json
+{
+  "use_dual_mode": true,
+  "rsi4h_period": 14,
+  "rsi4h_bull_min": 55.0,
+  "rsi4h_bear_max": 45.0,
+  "bull_config": { "enable_spring": true, "enable_utad": false, "take_profit_rr": 4.0, ... },
+  "bear_config": { "enable_spring": false, "enable_utad": true,  "take_profit_rr": 2.0, "fib_entry_split": true, ... }
+}
+```
+
+**Active profile:** `ETH-SMC-Dual-Optimized` (id=15), optimised on 4 years of ETHUSDT data.
+- Bull (RSI > 55): Spring / RR=4.0 / lb=16 → 116 trades, WR=31.9%, +69R
+- Bear (RSI < 45): UTAD / RR=2.0 / lb=16 → 80 trades, WR=50.0%, +8R
+- **Combined: 196 trades, WR=39.3%, PF=1.78, +77R, MaxDD=12.6%**
+
 ### OpenClaw Reference Layer (`src/openclaw/`)
 
 A parallel Python package in `src/openclaw/` mirrors the same skill set with more sophisticated implementations (real Binance kline fetching with synthetic fallback, slippage/fee simulation in paper trades, walk-forward backtesting). This is the "engine" layer; the `backend/app/services/` layer is the web-adapted version.

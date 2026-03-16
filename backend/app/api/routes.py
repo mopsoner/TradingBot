@@ -1645,6 +1645,9 @@ def replay_start(req: ReplayStartRequest) -> dict:
     rsi4h_period             = 14
     rsi4h_bull_min           = 55.0
     rsi4h_bear_max           = 45.0
+    use_dual_mode            = False
+    dual_bull_config         = None
+    dual_bear_config         = None
 
     if req.profile_id:
         with Session(engine) as s:
@@ -1674,6 +1677,10 @@ def replay_start(req: ReplayStartRequest) -> dict:
                     rsi4h_period               = int(params.get("rsi4h_period", 14))
                     rsi4h_bull_min             = float(params.get("rsi4h_bull_min", 55.0))
                     rsi4h_bear_max             = float(params.get("rsi4h_bear_max", 45.0))
+                    # Dual mode: bull_config et bear_config sont des sous-dicts
+                    use_dual_mode              = bool(params.get("use_dual_mode", False))
+                    dual_bull_config           = params.get("bull_config", None)
+                    dual_bear_config           = params.get("bear_config", None)
                     if req.htf_long_min_bias is None:
                         htf_long_min_bias = params.get("htf_long_min_bias", htf_long_min_bias)
                     if req.htf_short_min_bias is None:
@@ -1715,6 +1722,9 @@ def replay_start(req: ReplayStartRequest) -> dict:
         rsi4h_period=rsi4h_period,
         rsi4h_bull_min=rsi4h_bull_min,
         rsi4h_bear_max=rsi4h_bear_max,
+        use_dual_mode=use_dual_mode,
+        dual_bull_config=dual_bull_config,
+        dual_bear_config=dual_bear_config,
     )
     if session_id is None:
         return {"ok": False, "reason": "Trop de replays en cours. Réessayez dans quelques instants."}
