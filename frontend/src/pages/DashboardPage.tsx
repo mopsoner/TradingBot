@@ -1,9 +1,173 @@
 import { useEffect, useRef, useState } from 'react';
 import { useApi } from '../hooks/useApi';
-import { api, type ServiceStatus, type Trade } from '../services/api';
+import { api, type ProcessStatus, type ServiceStatus, type Trade } from '../services/api';
 import { fmtDate, fmtDateTime, fmtTimeSec } from '../utils/dateUtils';
 
 function fmt(n: number, dec = 2) { return n.toFixed(dec); }
+
+function fmtCountdown(s: number) {
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${m}:${String(sec).padStart(2, '0')}`;
+}
+
+const PROC_COLOR: Record<string, string> = {
+  scanner:  'var(--accent-green)',
+  pipeline: 'var(--accent)',
+  backtest: '#a855f7',
+  import:   '#06b6d4',
+};
+
+function DashboardProcessCard() {
+  const [processes, setProcesses] = useState<ProcessStatus[]>([]);
+  const [totalRunning, setTotalRunning] = useState(0);
+  const [mode, setMode] = useState('');
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const [stopping, setStopping] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const load = () => {
+    api.systemProcesses().then(d => {
+      setProcesses(d.processes);
+      setTotalRunning(d.total_running);
+      setMode(d.mode);
+      const scanner = d.processes.find(p => p.id === 'scanner');
+      setCountdown(scanner?.seconds_to_next ?? null);
+    }).catch(() => {});
+  };
+
+  const hasActiveImport = processes.some(p => p.type === 'import' && p.status === 'running');
+
+  useEffect(() => {
+    load();
+    const interval = hasActiveImport ? 3000 : 8000;
+    const poll = setInterval(load, interval);
+    return () => clearInterval(poll);
+  }, [hasActiveImport]);
+
+  useEffect(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = setInterval(() => {
+      setCountdown(prev => (prev !== null && prev > 0) ? prev - 1 : prev);
+    }, 1000);
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [processes]);
+
+  const stopBot = async () => {
+    setStopping(true);
+    await api.autonomousStop();
+    load();
+    setStopping(false);
+  };
+
+  return (
+    <div className="card" style={{ marginBottom: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+        <h3 style={{ margin: 0, fontSize: 14 }}>Processus actifs</h3>
+        <span style={{
+          fontSize: 11, fontWeight: 700, padding: '2px 10px', borderRadius: 10,
+          background: totalRunning > 0 ? 'rgba(59,130,246,0.15)' : 'rgba(100,116,139,0.12)',
+          color: totalRunning > 0 ? 'var(--accent)' : 'var(--text-muted)',
+        }}>
+          {totalRunning} actif{totalRunning !== 1 ? 's' : ''}
+        </span>
+      </div>
+
+      {processes.length === 0 && (
+        <div className="empty-state" style={{ padding: '18px 0' }}>
+          <div className="empty-state-icon" style={{ fontSize: 28 }}>🕹️</div>
+          <div className="empty-state-title">Aucun processus actif</div>
+          <div className="empty-state-desc">Le scanner, les pipelines et les backtests s'affichent ici en temps réel.</div>
+        </div>
+      )}
+
+      {processes.map((p: ProcessStatus) => {
+        const color = PROC_COLOR[p.type] ?? 'var(--text-muted)';
+        const isScanner = p.id === 'scanner';
+        const isImport = p.type === 'import';
+        const running = p.status === 'running';
+        const rgb = p.type === 'scanner' ? '34,197,94' : p.type === 'pipeline' ? '59,130,246' : p.type === 'import' ? '6,182,212' : '168,85,247';
+        return (
+          <div key={p.id} style={{
+            display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px',
+            borderRadius: 8, marginBottom: 6,
+            background: running ? `rgba(${rgb},0.06)` : 'rgba(100,116,139,0.07)',
+            border: `1px solid ${running ? color + '44' : 'var(--border)'}`,
+          }}>
+            <span style={{
+              width: 10, height: 10, borderRadius: '50%', flexShrink: 0,
+              background: running ? color : 'var(--text-muted)',
+              boxShadow: running ? `0 0 8px ${color}` : 'none',
+            }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, display: 'flex', alignItems: 'center', gap: 7 }}>
+                <span style={{ color: running ? 'var(--text)' : 'var(--text-muted)' }}>{p.label}</span>
+                {isScanner && running && mode && (
+                  <span style={{
+                    fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 4,
+                    background: mode === 'live' ? 'rgba(34,197,94,0.15)' : 'rgba(234,179,8,0.15)',
+                    color: mode === 'live' ? 'var(--accent-green)' : 'var(--accent-yellow)',
+                  }}>
+                    {mode.toUpperCase()}
+                  </span>
+                )}
+              </div>
+              {p.detail && (
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {p.detail}
+                </div>
+              )}
+              {isImport && p.pct_done !== undefined && (
+                <div style={{ marginTop: 4, height: 4, borderRadius: 2, background: 'rgba(100,116,139,0.15)', overflow: 'hidden' }}>
+                  <div style={{
+                    height: '100%', borderRadius: 2,
+                    width: `${p.pct_done}%`,
+                    background: p.status === 'error' ? 'var(--accent-red)' : '#06b6d4',
+                    transition: 'width 0.3s ease',
+                  }} />
+                </div>
+              )}
+            </div>
+
+            {isScanner && running && countdown !== null && (
+              <div style={{ textAlign: 'center', flexShrink: 0 }}>
+                <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'monospace', color: 'var(--accent)', lineHeight: 1 }}>
+                  {fmtCountdown(countdown)}
+                </div>
+                <div style={{ fontSize: 9, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginTop: 2 }}>
+                  prochain scan
+                </div>
+              </div>
+            )}
+
+            {isScanner && running ? (
+              <button
+                onClick={stopBot}
+                disabled={stopping}
+                style={{
+                  padding: '6px 14px', borderRadius: 6, fontSize: 12, fontWeight: 700, flexShrink: 0,
+                  border: '1px solid rgba(239,68,68,0.45)',
+                  background: stopping ? 'rgba(239,68,68,0.06)' : 'rgba(239,68,68,0.13)',
+                  color: 'var(--accent-red)',
+                  cursor: stopping ? 'default' : 'pointer',
+                  opacity: stopping ? 0.6 : 1,
+                }}
+              >
+                {stopping ? 'Arrêt…' : '⏹ Arrêter le bot'}
+              </button>
+            ) : isImport && p.status === 'done' ? (
+              <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600, flexShrink: 0 }}>Terminé</span>
+            ) : isImport && p.status === 'error' ? (
+              <span style={{ fontSize: 11, color: 'var(--accent-red)', fontWeight: 600, flexShrink: 0 }}>Erreur</span>
+            ) : !running ? (
+              <span style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0 }}>Terminé</span>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 const SVC_STYLE: Record<string, { dot: string; pill: string; label: string }> = {
   running:   { dot: '#22c55e', pill: 'pill-green',  label: 'En ligne'   },
@@ -201,6 +365,8 @@ export function DashboardPage() {
           <div className="stat-sub">sur {data.open_positions} position{data.open_positions !== 1 ? 's' : ''}</div>
         </div>
       </div>
+
+      <DashboardProcessCard />
 
       <ServicesPanel />
 
