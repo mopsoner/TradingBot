@@ -76,6 +76,18 @@ class ReplaySession:
     total_candles: int = 0
     backtest_result_id: int | None = None
     profile_name: str = "SMC/Wyckoff Multi-TF"
+    step_rejections: dict = field(default_factory=lambda: {
+        "no_data":       0,
+        "step0_liq":     0,
+        "step1_sweep":   0,
+        "step2_wyckoff": 0,
+        "htf_filter":    0,
+        "step3_disp":    0,
+        "step4_bos":     0,
+        "step5_vol_exp": 0,
+        "step6_fib":     0,
+        "weekend":       0,
+    })
 
     equity: float = field(default=10.0, repr=False)
     peak: float = field(default=10.0, repr=False)
@@ -448,6 +460,10 @@ def _run_replay(
             session.total_candles = len(candles_15m_in_range)
 
         cooldown_bars = 0
+        _ts_index = {id(c): i for i, c in enumerate(candles_15m)}
+
+        # Local rejection counters (merged into session at end)
+        rej = {k: 0 for k in session.step_rejections}
 
         for idx, current_candle in enumerate(candles_15m_in_range):
             with session._lock:
@@ -464,10 +480,12 @@ def _run_replay(
 
             # Skip weekend candles if profile disables weekend trading
             if not allow_weekend and current_candle.timestamp.weekday() >= 5:
+                rej["weekend"] += 1
                 continue
 
-            pos_in_full = candles_15m.index(current_candle) if current_candle in candles_15m else -1
+            pos_in_full = _ts_index.get(id(current_candle), -1)
             if pos_in_full < WINDOW_15M:
+                rej["no_data"] += 1
                 continue
 
             window_15m = candles_15m[pos_in_full - WINDOW_15M: pos_in_full]
@@ -493,11 +511,13 @@ def _run_replay(
             # Step 0 — Liquidity Zone
             _zone_type, zone_price, is_high_zone = ta.detect_liquidity_zone(window_15m)
             if zone_price <= 0:
+                rej["step0_liq"] += 1
                 continue
 
             # Step 1 — Sweep
             sweep_ok, _sweep_price = ta.detect_sweep(window_15m, zone_price, is_high_zone)
             if not sweep_ok:
+                rej["step1_sweep"] += 1
                 continue
 
             # Step 2 — Wyckoff (Spring / UTAD)
@@ -509,23 +529,28 @@ def _run_replay(
                 lookback=wyckoff_lookback,
             )
             if direction_15m is None:
+                rej["step2_wyckoff"] += 1
                 continue
 
-            # HTF / 1H alignment filter (unchanged logic)
+            # HTF / 1H alignment filter
+            htf_rejected = False
             if direction_15m == "LONG":
                 if htf_bias == "SHORT":
-                    continue
-                if htf_long_min_bias == "LONG" and htf_bias != "LONG":
-                    continue
-                if tf1h_long_min_bias == "LONG" and tf_1h_struct != "LONG":
-                    continue
+                    htf_rejected = True
+                elif htf_long_min_bias == "LONG" and htf_bias != "LONG":
+                    htf_rejected = True
+                elif tf1h_long_min_bias == "LONG" and tf_1h_struct != "LONG":
+                    htf_rejected = True
             else:
                 if htf_bias == "LONG":
-                    continue
-                if htf_short_min_bias == "SHORT" and htf_bias != "SHORT":
-                    continue
-                if tf1h_short_min_bias == "SHORT" and tf_1h_struct != "SHORT":
-                    continue
+                    htf_rejected = True
+                elif htf_short_min_bias == "SHORT" and htf_bias != "SHORT":
+                    htf_rejected = True
+                elif tf1h_short_min_bias == "SHORT" and tf_1h_struct != "SHORT":
+                    htf_rejected = True
+            if htf_rejected:
+                rej["htf_filter"] += 1
+                continue
 
             # Step 3 — Displacement
             disp_ok, _disp_val, _atr_r, _vol_r = ta.detect_displacement(
@@ -535,6 +560,7 @@ def _run_replay(
                 vol_min=disp_vol_min,
             )
             if not disp_ok:
+                rej["step3_disp"] += 1
                 continue
 
             # Step 4 — BOS
@@ -544,17 +570,20 @@ def _run_replay(
                 close_confirmation=bos_close_conf,
             )
             if not bos_ok:
+                rej["step4_bos"] += 1
                 continue
 
             # Step 5 — Volume + Expansion
             vol_ok, _vol_ratio = ta.detect_volume(window_15m, vol_mult=vol_mult)
             exp_ok, _next_liq = ta.detect_expansion(window_15m, direction_15m)
             if not vol_ok and not exp_ok:
+                rej["step5_vol_exp"] += 1
                 continue
 
             # Step 6 — Fibonacci
             _fib_level, fib_ok = ta.detect_fibonacci(window_15m, direction_15m, fib_levels)
             if not fib_ok:
+                rej["step6_fib"] += 1
                 continue
 
             # ── All steps passed → open position ──
@@ -570,6 +599,11 @@ def _run_replay(
                 sl_atr_mult=sl_atr_mult,
             )
             cooldown_bars = 4
+
+        # Merge local rejection counters into session
+        with session._lock:
+            for k, v in rej.items():
+                session.step_rejections[k] = v
 
         session.compute_final_metrics()
         with session._lock:
@@ -746,6 +780,7 @@ class ReplayManager:
                     for t in session.trades
                 ]
                 result["backtest_result_id"] = session.backtest_result_id
+                result["step_rejections"] = dict(session.step_rejections)
 
         return result
 
