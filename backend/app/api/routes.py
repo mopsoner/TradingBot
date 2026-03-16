@@ -1615,11 +1615,13 @@ def replay_start(req: ReplayStartRequest) -> dict:
     htf_short_min_bias = req.htf_short_min_bias or "SHORT"
     tf1h_short_min_bias = req.tf1h_short_min_bias or "neutral"
     tf1h_long_min_bias = req.tf1h_long_min_bias or "neutral"
+    resolved_profile_name = "SMC/Wyckoff Multi-TF"
 
     if req.profile_id:
         with Session(engine) as s:
             prof = s.get(StrategyProfile, req.profile_id)
             if prof:
+                resolved_profile_name = prof.name
                 try:
                     params = _json.loads(prof.parameters) if isinstance(prof.parameters, str) else prof.parameters
                     fib_levels = params.get("fib_levels", fib_levels)
@@ -1645,6 +1647,7 @@ def replay_start(req: ReplayStartRequest) -> dict:
         htf_short_min_bias=htf_short_min_bias,
         tf1h_short_min_bias=tf1h_short_min_bias,
         tf1h_long_min_bias=tf1h_long_min_bias,
+        profile_name=resolved_profile_name,
     )
     if session_id is None:
         return {"ok": False, "reason": "Trop de replays en cours. Réessayez dans quelques instants."}

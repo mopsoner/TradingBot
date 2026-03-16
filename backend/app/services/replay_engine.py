@@ -75,6 +75,7 @@ class ReplaySession:
     candles_processed: int = 0
     total_candles: int = 0
     backtest_result_id: int | None = None
+    profile_name: str = "SMC/Wyckoff Multi-TF"
 
     equity: float = field(default=10.0, repr=False)
     peak: float = field(default=10.0, repr=False)
@@ -358,7 +359,7 @@ def _persist_running(session: ReplaySession) -> None:
         bt = BacktestResult(
             symbol=session.symbol,
             timeframe="4h/1h/15m",
-            strategy_version="SMC/Wyckoff Multi-TF",
+            strategy_version=session.profile_name,
             win_rate=0.0, profit_factor=0.0, expectancy=0.0, drawdown=0.0, r_multiple=0.0,
             pipeline_run_id=session.session_id,
             signal_count=0,
@@ -559,6 +560,7 @@ class ReplayManager:
         htf_short_min_bias: str = "SHORT",
         tf1h_short_min_bias: str = "neutral",
         tf1h_long_min_bias: str = "neutral",
+        profile_name: str = "SMC/Wyckoff Multi-TF",
     ) -> str | None:
         if fib_levels is None:
             fib_levels = [0.5, 0.618, 0.705]
@@ -576,6 +578,7 @@ class ReplayManager:
             symbol=symbol,
             date_start=date_start,
             date_end=date_end,
+            profile_name=profile_name,
         )
 
         with self._lock:
