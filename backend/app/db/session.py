@@ -10,14 +10,7 @@ engine = create_engine(
     "sqlite:///trading_platform.db",
     echo=False,
     connect_args={"check_same_thread": False, "timeout": 30},
-    pool_pre_ping=True,
 )
-
-# Enable WAL mode for concurrent read/write access (multi-thread safety)
-with engine.connect() as _conn:
-    _conn.execute(text("PRAGMA journal_mode=WAL"))
-    _conn.execute(text("PRAGMA busy_timeout=30000"))
-    _conn.commit()
 
 _CONFIG_KEY = "app_config"
 
@@ -233,6 +226,14 @@ def _seed_default_profile() -> None:
 
 
 def init_db() -> None:
+    # Enable WAL mode for concurrent read/write safety (multi-thread: backtest + scanner)
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("PRAGMA journal_mode=WAL"))
+            conn.execute(text("PRAGMA busy_timeout=30000"))
+            conn.commit()
+    except Exception as exc:
+        logger.warning("WAL pragma failed (non-fatal): %s", exc)
     SQLModel.metadata.create_all(engine)
     _apply_migrations()
     _patch_profiles_missing_fields()
