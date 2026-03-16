@@ -1629,6 +1629,7 @@ def replay_start(req: ReplayStartRequest) -> dict:
     vol_mult        = 1.3
     sl_atr_mult     = 1.5
     allow_weekend   = True
+    use_weekly_trend_filter = False
 
     if req.profile_id:
         with Session(engine) as s:
@@ -1637,19 +1638,20 @@ def replay_start(req: ReplayStartRequest) -> dict:
                 resolved_profile_name = prof.name
                 try:
                     params = _json.loads(prof.parameters) if isinstance(prof.parameters, str) else prof.parameters
-                    fib_levels       = params.get("fib_levels", fib_levels)
-                    rr_ratio         = float(params.get("take_profit_rr", rr_ratio))
-                    enable_spring    = bool(params.get("enable_spring", enable_spring))
-                    enable_utad      = bool(params.get("enable_utad", enable_utad))
-                    disp_threshold   = float(params.get("displacement_threshold", disp_threshold))
-                    disp_atr_min     = float(params.get("displacement_atr_min", disp_atr_min))
-                    disp_vol_min     = float(params.get("displacement_vol_min", disp_vol_min))
-                    bos_sensitivity  = int(params.get("bos_sensitivity", bos_sensitivity))
-                    bos_close_conf   = bool(params.get("bos_close_confirmation", bos_close_conf))
-                    vol_mult         = float(params.get("volume_multiplier_active", vol_mult))
-                    sl_atr_mult      = float(params.get("stop_loss_atr_mult", sl_atr_mult))
-                    allow_weekend    = bool(params.get("allow_weekend_trading", allow_weekend))
-                    wyckoff_lookback = int(params.get("wyckoff_lookback", wyckoff_lookback))
+                    fib_levels              = params.get("fib_levels", fib_levels)
+                    rr_ratio                = float(params.get("take_profit_rr", rr_ratio))
+                    enable_spring           = bool(params.get("enable_spring", enable_spring))
+                    enable_utad             = bool(params.get("enable_utad", enable_utad))
+                    disp_threshold          = float(params.get("displacement_threshold", disp_threshold))
+                    disp_atr_min            = float(params.get("displacement_atr_min", disp_atr_min))
+                    disp_vol_min            = float(params.get("displacement_vol_min", disp_vol_min))
+                    bos_sensitivity         = int(params.get("bos_sensitivity", bos_sensitivity))
+                    bos_close_conf          = bool(params.get("bos_close_confirmation", bos_close_conf))
+                    vol_mult                = float(params.get("volume_multiplier_active", vol_mult))
+                    sl_atr_mult             = float(params.get("stop_loss_atr_mult", sl_atr_mult))
+                    allow_weekend           = bool(params.get("allow_weekend_trading", allow_weekend))
+                    wyckoff_lookback        = int(params.get("wyckoff_lookback", wyckoff_lookback))
+                    use_weekly_trend_filter = bool(params.get("use_weekly_trend_filter", use_weekly_trend_filter))
                     if req.htf_long_min_bias is None:
                         htf_long_min_bias = params.get("htf_long_min_bias", htf_long_min_bias)
                     if req.htf_short_min_bias is None:
@@ -1683,6 +1685,7 @@ def replay_start(req: ReplayStartRequest) -> dict:
         vol_mult=vol_mult,
         sl_atr_mult=sl_atr_mult,
         allow_weekend=allow_weekend,
+        use_weekly_trend_filter=use_weekly_trend_filter,
     )
     if session_id is None:
         return {"ok": False, "reason": "Trop de replays en cours. Réessayez dans quelques instants."}

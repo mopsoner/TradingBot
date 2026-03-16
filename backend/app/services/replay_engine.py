@@ -77,16 +77,17 @@ class ReplaySession:
     backtest_result_id: int | None = None
     profile_name: str = "SMC/Wyckoff Multi-TF"
     step_rejections: dict = field(default_factory=lambda: {
-        "no_data":       0,
-        "step0_liq":     0,
-        "step1_sweep":   0,
-        "step2_wyckoff": 0,
-        "htf_filter":    0,
-        "step3_disp":    0,
-        "step4_bos":     0,
-        "step5_vol_exp": 0,
-        "step6_fib":     0,
-        "weekend":       0,
+        "no_data":        0,
+        "step0_liq":      0,
+        "step1_sweep":    0,
+        "step2_wyckoff":  0,
+        "htf_filter":     0,
+        "weekly_trend":   0,
+        "step3_disp":     0,
+        "step4_bos":      0,
+        "step5_vol_exp":  0,
+        "step6_fib":      0,
+        "weekend":        0,
     })
 
     equity: float = field(default=10.0, repr=False)
@@ -348,6 +349,58 @@ def _build_ts_index(candles: list[CandleData]) -> list[datetime]:
     return [c.timestamp for c in candles]
 
 
+def _build_weekly_candles(candles_1h: list[CandleData]) -> list[CandleData]:
+    """
+    Resample 1H candles → weekly candles (semaine ISO : lundi-dimanche).
+    Retourne une liste triée par timestamp (lundi de la semaine).
+    """
+    from collections import OrderedDict
+    buckets: dict[datetime, list] = {}
+    for c in candles_1h:
+        dt = c.timestamp
+        week_start = (dt - timedelta(days=dt.weekday())).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        if week_start not in buckets:
+            buckets[week_start] = [c.open, c.high, c.low, c.close, c.volume]
+        else:
+            buckets[week_start][1] = max(buckets[week_start][1], c.high)
+            buckets[week_start][2] = min(buckets[week_start][2], c.low)
+            buckets[week_start][3] = c.close
+            buckets[week_start][4] += c.volume
+    result = []
+    for ts in sorted(buckets.keys()):
+        o, h, l, c_v, v = buckets[ts]
+        result.append(CandleData(timestamp=ts, open=o, high=h, low=l, close=c_v, volume=v))
+    return result
+
+
+def _get_weekly_bias(
+    candles_weekly: list[CandleData],
+    ts_weekly: list[datetime],
+    ts_now: datetime,
+    direction: str,
+    sma_period: int = 10,
+    lookback_weeks: int = 4,
+) -> bool:
+    """
+    Filtre de tendance weekly (F1a LONG / F1b SHORT).
+    LONG  autorisé si close_wk > SMA(10 semaines) ET close_wk > close_4_semaines_avant.
+    SHORT autorisé si close_wk < SMA(10 semaines) ET close_wk < close_4_semaines_avant.
+    Retourne True si le signal est autorisé.
+    """
+    idx = bisect_right(ts_weekly, ts_now) - 1
+    if idx < sma_period + lookback_weeks - 1:
+        return True
+    cur_close = candles_weekly[idx].close
+    sma10 = sum(candles_weekly[i].close for i in range(idx - sma_period + 1, idx + 1)) / sma_period
+    close_4w_ago = candles_weekly[idx - lookback_weeks].close
+    if direction == "LONG":
+        return cur_close > sma10 and cur_close > close_4w_ago
+    else:
+        return cur_close < sma10 and cur_close < close_4w_ago
+
+
 MAX_CONCURRENT_REPLAYS = 3
 
 
@@ -411,6 +464,7 @@ def _run_replay(
     vol_mult: float = 1.3,
     sl_atr_mult: float = 1.5,
     allow_weekend: bool = True,
+    use_weekly_trend_filter: bool = False,
 ) -> None:
     _persist_running(session)
     try:
@@ -443,6 +497,17 @@ def _run_replay(
 
         ts_4h = _build_ts_index(candles_4h)
         ts_1h = _build_ts_index(candles_1h)
+
+        # Bougies weekly (resamplées depuis 1H, incluent le buffer 90j)
+        candles_weekly: list[CandleData] = []
+        ts_weekly: list[datetime] = []
+        if use_weekly_trend_filter:
+            candles_weekly = _build_weekly_candles(candles_1h)
+            ts_weekly = [c.timestamp for c in candles_weekly]
+            logger.info(
+                "Replay %s — weekly candles: %d (filter actif)",
+                session.session_id[:8], len(candles_weekly)
+            )
 
         candles_15m_in_range = [
             c for c in candles_15m if c.timestamp >= date_start_naive
@@ -543,6 +608,14 @@ def _run_replay(
             if htf_rejected:
                 rej["htf_filter"] += 1
                 continue
+
+            # Weekly Trend Filter (F1a LONG / F1b SHORT)
+            if use_weekly_trend_filter and candles_weekly:
+                if not _get_weekly_bias(
+                    candles_weekly, ts_weekly, ts_now, direction_15m
+                ):
+                    rej["weekly_trend"] += 1
+                    continue
 
             # Step 3 — Displacement
             disp_ok, _disp_val, _atr_r, _vol_r = ta.detect_displacement(
@@ -672,6 +745,7 @@ class ReplayManager:
         vol_mult: float = 1.3,
         sl_atr_mult: float = 1.5,
         allow_weekend: bool = True,
+        use_weekly_trend_filter: bool = False,
     ) -> str | None:
         if fib_levels is None:
             fib_levels = [0.5, 0.618, 0.705]
@@ -716,6 +790,7 @@ class ReplayManager:
                 vol_mult=vol_mult,
                 sl_atr_mult=sl_atr_mult,
                 allow_weekend=allow_weekend,
+                use_weekly_trend_filter=use_weekly_trend_filter,
             ),
             daemon=True,
             name=f"replay-{session_id[:8]}",
