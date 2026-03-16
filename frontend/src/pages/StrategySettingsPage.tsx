@@ -53,6 +53,10 @@ export function StrategySettingsPage({ onNavigate }: Props) {
   const [fibLevels, setFibLevels]       = useState('0.5,0.618,0.786');
   const [fibSplit, setFibSplit]         = useState(true);
   const [htfRequired, setHtfRequired]   = useState(true);
+  const [htfLongMinBias, setHtfLongMinBias] = useState<'neutral' | 'LONG'>('neutral');
+  const [htfShortMinBias, setHtfShortMinBias] = useState<'neutral' | 'SHORT'>('SHORT');
+  const [tf1hShortMinBias, setTf1hShortMinBias] = useState<'neutral' | 'SHORT'>('SHORT');
+  const [tf1hLongMinBias, setTf1hLongMinBias] = useState<'neutral' | 'LONG'>('neutral');
   const [volAdaptive, setVolAdaptive]   = useState(true);
   const [volMultActive, setVolMultActive] = useState(1.8);
   const [volMultOff, setVolMultOff]     = useState(1.25);
@@ -91,6 +95,10 @@ export function StrategySettingsPage({ onNavigate }: Props) {
     fib_levels: fibLevels.split(',').map(v => Number(v.trim())).filter(v => !Number.isNaN(v)),
     fib_entry_split: fibSplit,
     htf_alignment_required: htfRequired,
+    htf_long_min_bias: htfLongMinBias,
+    htf_short_min_bias: htfShortMinBias,
+    tf1h_short_min_bias: tf1hShortMinBias,
+    tf1h_long_min_bias: tf1hLongMinBias,
     volume_adaptive: volAdaptive,
     volume_multiplier_active: volMultActive,
     volume_multiplier_offpeak: volMultOff,
@@ -121,6 +129,10 @@ export function StrategySettingsPage({ onNavigate }: Props) {
     setFibLevels(fib);
     setFibSplit(Boolean(params.fib_entry_split ?? true));
     setHtfRequired(Boolean(params.htf_alignment_required ?? true));
+    setHtfLongMinBias((params.htf_long_min_bias as 'neutral' | 'LONG') ?? 'neutral');
+    setHtfShortMinBias((params.htf_short_min_bias as 'neutral' | 'SHORT') ?? 'SHORT');
+    setTf1hShortMinBias((params.tf1h_short_min_bias as 'neutral' | 'SHORT') ?? 'SHORT');
+    setTf1hLongMinBias((params.tf1h_long_min_bias as 'neutral' | 'LONG') ?? 'neutral');
     setVolAdaptive(Boolean(params.volume_adaptive ?? true));
     setVolMultActive(Number(params.volume_multiplier_active ?? 1.8));
     setVolMultOff(Number(params.volume_multiplier_offpeak ?? 1.25));
@@ -143,7 +155,8 @@ export function StrategySettingsPage({ onNavigate }: Props) {
     setDisplacementThreshold(0.55); setAtrMin(1.2);
     setBosSensitivity(7); setBosCloseConf(true);
     setFibLevels('0.5,0.618,0.786'); setFibSplit(true);
-    setHtfRequired(true); setVolAdaptive(true);
+    setHtfRequired(true); setHtfLongMinBias('neutral'); setHtfShortMinBias('SHORT');
+    setTf1hShortMinBias('SHORT'); setTf1hLongMinBias('neutral'); setVolAdaptive(true);
     setVolMultActive(1.8); setVolMultOff(1.25);
     setRsiPeriod(14); setRsiOb(70); setRsiOs(30); setRsiDivOnly(true);
     setAllowWeekend(false); setUse5m(false); setRequireEqHL(true);
@@ -331,6 +344,52 @@ export function StrategySettingsPage({ onNavigate }: Props) {
             <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>HTF & Volume</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <Toggle checked={htfRequired} onChange={setHtfRequired} label="Alignement 4H obligatoire" tip="Rejette les setups LONG si la structure 4H est Bearish, et les SHORT si Bullish. Filtre HTF essentiel." />
+              {htfRequired && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 500 }}>Biais 4H minimum (HTF)</div>
+                  <div className="grid-2" style={{ gap: 8 }}>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label style={{ fontSize: 12 }} title="Biais 4H minimum requis pour valider un signal LONG. 'neutral' = autorisé si 4H neutral ou LONG. 'LONG' = exige une structure 4H haussière confirmée.">
+                        LONG — biais 4H min
+                      </label>
+                      <select value={htfLongMinBias} onChange={e => setHtfLongMinBias(e.target.value as 'neutral' | 'LONG')} style={{ fontSize: 13 }}>
+                        <option value="neutral">neutral (défaut)</option>
+                        <option value="LONG">LONG strict (4H haussier confirmé)</option>
+                      </select>
+                    </div>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label style={{ fontSize: 12 }} title="Biais 4H minimum requis pour valider un signal SHORT. 'SHORT' = exige structure 4H baissière explicite (recommandé crypto). 'neutral' = autorisé si 4H neutral ou SHORT.">
+                        SHORT — biais 4H min
+                      </label>
+                      <select value={htfShortMinBias} onChange={e => setHtfShortMinBias(e.target.value as 'neutral' | 'SHORT')} style={{ fontSize: 13 }}>
+                        <option value="SHORT">SHORT strict (recommandé)</option>
+                        <option value="neutral">neutral (4H non haussier suffit)</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 500, marginTop: 4 }}>Confirmation 1H (double filtre)</div>
+                  <div className="grid-2" style={{ gap: 8 }}>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label style={{ fontSize: 12 }} title="Structure 1H minimum pour un LONG. 'neutral' = pas de filtre 1H. 'LONG' = exige 1H haussier (filtre strict).">
+                        LONG — structure 1H min
+                      </label>
+                      <select value={tf1hLongMinBias} onChange={e => setTf1hLongMinBias(e.target.value as 'neutral' | 'LONG')} style={{ fontSize: 13 }}>
+                        <option value="neutral">neutral (défaut)</option>
+                        <option value="LONG">LONG strict (1H confirmé)</option>
+                      </select>
+                    </div>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label style={{ fontSize: 12 }} title="Structure 1H minimum pour un SHORT. 'SHORT' = exige 1H baissier (recommandé — +2R vs -1R sur backtests). 'neutral' = pas de filtre 1H.">
+                        SHORT — structure 1H min
+                      </label>
+                      <select value={tf1hShortMinBias} onChange={e => setTf1hShortMinBias(e.target.value as 'neutral' | 'SHORT')} style={{ fontSize: 13 }}>
+                        <option value="SHORT">SHORT strict (+2R BT ETH 1an)</option>
+                        <option value="neutral">neutral (pas de filtre 1H)</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
               <Toggle checked={volAdaptive} onChange={setVolAdaptive} label="Volume adaptatif (session)" tip="Volume requis plus élevé en session active (London/NY) qu'en hors session." />
               {volAdaptive && (
                 <div className="grid-2" style={{ gap: 8 }}>

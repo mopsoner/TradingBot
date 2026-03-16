@@ -378,7 +378,15 @@ def _naive(dt: datetime) -> datetime:
     return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
 
 
-def _run_replay(session: ReplaySession, fib_levels: list[float], rr_ratio: float) -> None:
+def _run_replay(
+    session: ReplaySession,
+    fib_levels: list[float],
+    rr_ratio: float,
+    htf_long_min_bias: str = "neutral",
+    htf_short_min_bias: str = "SHORT",
+    tf1h_short_min_bias: str = "neutral",
+    tf1h_long_min_bias: str = "neutral",
+) -> None:
     _persist_running(session)
     try:
         engine_inst = SignalEngine(fib_levels)
@@ -462,8 +470,20 @@ def _run_replay(session: ReplaySession, fib_levels: list[float], rr_ratio: float
             if direction_15m is None:
                 continue
 
-            if htf_bias is not None and htf_bias != direction_15m:
-                continue
+            if direction_15m == "LONG":
+                if htf_bias == "SHORT":
+                    continue
+                if htf_long_min_bias == "LONG" and htf_bias != "LONG":
+                    continue
+                if tf1h_long_min_bias == "LONG" and tf_1h_struct != "LONG":
+                    continue
+            else:
+                if htf_bias == "LONG":
+                    continue
+                if htf_short_min_bias == "SHORT" and htf_bias != "SHORT":
+                    continue
+                if tf1h_short_min_bias == "SHORT" and tf_1h_struct != "SHORT":
+                    continue
 
             atr = _compute_atr(window_15m)
             if atr <= 0:
@@ -535,6 +555,10 @@ class ReplayManager:
         date_end: datetime,
         fib_levels: list[float] | None = None,
         rr_ratio: float = 2.0,
+        htf_long_min_bias: str = "neutral",
+        htf_short_min_bias: str = "SHORT",
+        tf1h_short_min_bias: str = "neutral",
+        tf1h_long_min_bias: str = "neutral",
     ) -> str | None:
         if fib_levels is None:
             fib_levels = [0.5, 0.618, 0.705]
@@ -559,7 +583,8 @@ class ReplayManager:
 
         thread = threading.Thread(
             target=_run_replay,
-            args=(session, fib_levels, rr_ratio),
+            args=(session, fib_levels, rr_ratio, htf_long_min_bias, htf_short_min_bias,
+                  tf1h_short_min_bias, tf1h_long_min_bias),
             daemon=True,
             name=f"replay-{session_id[:8]}",
         )

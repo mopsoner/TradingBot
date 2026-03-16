@@ -1583,12 +1583,18 @@ class ReplayStartRequest(BaseModel):
     symbol: str = Field(min_length=2, max_length=20)
     date_start: str
     date_end: str
+    profile_id: int | None = None
+    htf_long_min_bias: str | None = None
+    htf_short_min_bias: str | None = None
+    tf1h_short_min_bias: str | None = None
+    tf1h_long_min_bias: str | None = None
 
 
 @router.post("/backtest/replay/start")
 def replay_start(req: ReplayStartRequest) -> dict:
     from backend.app.services.replay_engine import replay_manager
     from datetime import datetime as _dt, timezone as _tz
+    import json as _json
 
     try:
         ds = _dt.fromisoformat(req.date_start.replace("Z", "+00:00"))
@@ -1603,10 +1609,42 @@ def replay_start(req: ReplayStartRequest) -> dict:
     if ds >= de:
         return {"ok": False, "reason": "date_start doit être avant date_end."}
 
+    fib_levels = [0.5, 0.618, 0.705]
+    rr_ratio = 2.0
+    htf_long_min_bias = req.htf_long_min_bias or "neutral"
+    htf_short_min_bias = req.htf_short_min_bias or "SHORT"
+    tf1h_short_min_bias = req.tf1h_short_min_bias or "neutral"
+    tf1h_long_min_bias = req.tf1h_long_min_bias or "neutral"
+
+    if req.profile_id:
+        with Session(engine) as s:
+            prof = s.get(StrategyProfile, req.profile_id)
+            if prof:
+                try:
+                    params = _json.loads(prof.parameters) if isinstance(prof.parameters, str) else prof.parameters
+                    fib_levels = params.get("fib_levels", fib_levels)
+                    rr_ratio = float(params.get("take_profit_rr", rr_ratio))
+                    if req.htf_long_min_bias is None:
+                        htf_long_min_bias = params.get("htf_long_min_bias", htf_long_min_bias)
+                    if req.htf_short_min_bias is None:
+                        htf_short_min_bias = params.get("htf_short_min_bias", htf_short_min_bias)
+                    if req.tf1h_short_min_bias is None:
+                        tf1h_short_min_bias = params.get("tf1h_short_min_bias", tf1h_short_min_bias)
+                    if req.tf1h_long_min_bias is None:
+                        tf1h_long_min_bias = params.get("tf1h_long_min_bias", tf1h_long_min_bias)
+                except Exception:
+                    pass
+
     session_id = replay_manager.start(
         symbol=req.symbol.strip().upper(),
         date_start=ds,
         date_end=de,
+        fib_levels=fib_levels,
+        rr_ratio=rr_ratio,
+        htf_long_min_bias=htf_long_min_bias,
+        htf_short_min_bias=htf_short_min_bias,
+        tf1h_short_min_bias=tf1h_short_min_bias,
+        tf1h_long_min_bias=tf1h_long_min_bias,
     )
     if session_id is None:
         return {"ok": False, "reason": "Trop de replays en cours. Réessayez dans quelques instants."}
