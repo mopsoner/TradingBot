@@ -1649,6 +1649,7 @@ def replay_start(req: ReplayStartRequest) -> dict:
                     vol_mult         = float(params.get("volume_multiplier_active", vol_mult))
                     sl_atr_mult      = float(params.get("stop_loss_atr_mult", sl_atr_mult))
                     allow_weekend    = bool(params.get("allow_weekend_trading", allow_weekend))
+                    wyckoff_lookback = int(params.get("wyckoff_lookback", wyckoff_lookback))
                     if req.htf_long_min_bias is None:
                         htf_long_min_bias = params.get("htf_long_min_bias", htf_long_min_bias)
                     if req.htf_short_min_bias is None:
