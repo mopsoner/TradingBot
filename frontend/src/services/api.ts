@@ -39,6 +39,32 @@ export type Signal = {
   tf_1h_validation?: string | null;
   session_name?: string | null;
   displacement_force?: number | null;
+  pipeline_run_id?: string | null;
+  zone_low?: number | null;
+  zone_high?: number | null;
+  bt_outcome?: 'win' | 'loss' | 'timeout' | null;
+  bt_r_multiple?: number | null;
+  entry_price?: number | null;
+  sl_price?: number | null;
+  tp_price?: number | null;
+  mode?: 'paper' | 'live' | 'research' | 'backtest' | null;
+};
+
+export type PipelineRunRecord = {
+  id: number;
+  run_id: string;
+  started_at: string;
+  completed_at: string | null;
+  mode: string;
+  source: string;
+  symbols_json: string;
+  timeframe: string;
+  profile_id: number | null;
+  accepted_count: number;
+  rejected_count: number;
+  error_count: number;
+  total_count: number;
+  results_json: string;
 };
 
 export type Trade = {
@@ -55,6 +81,18 @@ export type BacktestResult = {
   id: number; timestamp: string; symbol: string; timeframe: string;
   strategy_version: string; win_rate: number; profit_factor: number;
   expectancy: number; drawdown: number; r_multiple: number;
+  pipeline_run_id?: string | null;
+  symbols?: string[];
+  data_warning?: string | null;
+  signal_count?: number | null;
+  step_count?: number | null;
+  date_from?: string | null;
+  date_to?: string | null;
+  profile_id?: number | null;
+  overrides_json?: string | null;
+  status?: string | null;
+  config?: string | null;
+  trades_json?: string | null;
 };
 
 export type SimulatedTrade = {
@@ -76,11 +114,25 @@ export type Dashboard = {
   recent_trades: Trade[]; mode: string;
 };
 
+export type ProcessStatus = {
+  id: string;
+  type: 'scanner' | 'pipeline' | 'backtest' | 'live' | 'import';
+  label: string;
+  status: 'running' | 'stopped' | 'idle' | 'done' | 'error';
+  detail: string;
+  pct_done?: number;
+  seconds_to_next: number | null;
+  run_count: number;
+};
+
 export const api = {
+  systemProcesses: ()                         => get<{ processes: ProcessStatus[]; total_running: number; mode: string; timestamp: string }>('/api/system/processes'),
   dashboard:  ()                              => get<Dashboard>('/api/dashboard'),
   signals:    (params = '')                   => get<{ total: number; rows: Signal[] }>(`/api/signals${params}`),
-  signalsForBacktest: (symbol: string, timeframe: string) =>
-    get<{ total: number; rows: Signal[] }>(`/api/signals?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=500`),
+  signalsForBacktest: (pipeline_run_id: string | null | undefined, symbol: string) =>
+    pipeline_run_id
+      ? get<{ total: number; rows: Signal[] }>(`/api/signals?pipeline_run_id=${encodeURIComponent(pipeline_run_id)}&accepted=true&limit=1000`)
+      : get<{ total: number; rows: Signal[] }>(`/api/signals?symbol=${encodeURIComponent(symbol)}&accepted=true&limit=200`),
   trades:     (params = '')                   => get<{ total: number; rows: Trade[] }>(`/api/trades${params}`),
   positions:  ()                              => get<Position[]>('/api/positions'),
   backtests:  (params = '')                   => get<{ total: number; rows: BacktestResult[] }>(`/api/backtests${params}`),
@@ -90,7 +142,7 @@ export const api = {
   isolatedSymbols: ()                         => get<string[]>('/api/symbols/isolated'),
   symbolsByQuote:  ()                          => get<Record<string, string[]>>('/api/symbols/by-quote'),
   symbolPrices:    ()                          => get<Record<string, number>>('/api/symbols/prices'),
-  loadedSymbols:   ()                          => get<{ symbol: string; timeframes: Record<string, number>; total: number }[]>('/api/symbols/loaded'),
+  loadedSymbols:   ()                          => get<{ symbol: string; quote: string; timeframes: Record<string, number>; total: number; min_ts: string | null; max_ts: string | null }[]>('/api/symbols/loaded'),
   config:     ()                              => get<Record<string, unknown>>('/api/config'),
   updateConfig:(body: Record<string, unknown>)=> put<Record<string, unknown>>('/api/config', body),
   marginEndpoints: ()                         => get<Record<string, unknown>>('/api/execution/endpoints'),
@@ -114,12 +166,15 @@ export const api = {
   ingestData:    (body: Record<string, unknown>[]) => post<Record<string, unknown>>('/api/data/ingest', body),
   fetchCandles:  (body: { symbols: string[]; timeframe: string; days: number; source?: string }) =>
     post<Record<string, unknown>>('/api/data/fetch', body),
+  fetchBulk: (body: { symbols: string[]; timeframes?: string[]; days: number; source?: string }) =>
+    post<Record<string, unknown>>('/api/data/fetch/bulk', body),
   importCsv:     (body: { symbol: string; timeframe: string; csv_text: string }) =>
     post<Record<string, unknown>>('/api/data/import/csv', body),
   deleteCandles: (body: { symbol: string; timeframe?: string }) =>
     del<Record<string, unknown>>('/api/data/candles', body),
   services:   () => get<{ services: ServiceStatus[]; refreshed_at: string; mode: string }>('/api/services'),
   optimizeBacktest: (id: number) => post<Record<string, unknown>>(`/api/backtest/${id}/optimize`, {}),
+  optimizeBacktestOverrides: (id: number) => post<Record<string, unknown>>(`/api/backtest/${id}/optimize-overrides`, {}),
   multiOptimize: (backtest_ids: number[]) => post<Record<string, unknown>>('/api/backtest/multi-optimize', { backtest_ids }),
   startAiWorkshop: (body: { symbols: string[]; timeframe: string; horizon_days: number; profile_id?: number | null }) =>
     post<Record<string, unknown>>('/api/strategy/ai-workshop/start', body),
@@ -127,8 +182,10 @@ export const api = {
   createOptimizedProfile: (profileId: number, body: { source_profile_id: number; suggested_params: Record<string, unknown>; new_name?: string }) =>
     post<Record<string, unknown>>(`/api/strategy/profiles/${profileId}/create-optimized`, body),
   getPipeline: () => get<PipelineState>('/api/pipeline'),
-  runPipeline: (body: { symbols: string[]; timeframe: string; profile_id?: number | null }) =>
+  runPipeline: (body: { symbols: string[]; timeframe?: string; profile_id?: number | null; mode?: string }) =>
     post<Record<string, unknown>>('/api/pipeline/run', body),
+  pipelineRuns: (params = '') => get<{ total: number; rows: PipelineRunRecord[] }>(`/api/pipeline/runs${params}`),
+  pipelineRun: (runId: string) => get<{ run: PipelineRunRecord; signals: Signal[] }>(`/api/pipeline/runs/${runId}`),
   journal: (params = '') => get<JournalResponse>(`/api/journal${params}`),
   autonomousStart: (body: { symbols: string[]; timeframe: string; profile_id?: number | null; interval_minutes: number }) =>
     post<Record<string, unknown>>('/api/autonomous/start', body),
@@ -136,6 +193,48 @@ export const api = {
   autonomousStatus: () => get<Record<string, unknown>>('/api/autonomous/status'),
   runWalkforward: (body: { symbol: string; years: number; timeframe: string; profile_id?: number | null }) =>
     post<Record<string, unknown>>('/api/backtest/walkforward', body),
+  replayStart: (body: { symbol: string; date_start: string; date_end: string }) =>
+    post<{ ok: boolean; session_id?: string; reason?: string }>('/api/backtest/replay/start', body),
+  replayStatus: (sessionId: string) =>
+    get<ReplayStatusResponse>(`/api/backtest/replay/status/${sessionId}`),
+};
+
+export type ReplayTrade = {
+  timestamp: string;
+  direction: string;
+  entry_price: number;
+  sl_price: number;
+  tp_price: number;
+  result: string;
+  r_multiple: number;
+  htf_bias?: string;
+  tf_1h_structure?: string;
+};
+
+export type ReplayMetrics = {
+  total_trades: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  profit_factor: number;
+  max_drawdown: number;
+  expectancy: number;
+  total_r: number;
+};
+
+export type ReplayStatusResponse = {
+  ok: boolean;
+  session_id?: string;
+  status?: 'RUNNING' | 'COMPLETED' | 'FAILED';
+  symbol?: string;
+  timeframe?: string;
+  candles_processed?: number;
+  total_candles?: number;
+  error?: string;
+  reason?: string;
+  metrics?: ReplayMetrics;
+  trades?: ReplayTrade[];
+  backtest_result_id?: number;
 };
 
 export type MarginAsset = {
