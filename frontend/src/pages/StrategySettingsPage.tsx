@@ -676,33 +676,8 @@ export function StrategySettingsPage({ onNavigate }: Props) {
               checked={useWeeklyFilter}
               onChange={setUseWeeklyFilter}
               label="Activer le filtre tendance Weekly"
-              tip="Valide sur ETHUSDT 2022→2026 : +67% P&L (€97k→€163k), MaxDD ÷2 (€118k→€54k), WR +4.3pts (24.6%→28.9%)"
+              tip="Valide sur ETHUSDT 2022→2026 : +67% P&L, MaxDD ÷2, WR +4.3pts"
             />
-            {useWeeklyFilter && (
-              <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 8, background: 'rgba(63,185,80,0.06)', border: '1px solid rgba(63,185,80,0.2)', fontSize: 11 }}>
-                <div style={{ fontWeight: 700, marginBottom: 6, color: 'var(--accent-green)' }}>Règles appliquées :</div>
-                <div style={{ marginBottom: 4, display: 'flex', gap: 6 }}>
-                  <span style={{ color: 'var(--accent-green)', fontWeight: 700, flexShrink: 0 }}>F1a LONG</span>
-                  <span style={{ color: 'var(--text-muted)' }}>autorisé si <code style={{ background: 'var(--surface2)', padding: '1px 4px', borderRadius: 3 }}>close_weekly &gt; SMA(10 semaines)</code> ET <code style={{ background: 'var(--surface2)', padding: '1px 4px', borderRadius: 3 }}>close_weekly &gt; close_4_semaines_avant</code></span>
-                </div>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <span style={{ color: 'var(--accent-red)', fontWeight: 700, flexShrink: 0 }}>F1b SHORT</span>
-                  <span style={{ color: 'var(--text-muted)' }}>autorisé si <code style={{ background: 'var(--surface2)', padding: '1px 4px', borderRadius: 3 }}>close_weekly &lt; SMA(10 semaines)</code> ET <code style={{ background: 'var(--surface2)', padding: '1px 4px', borderRadius: 3 }}>close_weekly &lt; close_4_semaines_avant</code></span>
-                </div>
-                <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(63,185,80,0.15)', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
-                  {[
-                    { label: 'Trades filtrés', val: '−49%' },
-                    { label: '+P&L', val: '+67%' },
-                    { label: 'MaxDD', val: '÷2' },
-                  ].map(({ label, val }) => (
-                    <div key={label} style={{ textAlign: 'center', padding: '4px 0', background: 'var(--surface2)', borderRadius: 6 }}>
-                      <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--accent-green)' }}>{val}</div>
-                      <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{label}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Rules configurable */}
