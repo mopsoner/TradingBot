@@ -1616,6 +1616,7 @@ def replay_start(req: ReplayStartRequest) -> dict:
     tf1h_short_min_bias = req.tf1h_short_min_bias or "neutral"
     tf1h_long_min_bias = req.tf1h_long_min_bias or "neutral"
     resolved_profile_name = "SMC/Wyckoff Multi-TF"
+    disp_atr_mult = 0.8
 
     if req.profile_id:
         with Session(engine) as s:
@@ -1626,6 +1627,7 @@ def replay_start(req: ReplayStartRequest) -> dict:
                     params = _json.loads(prof.parameters) if isinstance(prof.parameters, str) else prof.parameters
                     fib_levels = params.get("fib_levels", fib_levels)
                     rr_ratio = float(params.get("take_profit_rr", rr_ratio))
+                    disp_atr_mult = float(params.get("displacement_atr_min", disp_atr_mult))
                     if req.htf_long_min_bias is None:
                         htf_long_min_bias = params.get("htf_long_min_bias", htf_long_min_bias)
                     if req.htf_short_min_bias is None:
@@ -1648,6 +1650,7 @@ def replay_start(req: ReplayStartRequest) -> dict:
         tf1h_short_min_bias=tf1h_short_min_bias,
         tf1h_long_min_bias=tf1h_long_min_bias,
         profile_name=resolved_profile_name,
+        disp_atr_mult=disp_atr_mult,
     )
     if session_id is None:
         return {"ok": False, "reason": "Trop de replays en cours. Réessayez dans quelques instants."}

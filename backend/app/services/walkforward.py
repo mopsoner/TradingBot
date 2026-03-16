@@ -218,7 +218,7 @@ def _detect_equal_levels(levels: list[float], tolerance: float) -> list[float]:
     return eq_zones
 
 
-def analyze_window(candles: list[CandleData], engine: SignalEngine) -> tuple[str | None, dict]:
+def analyze_window(candles: list[CandleData], engine: SignalEngine, disp_atr_mult: float = 0.8) -> tuple[str | None, dict]:
     if len(candles) < 20:
         return None, {}
 
@@ -267,7 +267,7 @@ def analyze_window(candles: list[CandleData], engine: SignalEngine) -> tuple[str
             avg_resistance = sum(resistance_tight) / len(resistance_tight)
             is_utad = any(c.high > avg_resistance + atr * 0.2 and c.close < avg_resistance for c in last_3)
 
-    has_displacement = any(abs(c.close - c.open) > atr * 0.8 for c in last_3)
+    has_displacement = any(abs(c.close - c.open) > atr * disp_atr_mult for c in last_3)
 
     prev_swing_high = max(swing_highs[-3:]) if len(swing_highs) >= 1 else resistance
     prev_swing_low = min(swing_lows[-3:]) if len(swing_lows) >= 1 else support

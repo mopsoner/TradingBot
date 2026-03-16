@@ -76,6 +76,7 @@ class ReplaySession:
     total_candles: int = 0
     backtest_result_id: int | None = None
     profile_name: str = "SMC/Wyckoff Multi-TF"
+    disp_atr_mult: float = 0.8
 
     equity: float = field(default=10.0, repr=False)
     peak: float = field(default=10.0, repr=False)
@@ -387,6 +388,7 @@ def _run_replay(
     htf_short_min_bias: str = "SHORT",
     tf1h_short_min_bias: str = "neutral",
     tf1h_long_min_bias: str = "neutral",
+    disp_atr_mult: float = 0.8,
 ) -> None:
     _persist_running(session)
     try:
@@ -466,7 +468,7 @@ def _run_replay(
                 window_1h = candles_1h[max(0, idx_1h - WINDOW_1H): idx_1h]
                 tf_1h_struct = _get_1h_structure(window_1h)
 
-            direction_15m, _ = analyze_window(window_15m, engine_inst)
+            direction_15m, _ = analyze_window(window_15m, engine_inst, disp_atr_mult=disp_atr_mult)
 
             if direction_15m is None:
                 continue
@@ -561,6 +563,7 @@ class ReplayManager:
         tf1h_short_min_bias: str = "neutral",
         tf1h_long_min_bias: str = "neutral",
         profile_name: str = "SMC/Wyckoff Multi-TF",
+        disp_atr_mult: float = 0.8,
     ) -> str | None:
         if fib_levels is None:
             fib_levels = [0.5, 0.618, 0.705]
@@ -579,6 +582,7 @@ class ReplayManager:
             date_start=date_start,
             date_end=date_end,
             profile_name=profile_name,
+            disp_atr_mult=disp_atr_mult,
         )
 
         with self._lock:
@@ -587,7 +591,7 @@ class ReplayManager:
         thread = threading.Thread(
             target=_run_replay,
             args=(session, fib_levels, rr_ratio, htf_long_min_bias, htf_short_min_bias,
-                  tf1h_short_min_bias, tf1h_long_min_bias),
+                  tf1h_short_min_bias, tf1h_long_min_bias, disp_atr_mult),
             daemon=True,
             name=f"replay-{session_id[:8]}",
         )
