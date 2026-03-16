@@ -576,7 +576,6 @@ export function StrategySettingsPage({ onNavigate }: Props) {
               const has5m           = Boolean(params.use_5m_refinement);
               const hasHtf          = Boolean(params.htf_alignment_required ?? true);
               const hasWeeklyFilter = Boolean(params.use_weekly_trend_filter);
-              const desc            = String(p.description ?? '');
 
               return (
                 <div key={pid} style={{ borderBottom: '1px solid var(--border)', paddingBottom: 14, marginBottom: 14 }}>
@@ -635,38 +634,6 @@ export function StrategySettingsPage({ onNavigate }: Props) {
                   )}
                   {bt && bt !== 'running' && (
                     <div style={{ fontSize: 12, marginTop: 4, color: 'var(--accent-green)' }}>{bt}</div>
-                  )}
-
-                  {/* Weekly filter validation block */}
-                  {hasWeeklyFilter && desc && (
-                    <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 8, background: 'rgba(63,185,80,0.05)', border: '1px solid rgba(63,185,80,0.2)', fontSize: 11 }}>
-                      <div style={{ fontWeight: 700, marginBottom: 6, color: 'var(--accent-green)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span>Filtre Weekly — règles appliquées</span>
-                        <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 8, background: 'rgba(63,185,80,0.2)', color: 'var(--accent-green)' }}>Validé BT 4 ans</span>
-                      </div>
-                      <div style={{ marginBottom: 4, display: 'flex', gap: 6, alignItems: 'baseline' }}>
-                        <span style={{ color: 'var(--accent-green)', fontWeight: 700, minWidth: 60 }}>F1a LONG</span>
-                        <span style={{ color: 'var(--text-muted)' }}>autorisé si close_weekly &gt; SMA(10wk) ET close_weekly &gt; close_4wk_avant</span>
-                      </div>
-                      <div style={{ marginBottom: 8, display: 'flex', gap: 6, alignItems: 'baseline' }}>
-                        <span style={{ color: 'var(--accent-red)', fontWeight: 700, minWidth: 60 }}>F1b SHORT</span>
-                        <span style={{ color: 'var(--text-muted)' }}>autorisé si close_weekly &lt; SMA(10wk) ET close_weekly &lt; close_4wk_avant</span>
-                      </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6, paddingTop: 8, borderTop: '1px solid rgba(63,185,80,0.15)' }}>
-                        {[
-                          { label: 'P&L', sans: '€97k', avec: '€163k', up: true },
-                          { label: 'Win Rate', sans: '24.6%', avec: '28.9%', up: true },
-                          { label: 'MaxDD', sans: '€118k', avec: '€54k', up: false },
-                          { label: 'Trades filtrés', sans: '455', avec: '232', up: false },
-                        ].map(({ label, sans, avec, up }) => (
-                          <div key={label} style={{ textAlign: 'center', background: 'var(--surface2)', borderRadius: 6, padding: '4px 2px' }}>
-                            <div style={{ fontSize: 9, color: 'var(--text-muted)', marginBottom: 2 }}>{label}</div>
-                            <div style={{ fontSize: 9, color: 'var(--text-muted)', textDecoration: 'line-through' }}>{sans}</div>
-                            <div style={{ fontSize: 11, fontWeight: 700, color: up ? 'var(--accent-green)' : 'var(--accent-red)' }}>{avec}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
                   )}
 
                   {/* AI analysis results */}
