@@ -31,6 +31,27 @@ WINDOW_1H = 50    # 50 × 1H for intermediate structure
 WINDOW_15M = 50   # 50 × 15m for entry
 
 
+def _compute_rsi(closes: list[float], period: int = 14) -> list[float]:
+    """Wilder's RSI. Returns list of same length as closes (NaN for first period values)."""
+    result = [float("nan")] * len(closes)
+    if len(closes) < period + 1:
+        return result
+    gains, losses = [], []
+    for i in range(1, len(closes)):
+        diff = closes[i] - closes[i - 1]
+        gains.append(max(diff, 0.0))
+        losses.append(max(-diff, 0.0))
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    for i in range(period, len(closes)):
+        if i > period:
+            avg_gain = (avg_gain * (period - 1) + gains[i - 1]) / period
+            avg_loss = (avg_loss * (period - 1) + losses[i - 1]) / period
+        rs = avg_gain / avg_loss if avg_loss > 1e-10 else float("inf")
+        result[i] = 100.0 - 100.0 / (1.0 + rs)
+    return result
+
+
 class ReplayStatus(str, Enum):
     RUNNING = "RUNNING"
     COMPLETED = "COMPLETED"
@@ -48,6 +69,8 @@ class ReplayTrade:
     r_multiple: float
     htf_bias: str = ""
     tf_1h_structure: str = ""
+    rsi4h_value: float = float("nan")
+    rsi4h_direction: str = ""
 
 
 @dataclass
@@ -83,6 +106,7 @@ class ReplaySession:
         "step2_wyckoff":  0,
         "htf_filter":     0,
         "weekly_trend":   0,
+        "rsi4h_filter":   0,
         "step3_disp":     0,
         "step4_bos":      0,
         "step5_vol_exp":  0,
@@ -150,6 +174,7 @@ class ReplaySession:
         self, candle: CandleData, direction: str, atr: float,
         htf_bias: str, tf_1h: str, rr_ratio: float = 2.0,
         sl_atr_mult: float = 1.5, size_mult: float = 1.0,
+        rsi4h_value: float = float("nan"), rsi4h_direction: str = "",
     ) -> None:
         entry = candle.close
         if direction == "LONG":
@@ -180,6 +205,8 @@ class ReplaySession:
             r_multiple=0.0,
             htf_bias=htf_bias,
             tf_1h_structure=tf_1h,
+            rsi4h_value=rsi4h_value,
+            rsi4h_direction=rsi4h_direction,
         ))
 
     def compute_final_metrics(self) -> None:
@@ -472,6 +499,11 @@ def _run_replay(
     require_equal_highs_lows: bool = True,
     fib_entry_split: bool = False,
     max_concurrent_trades: int = 1,
+    # --- RSI 4H direction selector ---
+    use_rsi4h_direction: bool = False,
+    rsi4h_period: int = 14,
+    rsi4h_bull_min: float = 55.0,
+    rsi4h_bear_max: float = 45.0,
 ) -> None:
     _persist_running(session)
     try:
@@ -504,6 +536,17 @@ def _run_replay(
 
         ts_4h = _build_ts_index(candles_4h)
         ts_1h = _build_ts_index(candles_1h)
+
+        # ── RSI 4H — pré-calcul sur toutes les bougies 4H chargées ──────────
+        rsi4h_values: list[float] = []
+        if use_rsi4h_direction and candles_4h:
+            closes_4h = [c.close for c in candles_4h]
+            rsi4h_values = _compute_rsi(closes_4h, period=rsi4h_period)
+            logger.info(
+                "Replay %s — RSI 4H pré-calculé: %d valeurs (période=%d, bull>%.0f / bear<%.0f)",
+                session.session_id[:8], len(rsi4h_values), rsi4h_period,
+                rsi4h_bull_min, rsi4h_bear_max,
+            )
 
         # Bougies weekly (resamplées depuis 1H, incluent le buffer 90j)
         candles_weekly: list[CandleData] = []
@@ -626,6 +669,27 @@ def _run_replay(
                     rej["weekly_trend"] += 1
                     continue
 
+            # ── RSI 4H Direction Selector (sélecteur de profil transparent) ──
+            # Calculé sur les bougies 4H déjà chargées — n'affecte PAS les 7 étapes.
+            # RSI > rsi4h_bull_min → LONG autorisé
+            # RSI < rsi4h_bear_max → SHORT autorisé
+            # Neutre (entre les deux seuils) → skip
+            rsi4h_val = float("nan")
+            rsi4h_dir = ""
+            if use_rsi4h_direction and rsi4h_values and idx_4h >= 0:
+                rsi4h_val = rsi4h_values[idx_4h] if idx_4h < len(rsi4h_values) else float("nan")
+                import math
+                if not math.isnan(rsi4h_val):
+                    if rsi4h_val >= rsi4h_bull_min:
+                        rsi4h_dir = "LONG"
+                    elif rsi4h_val <= rsi4h_bear_max:
+                        rsi4h_dir = "SHORT"
+                    else:
+                        rsi4h_dir = "NEUTRAL"
+                    if rsi4h_dir == "NEUTRAL" or rsi4h_dir != direction_15m:
+                        rej["rsi4h_filter"] += 1
+                        continue
+
             # Step 3 — Displacement
             disp_ok, _disp_val, _atr_r, _vol_r = ta.detect_displacement(
                 window_15m, direction_15m,
@@ -678,6 +742,8 @@ def _run_replay(
                     rr_ratio=rr_ratio * 0.5,
                     sl_atr_mult=sl_atr_mult,
                     size_mult=0.5,
+                    rsi4h_value=rsi4h_val,
+                    rsi4h_direction=rsi4h_dir,
                 )
                 session._open_position(
                     current_candle, direction_15m, atr_val,
@@ -686,6 +752,8 @@ def _run_replay(
                     rr_ratio=rr_ratio,
                     sl_atr_mult=sl_atr_mult,
                     size_mult=0.5,
+                    rsi4h_value=rsi4h_val,
+                    rsi4h_direction=rsi4h_dir,
                 )
             else:
                 session._open_position(
@@ -694,6 +762,8 @@ def _run_replay(
                     tf_1h=tf_1h_struct or "neutral",
                     rr_ratio=rr_ratio,
                     sl_atr_mult=sl_atr_mult,
+                    rsi4h_value=rsi4h_val,
+                    rsi4h_direction=rsi4h_dir,
                 )
             cooldown_bars = 4
 
@@ -717,6 +787,7 @@ def _run_replay(
 
 def _persist_result(session: ReplaySession) -> None:
     import json
+    import math as _math
     trades_json = json.dumps([
         {
             "timestamp": t.timestamp,
@@ -728,6 +799,8 @@ def _persist_result(session: ReplaySession) -> None:
             "r_multiple": t.r_multiple,
             "htf_bias": t.htf_bias,
             "tf_1h_structure": t.tf_1h_structure,
+            "rsi4h_value": round(t.rsi4h_value, 2) if not _math.isnan(t.rsi4h_value) else None,
+            "rsi4h_direction": t.rsi4h_direction,
         }
         for t in session.trades
     ])
@@ -781,6 +854,11 @@ class ReplayManager:
         require_equal_highs_lows: bool = True,
         fib_entry_split: bool = False,
         max_concurrent_trades: int = 1,
+        # --- RSI 4H direction selector ---
+        use_rsi4h_direction: bool = False,
+        rsi4h_period: int = 14,
+        rsi4h_bull_min: float = 55.0,
+        rsi4h_bear_max: float = 45.0,
     ) -> str | None:
         if fib_levels is None:
             fib_levels = [0.5, 0.618, 0.705]
@@ -829,6 +907,10 @@ class ReplayManager:
                 require_equal_highs_lows=require_equal_highs_lows,
                 fib_entry_split=fib_entry_split,
                 max_concurrent_trades=max_concurrent_trades,
+                use_rsi4h_direction=use_rsi4h_direction,
+                rsi4h_period=rsi4h_period,
+                rsi4h_bull_min=rsi4h_bull_min,
+                rsi4h_bear_max=rsi4h_bear_max,
             ),
             daemon=True,
             name=f"replay-{session_id[:8]}",
@@ -870,6 +952,7 @@ class ReplayManager:
                     "expectancy": session.metrics.expectancy,
                     "total_r": session.metrics.total_r,
                 }
+                import math as _math_s
                 result["trades"] = [
                     {
                         "timestamp": t.timestamp,
@@ -881,6 +964,8 @@ class ReplayManager:
                         "r_multiple": t.r_multiple,
                         "htf_bias": t.htf_bias,
                         "tf_1h_structure": t.tf_1h_structure,
+                        "rsi4h_value": round(t.rsi4h_value, 2) if not _math_s.isnan(t.rsi4h_value) else None,
+                        "rsi4h_direction": t.rsi4h_direction,
                     }
                     for t in session.trades
                 ]

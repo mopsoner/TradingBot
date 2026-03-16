@@ -1641,6 +1641,10 @@ def replay_start(req: ReplayStartRequest) -> dict:
     require_equal_highs_lows = True
     fib_entry_split          = False
     max_concurrent_trades    = 1
+    use_rsi4h_direction      = False
+    rsi4h_period             = 14
+    rsi4h_bull_min           = 55.0
+    rsi4h_bear_max           = 45.0
 
     if req.profile_id:
         with Session(engine) as s:
@@ -1666,6 +1670,10 @@ def replay_start(req: ReplayStartRequest) -> dict:
                     require_equal_highs_lows   = bool(params.get("require_equal_highs_lows", True))
                     fib_entry_split            = bool(params.get("fib_entry_split", False))
                     max_concurrent_trades      = int(params.get("max_concurrent_trades", 1))
+                    use_rsi4h_direction        = bool(params.get("use_rsi4h_direction", False))
+                    rsi4h_period               = int(params.get("rsi4h_period", 14))
+                    rsi4h_bull_min             = float(params.get("rsi4h_bull_min", 55.0))
+                    rsi4h_bear_max             = float(params.get("rsi4h_bear_max", 45.0))
                     if req.htf_long_min_bias is None:
                         htf_long_min_bias = params.get("htf_long_min_bias", htf_long_min_bias)
                     if req.htf_short_min_bias is None:
@@ -1703,6 +1711,10 @@ def replay_start(req: ReplayStartRequest) -> dict:
         require_equal_highs_lows=require_equal_highs_lows,
         fib_entry_split=fib_entry_split,
         max_concurrent_trades=max_concurrent_trades,
+        use_rsi4h_direction=use_rsi4h_direction,
+        rsi4h_period=rsi4h_period,
+        rsi4h_bull_min=rsi4h_bull_min,
+        rsi4h_bear_max=rsi4h_bear_max,
     )
     if session_id is None:
         return {"ok": False, "reason": "Trop de replays en cours. Réessayez dans quelques instants."}
