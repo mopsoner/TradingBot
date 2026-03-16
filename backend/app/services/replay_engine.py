@@ -15,11 +15,11 @@ from backend.app.db.models import MarketCandle, BacktestResult
 from backend.app.services.signal_engine import SetupInput, SignalEngine
 from backend.app.services.walkforward import (
     CandleData,
-    analyze_window,
     _compute_atr,
     _find_swing_points,
     _detect_equal_levels,
 )
+import backend.app.services.ta_engine as ta
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,6 @@ class ReplaySession:
     total_candles: int = 0
     backtest_result_id: int | None = None
     profile_name: str = "SMC/Wyckoff Multi-TF"
-    disp_atr_mult: float = 0.8
 
     equity: float = field(default=10.0, repr=False)
     peak: float = field(default=10.0, repr=False)
@@ -134,15 +133,16 @@ class ReplaySession:
 
     def _open_position(
         self, candle: CandleData, direction: str, atr: float,
-        htf_bias: str, tf_1h: str, rr_ratio: float = 2.0
+        htf_bias: str, tf_1h: str, rr_ratio: float = 2.0,
+        sl_atr_mult: float = 1.5,
     ) -> None:
         entry = candle.close
         if direction == "LONG":
-            sl = entry - atr * 1.5
-            tp = entry + atr * 1.5 * rr_ratio
+            sl = entry - atr * sl_atr_mult
+            tp = entry + atr * sl_atr_mult * rr_ratio
         else:
-            sl = entry + atr * 1.5
-            tp = entry - atr * 1.5 * rr_ratio
+            sl = entry + atr * sl_atr_mult
+            tp = entry - atr * sl_atr_mult * rr_ratio
 
         pos = {
             "direction": direction,
@@ -380,6 +380,13 @@ def _naive(dt: datetime) -> datetime:
     return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
 
 
+_HTF_BIAS_TO_STRUCT = {
+    "LONG": "Bullish",
+    "SHORT": "Bearish",
+    None: "Neutre / Range",
+}
+
+
 def _run_replay(
     session: ReplaySession,
     fib_levels: list[float],
@@ -388,12 +395,21 @@ def _run_replay(
     htf_short_min_bias: str = "SHORT",
     tf1h_short_min_bias: str = "neutral",
     tf1h_long_min_bias: str = "neutral",
-    disp_atr_mult: float = 0.8,
+    # --- Profile params now fully propagated ---
+    enable_spring: bool = True,
+    enable_utad: bool = True,
+    disp_threshold: float = 0.40,
+    disp_atr_min: float = 0.75,
+    disp_vol_min: float = 0.8,
+    bos_sensitivity: int = 6,
+    bos_close_conf: bool = True,
+    wyckoff_lookback: int = 12,
+    vol_mult: float = 1.3,
+    sl_atr_mult: float = 1.5,
+    allow_weekend: bool = True,
 ) -> None:
     _persist_running(session)
     try:
-        engine_inst = SignalEngine(fib_levels)
-
         date_start_naive = _naive(session.date_start)
         date_end_naive = _naive(session.date_end)
         buffer_start = date_start_naive - timedelta(days=90)
@@ -446,6 +462,10 @@ def _run_replay(
             if len(session.open_positions) >= 1:
                 continue
 
+            # Skip weekend candles if profile disables weekend trading
+            if not allow_weekend and current_candle.timestamp.weekday() >= 5:
+                continue
+
             pos_in_full = candles_15m.index(current_candle) if current_candle in candles_15m else -1
             if pos_in_full < WINDOW_15M:
                 continue
@@ -468,11 +488,30 @@ def _run_replay(
                 window_1h = candles_1h[max(0, idx_1h - WINDOW_1H): idx_1h]
                 tf_1h_struct = _get_1h_structure(window_1h)
 
-            direction_15m, _ = analyze_window(window_15m, engine_inst, disp_atr_mult=disp_atr_mult)
+            # ── Pipeline complet via ta_engine (identique au scanner live) ──
 
+            # Step 0 — Liquidity Zone
+            _zone_type, zone_price, is_high_zone = ta.detect_liquidity_zone(window_15m)
+            if zone_price <= 0:
+                continue
+
+            # Step 1 — Sweep
+            sweep_ok, _sweep_price = ta.detect_sweep(window_15m, zone_price, is_high_zone)
+            if not sweep_ok:
+                continue
+
+            # Step 2 — Wyckoff (Spring / UTAD)
+            htf_str = _HTF_BIAS_TO_STRUCT.get(htf_bias, "Neutre / Range")
+            _spring, _utad, direction_15m, _wyckoff_event = ta.detect_wyckoff(
+                window_15m, htf_str,
+                enable_spring=enable_spring,
+                enable_utad=enable_utad,
+                lookback=wyckoff_lookback,
+            )
             if direction_15m is None:
                 continue
 
+            # HTF / 1H alignment filter (unchanged logic)
             if direction_15m == "LONG":
                 if htf_bias == "SHORT":
                     continue
@@ -488,15 +527,47 @@ def _run_replay(
                 if tf1h_short_min_bias == "SHORT" and tf_1h_struct != "SHORT":
                     continue
 
-            atr = _compute_atr(window_15m)
-            if atr <= 0:
+            # Step 3 — Displacement
+            disp_ok, _disp_val, _atr_r, _vol_r = ta.detect_displacement(
+                window_15m, direction_15m,
+                disp_threshold=disp_threshold,
+                atr_min=disp_atr_min,
+                vol_min=disp_vol_min,
+            )
+            if not disp_ok:
+                continue
+
+            # Step 4 — BOS
+            bos_ok, _bos_level = ta.detect_bos(
+                window_15m, direction_15m,
+                bos_sens=bos_sensitivity,
+                close_confirmation=bos_close_conf,
+            )
+            if not bos_ok:
+                continue
+
+            # Step 5 — Volume + Expansion
+            vol_ok, _vol_ratio = ta.detect_volume(window_15m, vol_mult=vol_mult)
+            exp_ok, _next_liq = ta.detect_expansion(window_15m, direction_15m)
+            if not vol_ok and not exp_ok:
+                continue
+
+            # Step 6 — Fibonacci
+            _fib_level, fib_ok = ta.detect_fibonacci(window_15m, direction_15m, fib_levels)
+            if not fib_ok:
+                continue
+
+            # ── All steps passed → open position ──
+            atr_val = _compute_atr(window_15m)
+            if atr_val <= 0:
                 continue
 
             session._open_position(
-                current_candle, direction_15m, atr,
+                current_candle, direction_15m, atr_val,
                 htf_bias=htf_bias or "neutral",
                 tf_1h=tf_1h_struct or "neutral",
                 rr_ratio=rr_ratio,
+                sl_atr_mult=sl_atr_mult,
             )
             cooldown_bars = 4
 
@@ -563,7 +634,18 @@ class ReplayManager:
         tf1h_short_min_bias: str = "neutral",
         tf1h_long_min_bias: str = "neutral",
         profile_name: str = "SMC/Wyckoff Multi-TF",
-        disp_atr_mult: float = 0.8,
+        # --- All profile params ---
+        enable_spring: bool = True,
+        enable_utad: bool = True,
+        disp_threshold: float = 0.40,
+        disp_atr_min: float = 0.75,
+        disp_vol_min: float = 0.8,
+        bos_sensitivity: int = 6,
+        bos_close_conf: bool = True,
+        wyckoff_lookback: int = 12,
+        vol_mult: float = 1.3,
+        sl_atr_mult: float = 1.5,
+        allow_weekend: bool = True,
     ) -> str | None:
         if fib_levels is None:
             fib_levels = [0.5, 0.618, 0.705]
@@ -582,7 +664,6 @@ class ReplayManager:
             date_start=date_start,
             date_end=date_end,
             profile_name=profile_name,
-            disp_atr_mult=disp_atr_mult,
         )
 
         with self._lock:
@@ -590,8 +671,26 @@ class ReplayManager:
 
         thread = threading.Thread(
             target=_run_replay,
-            args=(session, fib_levels, rr_ratio, htf_long_min_bias, htf_short_min_bias,
-                  tf1h_short_min_bias, tf1h_long_min_bias, disp_atr_mult),
+            kwargs=dict(
+                session=session,
+                fib_levels=fib_levels,
+                rr_ratio=rr_ratio,
+                htf_long_min_bias=htf_long_min_bias,
+                htf_short_min_bias=htf_short_min_bias,
+                tf1h_short_min_bias=tf1h_short_min_bias,
+                tf1h_long_min_bias=tf1h_long_min_bias,
+                enable_spring=enable_spring,
+                enable_utad=enable_utad,
+                disp_threshold=disp_threshold,
+                disp_atr_min=disp_atr_min,
+                disp_vol_min=disp_vol_min,
+                bos_sensitivity=bos_sensitivity,
+                bos_close_conf=bos_close_conf,
+                wyckoff_lookback=wyckoff_lookback,
+                vol_mult=vol_mult,
+                sl_atr_mult=sl_atr_mult,
+                allow_weekend=allow_weekend,
+            ),
             daemon=True,
             name=f"replay-{session_id[:8]}",
         )

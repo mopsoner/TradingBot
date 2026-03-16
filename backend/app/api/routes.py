@@ -1616,7 +1616,19 @@ def replay_start(req: ReplayStartRequest) -> dict:
     tf1h_short_min_bias = req.tf1h_short_min_bias or "neutral"
     tf1h_long_min_bias = req.tf1h_long_min_bias or "neutral"
     resolved_profile_name = "SMC/Wyckoff Multi-TF"
-    disp_atr_mult = 0.8
+
+    # Profile params — defaults (will be overridden from profile)
+    enable_spring   = True
+    enable_utad     = True
+    disp_threshold  = 0.40
+    disp_atr_min    = 0.75
+    disp_vol_min    = 0.8
+    bos_sensitivity = 6
+    bos_close_conf  = True
+    wyckoff_lookback = 12
+    vol_mult        = 1.3
+    sl_atr_mult     = 1.5
+    allow_weekend   = True
 
     if req.profile_id:
         with Session(engine) as s:
@@ -1625,9 +1637,18 @@ def replay_start(req: ReplayStartRequest) -> dict:
                 resolved_profile_name = prof.name
                 try:
                     params = _json.loads(prof.parameters) if isinstance(prof.parameters, str) else prof.parameters
-                    fib_levels = params.get("fib_levels", fib_levels)
-                    rr_ratio = float(params.get("take_profit_rr", rr_ratio))
-                    disp_atr_mult = float(params.get("displacement_atr_min", disp_atr_mult))
+                    fib_levels       = params.get("fib_levels", fib_levels)
+                    rr_ratio         = float(params.get("take_profit_rr", rr_ratio))
+                    enable_spring    = bool(params.get("enable_spring", enable_spring))
+                    enable_utad      = bool(params.get("enable_utad", enable_utad))
+                    disp_threshold   = float(params.get("displacement_threshold", disp_threshold))
+                    disp_atr_min     = float(params.get("displacement_atr_min", disp_atr_min))
+                    disp_vol_min     = float(params.get("displacement_vol_min", disp_vol_min))
+                    bos_sensitivity  = int(params.get("bos_sensitivity", bos_sensitivity))
+                    bos_close_conf   = bool(params.get("bos_close_confirmation", bos_close_conf))
+                    vol_mult         = float(params.get("volume_multiplier_active", vol_mult))
+                    sl_atr_mult      = float(params.get("stop_loss_atr_mult", sl_atr_mult))
+                    allow_weekend    = bool(params.get("allow_weekend_trading", allow_weekend))
                     if req.htf_long_min_bias is None:
                         htf_long_min_bias = params.get("htf_long_min_bias", htf_long_min_bias)
                     if req.htf_short_min_bias is None:
@@ -1650,7 +1671,17 @@ def replay_start(req: ReplayStartRequest) -> dict:
         tf1h_short_min_bias=tf1h_short_min_bias,
         tf1h_long_min_bias=tf1h_long_min_bias,
         profile_name=resolved_profile_name,
-        disp_atr_mult=disp_atr_mult,
+        enable_spring=enable_spring,
+        enable_utad=enable_utad,
+        disp_threshold=disp_threshold,
+        disp_atr_min=disp_atr_min,
+        disp_vol_min=disp_vol_min,
+        bos_sensitivity=bos_sensitivity,
+        bos_close_conf=bos_close_conf,
+        wyckoff_lookback=wyckoff_lookback,
+        vol_mult=vol_mult,
+        sl_atr_mult=sl_atr_mult,
+        allow_weekend=allow_weekend,
     )
     if session_id is None:
         return {"ok": False, "reason": "Trop de replays en cours. Réessayez dans quelques instants."}
