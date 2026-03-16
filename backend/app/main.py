@@ -1,5 +1,6 @@
 import logging
 import os
+import threading
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -32,6 +33,47 @@ if os.path.isdir(_DIST):
 def startup() -> None:
     init_db()
     _restore_config()
+    _auto_seed_candles()
+
+
+def _auto_seed_candles() -> None:
+    """
+    Si la table marketcandle est vide, lance un thread d'arrière-plan
+    qui télécharge 2 ans de bougies ETHUSDT (4 TF) depuis Binance.
+    Idempotent : ne fait rien si des bougies existent déjà.
+    """
+    from sqlmodel import Session, select
+    from backend.app.db.session import engine
+    from backend.app.db.models import MarketCandle
+
+    log = logging.getLogger(__name__)
+    try:
+        with Session(engine) as s:
+            exists = s.exec(select(MarketCandle).limit(1)).first()
+            if exists:
+                return
+    except Exception as exc:
+        log.warning("Auto-seed candles: impossible de vérifier la table — %s", exc)
+        return
+
+    log.info("Auto-seed: DB vide — lancement du téléchargement ETHUSDT 2 ans en arrière-plan")
+
+    def _download() -> None:
+        from backend.app.services.candle_importer import import_candles
+        timeframes = ["5m", "15m", "1h", "4h"]
+        for tf in timeframes:
+            try:
+                result = import_candles("ETHUSDT", tf, days=730, source="binance")
+                log.info(
+                    "Auto-seed ETHUSDT %s : %d bougies insérées (%s → %s)",
+                    tf, result["inserted"], result["period_start"], result["period_end"],
+                )
+            except Exception as exc:
+                log.error("Auto-seed ETHUSDT %s échoué: %s", tf, exc)
+        log.info("Auto-seed ETHUSDT terminé pour tous les timeframes")
+
+    t = threading.Thread(target=_download, daemon=True, name="auto-seed-candles")
+    t.start()
 
 
 def _restore_config() -> None:

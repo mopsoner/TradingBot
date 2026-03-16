@@ -167,10 +167,69 @@ def _patch_profiles_missing_fields() -> None:
         logger.warning("Profile data patch failed: %s", exc)
 
 
+_BT22_PARAMS = {
+    "enable_spring": True,
+    "enable_utad": True,
+    "displacement_threshold": 0.65,
+    "displacement_atr_min": 1.4,
+    "bos_sensitivity": 6,
+    "bos_close_confirmation": True,
+    "fib_levels": [0.5, 0.707, 0.786],
+    "fib_entry_split": True,
+    "htf_alignment_required": True,
+    "htf_long_min_bias": "neutral",
+    "htf_short_min_bias": "SHORT",
+    "tf1h_long_min_bias": "neutral",
+    "tf1h_short_min_bias": "SHORT",
+    "volume_adaptive": True,
+    "volume_multiplier_active": 1.9,
+    "volume_multiplier_offpeak": 1.3,
+    "rsi_period": 12,
+    "rsi_overbought": 68,
+    "rsi_oversold": 32,
+    "rsi_divergence_only": True,
+    "require_equal_highs_lows": True,
+    "stop_logic": "structure",
+    "allow_weekend_trading": False,
+    "use_5m_refinement": True,
+    "risk_per_trade": 0.012,
+    "stop_loss_atr_mult": 1.6,
+    "take_profit_rr": 2.75,
+}
+
+
+def _seed_default_profile() -> None:
+    """Insert the validated ETH-SMC-IA-v1 profile (BT#22) if the table is empty."""
+    from backend.app.db.models import StrategyProfile
+    import datetime
+
+    try:
+        with Session(engine) as s:
+            count = len(s.exec(select(StrategyProfile)).all())
+            if count > 0:
+                return
+            profile = StrategyProfile(
+                timestamp=datetime.datetime.utcnow(),
+                name="ETH-SMC-IA-v1",
+                mode="research",
+                parameters=json.dumps(_BT22_PARAMS),
+                is_active=True,
+                approved_for_live=False,
+                enable_auto_borrow_repay=False,
+                description="Profil validé BT#22 — +12.5R/an, WR=31%, PF=1.21, DD=28%",
+            )
+            s.add(profile)
+            s.commit()
+            logger.info("Seed: profil ETH-SMC-IA-v1 (BT#22) inséré (DB vide au démarrage)")
+    except Exception as exc:
+        logger.warning("Seed profil échoué: %s", exc)
+
+
 def init_db() -> None:
     SQLModel.metadata.create_all(engine)
     _apply_migrations()
     _patch_profiles_missing_fields()
+    _seed_default_profile()
 
 
 def get_session() -> Session:
