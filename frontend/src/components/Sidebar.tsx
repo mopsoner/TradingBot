@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import type { CSSProperties } from 'react';
 import type { AdminPage } from '../types';
 import { api } from '../services/api';
 import type { ProcessStatus } from '../services/api';
@@ -224,7 +225,62 @@ function ProcessWidget() {
   );
 }
 
-export function Sidebar({ onSelect, selected }: { onSelect: (page: AdminPage) => void; selected: AdminPage }) {
+interface AlertToggleBarProps {
+  soundEnabled: boolean;
+  notifEnabled: boolean;
+  onToggleSound: () => void;
+  onToggleNotif: () => void;
+}
+
+function AlertToggleBar({ soundEnabled, notifEnabled, onToggleSound, onToggleNotif }: AlertToggleBarProps) {
+  const btnStyle = (active: boolean): CSSProperties => ({
+    flex: 1,
+    padding: '6px 0',
+    background: active ? 'rgba(59,130,246,0.14)' : 'rgba(255,255,255,0.04)',
+    border: `1px solid ${active ? 'rgba(59,130,246,0.30)' : 'rgba(255,255,255,0.07)'}`,
+    borderRadius: 7,
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    fontSize: 11,
+    fontWeight: 600,
+    color: active ? '#60a5fa' : 'rgba(255,255,255,0.28)',
+    transition: 'all 0.18s ease',
+    userSelect: 'none',
+  });
+
+  return (
+    <div style={{ margin: '0 8px 6px', display: 'flex', gap: 6 }}>
+      <button
+        onClick={onToggleSound}
+        style={btnStyle(soundEnabled)}
+        title={soundEnabled ? 'Son activé — cliquer pour désactiver' : 'Son désactivé — cliquer pour activer'}
+      >
+        <span style={{ fontSize: 13 }}>{soundEnabled ? '🔊' : '🔇'}</span>
+        Son
+      </button>
+      <button
+        onClick={onToggleNotif}
+        style={btnStyle(notifEnabled)}
+        title={notifEnabled ? 'Notifications activées — cliquer pour désactiver' : 'Notifications désactivées — cliquer pour activer'}
+      >
+        <span style={{ fontSize: 13 }}>{notifEnabled ? '🔔' : '🔕'}</span>
+        Notif
+      </button>
+    </div>
+  );
+}
+
+export function Sidebar({ onSelect, selected, soundEnabled, notifEnabled, onToggleSound, onToggleNotif }: {
+  onSelect: (page: AdminPage) => void;
+  selected: AdminPage;
+  soundEnabled: boolean;
+  notifEnabled: boolean;
+  onToggleSound: () => void;
+  onToggleNotif: () => void;
+}) {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -321,6 +377,14 @@ export function Sidebar({ onSelect, selected }: { onSelect: (page: AdminPage) =>
             </div>
           ))}
         </div>
+
+        {/* Alert toggles — son & notifications */}
+        <AlertToggleBar
+          soundEnabled={soundEnabled}
+          notifEnabled={notifEnabled}
+          onToggleSound={onToggleSound}
+          onToggleNotif={onToggleNotif}
+        />
 
         {/* Process status widget */}
         <ProcessWidget />

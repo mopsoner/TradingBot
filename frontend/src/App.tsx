@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { Sidebar } from './components/Sidebar';
 import type { AdminPage } from './types';
 import { DashboardPage } from './pages/DashboardPage';
@@ -13,9 +13,46 @@ import { SignalsPage } from './pages/SignalsPage';
 import { LogsPage } from './pages/LogsPage';
 import { JournalPage } from './pages/JournalPage';
 import { PositionsPage } from './pages/PositionsPage';
+import { useSignalAlert } from './hooks/useSignalAlert';
+import { NotificationService } from './services/notificationService';
+
+function readBool(key: string, fallback: boolean): boolean {
+  const val = localStorage.getItem(key);
+  if (val === null) return fallback;
+  return val !== 'false';
+}
 
 export default function App() {
   const [page, setPage] = useState<AdminPage>('Tableau de bord');
+
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(() =>
+    readBool('alertSoundEnabled', true),
+  );
+  const [notifEnabled, setNotifEnabled] = useState<boolean>(() =>
+    readBool('alertNotifEnabled', false),
+  );
+
+  const toggleSound = useCallback(() => {
+    setSoundEnabled(prev => {
+      const next = !prev;
+      localStorage.setItem('alertSoundEnabled', String(next));
+      return next;
+    });
+  }, []);
+
+  const toggleNotif = useCallback(async () => {
+    const next = !notifEnabled;
+    if (next) {
+      const granted = await NotificationService.requestPermission();
+      if (!granted) return;
+    }
+    setNotifEnabled(next);
+    localStorage.setItem('alertNotifEnabled', String(next));
+  }, [notifEnabled]);
+
+  const goToSignals = useCallback(() => setPage('Signaux'), []);
+
+  useSignalAlert(soundEnabled, notifEnabled, goToSignals);
 
   const render = () => {
     switch (page) {
@@ -36,7 +73,14 @@ export default function App() {
 
   return (
     <>
-      <Sidebar onSelect={setPage} selected={page} />
+      <Sidebar
+        onSelect={setPage}
+        selected={page}
+        soundEnabled={soundEnabled}
+        notifEnabled={notifEnabled}
+        onToggleSound={toggleSound}
+        onToggleNotif={toggleNotif}
+      />
       <main>{render()}</main>
     </>
   );
