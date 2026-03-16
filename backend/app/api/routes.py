@@ -1609,11 +1609,11 @@ def replay_start(req: ReplayStartRequest) -> dict:
     if ds >= de:
         return {"ok": False, "reason": "date_start doit être avant date_end."}
 
-    fib_levels = [0.5, 0.618, 0.705]
-    rr_ratio = 2.0
+    fib_levels = [0.5, 0.707, 0.786]  # BT#22 validé
+    rr_ratio = 2.75                    # BT#22 sweet spot
     htf_long_min_bias = req.htf_long_min_bias or "neutral"
     htf_short_min_bias = req.htf_short_min_bias or "SHORT"
-    tf1h_short_min_bias = req.tf1h_short_min_bias or "neutral"
+    tf1h_short_min_bias = req.tf1h_short_min_bias or "SHORT"  # BT#22 filtre 1H SHORT
     tf1h_long_min_bias = req.tf1h_long_min_bias or "neutral"
 
     if req.profile_id:
@@ -1673,8 +1673,8 @@ def run_walkforward(req: WalkForwardRequest) -> dict:
     from backend.app.services.walkforward import run_walkforward as _run_wf
     import json as _json
 
-    fib_levels = [0.5, 0.618, 0.705]
-    rr_ratio = 2.0
+    fib_levels = [0.5, 0.707, 0.786]  # BT#22 validé
+    rr_ratio = 2.75                    # BT#22 sweet spot
 
     if req.profile_id:
         with Session(engine) as s:
