@@ -2717,10 +2717,21 @@ def _run_live_scan(
                 for t in target_rs
             )
 
-            # TP = entry + N×risk_r en direction du trade
-            tp_price = round(
-                entry_price + target_rs[0] * risk_r * (1 if direction == "LONG" else -1), 6
-            ) if target_rs else round(entry_price + 2.0 * risk_r * (1 if direction == "LONG" else -1), 6)
+            # TP — ancrage SMC sur la zone de liquidité cible (EQH pour LONG, EQL pour SHORT)
+            # Si un cluster de liquidité est trouvé au-delà du TP RR-based → on l'utilise
+            # Sinon fallback sur entry ± N×risk_r (RR configuré minimum garanti)
+            _rr_mult = target_rs[0] if target_rs else 2.0
+            tp_rr = round(entry_price + _rr_mult * risk_r * (1 if direction == "LONG" else -1), 6)
+            if candles_15m:
+                _tp_liq, _liq_found, _ = ta.detect_target_liquidity(
+                    candles_15m, direction, entry_price
+                )
+                if direction == "LONG":
+                    tp_price = round(max(tp_rr, _tp_liq), 6) if _liq_found and _tp_liq > entry_price else tp_rr
+                else:
+                    tp_price = round(min(tp_rr, _tp_liq), 6) if _liq_found and _tp_liq < entry_price else tp_rr
+            else:
+                tp_price = tp_rr
 
             with Session(engine) as s:
                 sig = Signal(

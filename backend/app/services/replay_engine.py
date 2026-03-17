@@ -182,6 +182,7 @@ class ReplaySession:
         sl_atr_mult: float = 1.5, size_mult: float = 1.0,
         rsi4h_value: float = float("nan"), rsi4h_direction: str = "",
         sweep_price: float = 0.0,
+        window_15m: list | None = None,
     ) -> None:
         entry = candle.close
         # Minimum SL buffer: 0.5% of entry to avoid unrealistically tight stops
@@ -192,13 +193,31 @@ class ReplaySession:
             sl_atr_based = entry - atr * sl_atr_mult
             sl_sweep = (sweep_price - atr * 1.0) if sweep_price > 0 else sl_atr_based
             sl = min(sl_atr_based, sl_sweep, entry - min_sl_buffer)
-            tp = entry + abs(entry - sl) * rr_ratio
+            sl_distance = abs(entry - sl)
+            tp_rr = entry + sl_distance * rr_ratio
+            # Ancrage SMC : TP sur le cluster EQH le plus proche au-dessus de l'entry
+            if window_15m:
+                tp_liq, liq_found, _ = ta.detect_target_liquidity(
+                    window_15m, "LONG", entry
+                )
+                tp = max(tp_rr, tp_liq) if liq_found and tp_liq > entry else tp_rr
+            else:
+                tp = tp_rr
         else:
             # SL must be ABOVE the UTAD wick — anchored on sweep_price (the spike high)
             sl_atr_based = entry + atr * sl_atr_mult
             sl_sweep = (sweep_price + atr * 1.0) if sweep_price > 0 else sl_atr_based
             sl = max(sl_atr_based, sl_sweep, entry + min_sl_buffer)
-            tp = entry - abs(sl - entry) * rr_ratio
+            sl_distance = abs(sl - entry)
+            tp_rr = entry - sl_distance * rr_ratio
+            # Ancrage SMC : TP sur le cluster EQL le plus proche en-dessous de l'entry
+            if window_15m:
+                tp_liq, liq_found, _ = ta.detect_target_liquidity(
+                    window_15m, "SHORT", entry
+                )
+                tp = min(tp_rr, tp_liq) if liq_found and tp_liq < entry else tp_rr
+            else:
+                tp = tp_rr
 
         pos = {
             "direction": direction,
@@ -824,6 +843,7 @@ def _run_replay(
                     rsi4h_value=rsi4h_val,
                     rsi4h_direction=rsi4h_dir,
                     sweep_price=_sweep_price,
+                    window_15m=window_15m,
                 )
                 session._open_position(
                     current_candle, direction_15m, atr_val,
@@ -835,6 +855,7 @@ def _run_replay(
                     rsi4h_value=rsi4h_val,
                     rsi4h_direction=rsi4h_dir,
                     sweep_price=_sweep_price,
+                    window_15m=window_15m,
                 )
             else:
                 session._open_position(
@@ -846,6 +867,7 @@ def _run_replay(
                     rsi4h_value=rsi4h_val,
                     rsi4h_direction=rsi4h_dir,
                     sweep_price=_sweep_price,
+                    window_15m=window_15m,
                 )
             cooldown_bars = 6
 

@@ -149,6 +149,80 @@ def detect_liquidity_zone(
     return "LOD", round(lod_c.low, 6), False
 
 
+def detect_target_liquidity(
+    candles_15m: list,
+    direction: str,
+    entry_price: float,
+    tolerance: float = 0.004,
+    min_cluster: int = 2,
+    lookback: int = 100,
+) -> tuple[float, bool, str]:
+    """
+    Cherche la zone de liquidité CIBLE : le cluster EQH (pour LONG) ou EQL (pour SHORT)
+    le plus proche au-delà de l'entry, vers lequel le prix est susceptible de courir.
+
+    Logique SMC :
+      - LONG  (Spring) : les EQH au-dessus de l'entry = sell-side liquidity cible
+      - SHORT (UTAD)   : les EQL en-dessous de l'entry = buy-side liquidity cible
+
+    Paramètres :
+      tolerance   : écart max entre deux pivots pour former un cluster (0.4% par défaut)
+      min_cluster : nombre minimum de pivots pour valider un cluster (2)
+      lookback    : nombre de bougies analysées (100 = ~25h sur 15m)
+
+    Retourne (price, found, label) :
+      price  → prix moyen du cluster cible
+      found  → True si un cluster valide a été trouvé
+      label  → description lisible ("EQH cluster @ X" / "EQL cluster @ X")
+    """
+    if len(candles_15m) < 10 or entry_price <= 0:
+        return 0.0, False, "no_data"
+
+    window = candles_15m[-lookback:] if len(candles_15m) > lookback else candles_15m
+    highs, lows = swing_highs_lows(window, n=2)
+
+    if direction == "LONG":
+        # Filtrer les swing highs AU-DESSUS de l'entry
+        candidates = [c.high for c in highs if c.high > entry_price * 1.001]
+        if len(candidates) < min_cluster:
+            return 0.0, False, "no_eqh_above"
+
+        # Trier du plus proche au plus loin
+        candidates.sort()
+
+        # Chercher le premier cluster de min_cluster pivots proches (within tolerance)
+        for i in range(len(candidates)):
+            cluster = [candidates[i]]
+            for j in range(i + 1, len(candidates)):
+                if abs(candidates[j] - candidates[i]) / candidates[i] <= tolerance:
+                    cluster.append(candidates[j])
+            if len(cluster) >= min_cluster:
+                price = round(sum(cluster) / len(cluster), 6)
+                return price, True, f"EQH cluster @ {price:.4f} ({len(cluster)} pivots)"
+
+        return 0.0, False, "no_eqh_cluster"
+
+    else:
+        # Filtrer les swing lows EN-DESSOUS de l'entry
+        candidates = [c.low for c in lows if c.low < entry_price * 0.999]
+        if len(candidates) < min_cluster:
+            return 0.0, False, "no_eql_below"
+
+        # Trier du plus proche (plus grand) au plus loin (plus petit)
+        candidates.sort(reverse=True)
+
+        for i in range(len(candidates)):
+            cluster = [candidates[i]]
+            for j in range(i + 1, len(candidates)):
+                if abs(candidates[i] - candidates[j]) / candidates[i] <= tolerance:
+                    cluster.append(candidates[j])
+            if len(cluster) >= min_cluster:
+                price = round(sum(cluster) / len(cluster), 6)
+                return price, True, f"EQL cluster @ {price:.4f} ({len(cluster)} pivots)"
+
+        return 0.0, False, "no_eql_cluster"
+
+
 # ── Step 1: Sweep detection ───────────────────────────────────────────────────
 
 def detect_sweep(candles_15m: list, zone_price: float, is_high_zone: bool) -> tuple[bool, float]:
