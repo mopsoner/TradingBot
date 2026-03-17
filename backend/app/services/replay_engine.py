@@ -599,6 +599,9 @@ def _run_replay(
             close_result = session._check_open_positions(current_candle)
             if close_result == "SL":
                 cooldown_bars = max(cooldown_bars, 12)
+            elif close_result == "TP":
+                # Cooldown 4 barres (1h) après TP — évite le re-entry FOMO immédiat
+                cooldown_bars = max(cooldown_bars, 4)
 
             if cooldown_bars > 0:
                 cooldown_bars -= 1
@@ -809,6 +812,11 @@ def _run_replay(
             atr_val = _compute_atr(window_15m)
             if atr_val <= 0:
                 continue
+
+            # Guard : fib_split nécessite de la place pour 2 positions simultanées.
+            # Si max_concurrent_trades < 2, on désactive le split pour ce signal.
+            if eff_fib_split and max_concurrent_trades < 2:
+                eff_fib_split = False
 
             if eff_fib_split:
                 # Fib entry split: 2 demi-positions depuis le même signal.
