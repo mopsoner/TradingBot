@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
 import type { AdminPage } from '../types';
@@ -401,6 +401,280 @@ function HistoryRow({ r }: { r: BacktestResult }) {
   );
 }
 
+type RankEntry = {
+  id: number; symbol: string; wr: number; pf: number;
+  dd: number; expectancy: number; approved: boolean;
+};
+
+type SortKey = 'dd' | 'pf' | 'wr' | 'expectancy';
+
+const MEDALS: Record<number, { icon: string; color: string }> = {
+  0: { icon: '🥇', color: '#fbbf24' },
+  1: { icon: '🥈', color: '#94a3b8' },
+  2: { icon: '🥉', color: '#c2855e' },
+};
+
+function SortArrow({ active, dir }: { active: boolean; dir: 'asc' | 'desc' }) {
+  if (!active) return <span style={{ opacity: 0.25, fontSize: 9 }}>⇅</span>;
+  return <span style={{ fontSize: 9 }}>{dir === 'asc' ? '↑' : '↓'}</span>;
+}
+
+function PairsRankingPanel() {
+  const { data: profilesData } = useApi(() => api.strategyProfiles());
+  const [rankings, setRankings] = useState<RankEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [sortKey, setSortKey] = useState<SortKey>('dd');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [collapsed, setCollapsed] = useState(false);
+
+  const usdcProfiles: { id: number; name: string }[] = useMemo(() =>
+    Array.isArray((profilesData as { rows?: unknown[] })?.rows)
+      ? (profilesData as { rows: { id: number; name: string }[] }).rows.filter(
+          p => p.name.includes('USDC') && p.name.includes('Dual-Optimized')
+        )
+      : [],
+  [profilesData]);
+
+  const symbolFromName = (name: string) => {
+    const m = name.match(/^([A-Z]+USDC)/);
+    return m ? m[1] : name.replace('-SMC-Dual-Optimized', '');
+  };
+
+  const runSimulations = useCallback(async () => {
+    if (usdcProfiles.length === 0) return;
+    setLoading(true);
+    try {
+      const results = await Promise.all(
+        usdcProfiles.map(async p => {
+          const symbol = symbolFromName(p.name);
+          try {
+            const res = await api.simulateStrategyProfile(p.id, symbol);
+            const m = (res as { metrics?: Record<string, number>; approved_for_live?: boolean });
+            const met = m.metrics || {};
+            return {
+              id: p.id, symbol,
+              wr: (met.win_rate as number) || 0,
+              pf: (met.profit_factor as number) || 0,
+              dd: (met.drawdown as number) || 0,
+              expectancy: (met.expectancy as number) || 0,
+              approved: Boolean(m.approved_for_live),
+            } as RankEntry;
+          } catch {
+            return { id: p.id, symbol, wr: 0, pf: 0, dd: 0, expectancy: 0, approved: false } as RankEntry;
+          }
+        })
+      );
+      setRankings(results.sort((a, b) => a.dd - b.dd));
+      setLoaded(true);
+    } finally {
+      setLoading(false);
+    }
+  }, [usdcProfiles]);
+
+  useEffect(() => {
+    if (usdcProfiles.length > 0 && !loaded && !loading) {
+      runSimulations();
+    }
+  }, [usdcProfiles.length, loaded, loading, runSimulations]);
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortKey(key);
+      setSortDir(key === 'dd' ? 'asc' : 'desc');
+    }
+  };
+
+  const sorted = [...rankings].sort((a, b) => {
+    const diff = a[sortKey] - b[sortKey];
+    return sortDir === 'asc' ? diff : -diff;
+  });
+
+  const thStyle = (key: SortKey): React.CSSProperties => ({
+    padding: '8px 10px', textAlign: 'right', fontWeight: 600, fontSize: 11,
+    color: sortKey === key ? 'var(--accent)' : 'var(--text-muted)',
+    cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap',
+  });
+
+  return (
+    <div style={{
+      background: 'var(--bg-card)', border: '1px solid rgba(251,191,36,0.25)',
+      borderRadius: 10, marginBottom: 24, overflow: 'hidden',
+    }}>
+      <div
+        onClick={() => setCollapsed(c => !c)}
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '14px 18px', cursor: 'pointer',
+          background: 'rgba(251,191,36,0.04)',
+          borderBottom: collapsed ? 'none' : '1px solid rgba(251,191,36,0.12)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
+            Classement — Paires USDC Dual-Mode
+          </span>
+          <span style={{
+            fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4,
+            background: 'rgba(251,191,36,0.12)', color: '#fbbf24',
+            border: '1px solid rgba(251,191,36,0.3)',
+          }}>
+            {usdcProfiles.length} paires · bull RR 4.0 / bear RR 2.0
+          </span>
+          {loaded && !loading && (
+            <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+              Simulation Monte Carlo
+            </span>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {!collapsed && (
+            <button
+              onClick={e => { e.stopPropagation(); runSimulations(); }}
+              disabled={loading}
+              style={{
+                padding: '4px 12px', borderRadius: 5, fontSize: 11, cursor: loading ? 'default' : 'pointer',
+                background: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.3)',
+                color: loading ? 'var(--text-muted)' : '#fbbf24', fontWeight: 600,
+                opacity: loading ? 0.6 : 1,
+              }}
+            >
+              {loading ? 'Calcul...' : 'Actualiser'}
+            </button>
+          )}
+          <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{collapsed ? '▸' : '▾'}</span>
+        </div>
+      </div>
+
+      {!collapsed && (
+        <div>
+          {loading && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, padding: '24px 0' }}>
+              <div style={{
+                width: 16, height: 16, border: '2px solid rgba(251,191,36,0.2)',
+                borderTop: '2px solid #fbbf24', borderRadius: '50%',
+                animation: 'spin 1s linear infinite',
+              }} />
+              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                Simulation en cours pour {usdcProfiles.length} paires...
+              </span>
+            </div>
+          )}
+
+          {!loading && sorted.length > 0 && (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: 'rgba(251,191,36,0.04)', color: 'var(--text-muted)', fontSize: 11 }}>
+                    <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 600, fontSize: 11 }}>Rang</th>
+                    <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 600, fontSize: 11 }}>Paire</th>
+                    <th style={{ ...thStyle('wr'), textAlign: 'right' }} onClick={() => toggleSort('wr')}>
+                      WR% <SortArrow active={sortKey === 'wr'} dir={sortDir} />
+                    </th>
+                    <th style={thStyle('pf')} onClick={() => toggleSort('pf')}>
+                      PF <SortArrow active={sortKey === 'pf'} dir={sortDir} />
+                    </th>
+                    <th style={thStyle('dd')} onClick={() => toggleSort('dd')}>
+                      MaxDD <SortArrow active={sortKey === 'dd'} dir={sortDir} />
+                    </th>
+                    <th style={thStyle('expectancy')} onClick={() => toggleSort('expectancy')}>
+                      Expect. <SortArrow active={sortKey === 'expectancy'} dir={sortDir} />
+                    </th>
+                    <th style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 600, fontSize: 11 }}>Live</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sorted.map((r, i) => {
+                    const medal = MEDALS[i];
+                    const isNew = r.symbol === 'FETUSDC';
+                    const ddOk = r.dd <= 0.012;
+                    const wrColor = r.wr >= 0.75 ? '#22c55e' : r.wr >= 0.65 ? '#86efac' : 'var(--text-secondary)';
+                    const pfColor = r.pf >= 10 ? '#22c55e' : r.pf >= 7 ? '#86efac' : 'var(--text-secondary)';
+                    const ddColor = r.dd <= 0.008 ? '#22c55e' : r.dd <= 0.012 ? '#86efac' : '#eab308';
+                    const exColor = r.expectancy >= 1.5 ? '#22c55e' : r.expectancy >= 1.2 ? '#86efac' : 'var(--text-secondary)';
+                    return (
+                      <tr
+                        key={r.id}
+                        style={{
+                          borderTop: '1px solid rgba(255,255,255,0.04)',
+                          background: isNew ? 'rgba(251,191,36,0.03)' : medal ? `rgba(${medal.color},0.02)` : undefined,
+                        }}
+                      >
+                        <td style={{ padding: '8px 10px', fontWeight: 700, color: medal?.color || 'var(--text-muted)', fontSize: 13 }}>
+                          {medal ? medal.icon : <span style={{ color: 'var(--text-muted)' }}>#{i + 1}</span>}
+                        </td>
+                        <td style={{ padding: '8px 10px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{r.symbol}</span>
+                            {isNew && (
+                              <span style={{
+                                fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 3,
+                                background: 'rgba(251,191,36,0.15)', color: '#fbbf24',
+                                border: '1px solid rgba(251,191,36,0.35)', letterSpacing: '0.03em',
+                              }}>NOUVEAU</span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 1 }}>#{r.id}</div>
+                        </td>
+                        <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: wrColor, fontFamily: 'monospace' }}>
+                          {(r.wr * 100).toFixed(1)}%
+                        </td>
+                        <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: pfColor, fontFamily: 'monospace' }}>
+                          {r.pf.toFixed(2)}
+                        </td>
+                        <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: ddColor, fontFamily: 'monospace' }}>
+                          {(r.dd * 100).toFixed(1)}%
+                        </td>
+                        <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: exColor, fontFamily: 'monospace' }}>
+                          {r.expectancy.toFixed(3)}R
+                        </td>
+                        <td style={{ padding: '8px 10px', textAlign: 'center' }}>
+                          <span style={{
+                            fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+                            background: r.approved ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)',
+                            color: r.approved ? '#22c55e' : '#ef4444',
+                            border: `1px solid ${r.approved ? 'rgba(34,197,94,0.25)' : 'rgba(239,68,68,0.25)'}`,
+                          }}>
+                            {r.approved ? 'YES' : 'NO'}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <div style={{
+                padding: '8px 14px', fontSize: 10, color: 'var(--text-muted)',
+                borderTop: '1px solid rgba(255,255,255,0.04)',
+                display: 'flex', gap: 20,
+              }}>
+                <span>Cliquer sur les colonnes pour trier</span>
+                <span>
+                  {sorted.filter(r => r.approved).length}/{sorted.length} approuvées live
+                </span>
+                <span>
+                  Top WR: {sorted.slice().sort((a, b) => b.wr - a.wr)[0]?.symbol} ({(sorted.slice().sort((a, b) => b.wr - a.wr)[0]?.wr * 100).toFixed(1)}%)
+                </span>
+                <span>
+                  Meilleur PF: {sorted.slice().sort((a, b) => b.pf - a.pf)[0]?.symbol} ({sorted.slice().sort((a, b) => b.pf - a.pf)[0]?.pf.toFixed(2)})
+                </span>
+              </div>
+            </div>
+          )}
+
+          {!loading && sorted.length === 0 && loaded && (
+            <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>
+              Aucun profil USDC Dual-Optimized trouve.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function BacktestsPage({ onNavigate: _onNavigate }: { onNavigate?: (page: AdminPage) => void } = {}) {
   const { data, reload } = useApi(() => api.backtests('?limit=100'));
   const rows: BacktestResult[] = (data?.rows ?? []) as BacktestResult[];
@@ -415,6 +689,8 @@ export function BacktestsPage({ onNavigate: _onNavigate }: { onNavigate?: (page:
       </div>
 
       <ReplayLauncher onCompleted={reload} />
+
+      <PairsRankingPanel />
 
       {rows.length === 0 ? (
         <div style={{ textAlign: 'center', padding: 48, color: 'var(--text-muted)', fontSize: 13 }}>

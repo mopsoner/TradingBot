@@ -157,6 +157,8 @@ export const api = {
   updateStrategyProfile: (profileId: number, body: Record<string, unknown>) => put<Record<string, unknown>>(`/api/strategy/profiles/${profileId}`, body),
   deleteStrategyProfile: (profileId: number) => del<Record<string, unknown>>(`/api/strategy/profiles/${profileId}`),
   backtestStrategyProfile: (profileId: number) => post<Record<string, unknown>>(`/api/strategy/profiles/${profileId}/backtest`, {}),
+  simulateStrategyProfile: (profileId: number, symbol: string, timeframe = '15m') =>
+    post<Record<string, unknown>>(`/api/strategy/profiles/${profileId}/backtest`, { symbol, timeframe }),
   approveStrategyProfile: (profileId: number, body: Record<string, unknown>) => post<Record<string, unknown>>(`/api/strategy/profiles/${profileId}/approve-live`, body),
 
   botStatus:  ()                              => get<Record<string, unknown>>('/api/bot/status'),
