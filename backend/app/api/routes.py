@@ -2513,12 +2513,12 @@ def _run_live_scan(
                     s.commit()
                 continue
 
-            # ── Step 0 — Zone de liquidité EQH/EQL sur 4H (lookback 1 mois) ──
+            # ── Step 0 — Zone de liquidité EQH/EQL sur 1H (lookback 24h) ──
             if not silent:
                 _pipeline[symbol]["steps"][0]["status"] = "checking"
                 time.sleep(rng.uniform(0.05, 0.12))
             zone_type, zone_price_detected, is_high_zone = ta.detect_liquidity_zone(
-                candles_4h, lookback=180, tolerance=0.005,
+                candles_1h[-24:], lookback=24, tolerance=0.005,
             )
             liq_ok = zone_price_detected > 0 and bool(zone_type)
             if not silent:
