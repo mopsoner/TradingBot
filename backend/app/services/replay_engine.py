@@ -655,8 +655,8 @@ def _run_replay(
             idx_4h = bisect_right(ts_4h, ts_now) - 1
             idx_1h = bisect_right(ts_1h, ts_now) - 1
 
-            # Fenêtre 4H pour Step 0 (EQH/EQL) — lookback 24h (6 bougies)
-            _LIQ_4H = 6
+            # Fenêtre 4H pour Step 0 (EQH/EQL) — lookback 1 semaine (42 bougies)
+            _LIQ_4H = 42
             window_4h_liq = candles_4h[max(0, idx_4h - _LIQ_4H): idx_4h]
 
             if idx_4h < WINDOW_4H:
