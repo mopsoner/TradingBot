@@ -184,18 +184,21 @@ class ReplaySession:
         sweep_price: float = 0.0,
     ) -> None:
         entry = candle.close
+        # Minimum SL buffer: 0.5% of entry to avoid unrealistically tight stops
+        # on low-volatility coins where ATR can be < 0.3%
+        min_sl_buffer = entry * 0.005
         if direction == "LONG":
             # SL must be BELOW the Spring wick — anchored on sweep_price (the spike low)
             sl_atr_based = entry - atr * sl_atr_mult
             sl_sweep = (sweep_price - atr * 1.0) if sweep_price > 0 else sl_atr_based
-            sl = min(sl_atr_based, sl_sweep)
-            tp = entry + atr * sl_atr_mult * rr_ratio
+            sl = min(sl_atr_based, sl_sweep, entry - min_sl_buffer)
+            tp = entry + abs(entry - sl) * rr_ratio
         else:
             # SL must be ABOVE the UTAD wick — anchored on sweep_price (the spike high)
             sl_atr_based = entry + atr * sl_atr_mult
             sl_sweep = (sweep_price + atr * 1.0) if sweep_price > 0 else sl_atr_based
-            sl = max(sl_atr_based, sl_sweep)
-            tp = entry - atr * sl_atr_mult * rr_ratio
+            sl = max(sl_atr_based, sl_sweep, entry + min_sl_buffer)
+            tp = entry - abs(sl - entry) * rr_ratio
 
         pos = {
             "direction": direction,
