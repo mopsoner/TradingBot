@@ -655,9 +655,9 @@ def _run_replay(
             idx_4h = bisect_right(ts_4h, ts_now) - 1
             idx_1h = bisect_right(ts_1h, ts_now) - 1
 
-            # Fenêtre 1H longue pour Step 0 (EQH/EQL) — remonte jusqu'à ~2 mois
-            _LIQ_1H = 1440
-            window_1h_liq = candles_1h[max(0, idx_1h - _LIQ_1H): idx_1h]
+            # Fenêtre 4H pour Step 0 (EQH/EQL) — lookback 1 mois max (180 bougies)
+            _LIQ_4H = 180
+            window_4h_liq = candles_4h[max(0, idx_4h - _LIQ_4H): idx_4h]
 
             if idx_4h < WINDOW_4H:
                 htf_bias = None
@@ -731,10 +731,10 @@ def _run_replay(
 
             # ── Pipeline complet via ta_engine (identique au scanner live) ──
 
-            # Step 0 — Zone de liquidité EQH/EQL sur 1H (lookback ~2 mois, tol=0.3%)
+            # Step 0 — Zone de liquidité EQH/EQL sur 4H (lookback 1 mois, tol=0.5%)
             _zone_type, zone_price, is_high_zone = ta.detect_liquidity_zone(
-                window_1h_liq, require_eqhl=require_equal_highs_lows,
-                lookback=_LIQ_1H, tolerance=0.003,
+                window_4h_liq, require_eqhl=require_equal_highs_lows,
+                lookback=_LIQ_4H, tolerance=0.005,
             )
             if zone_price <= 0:
                 rej["step0_liq"] += 1
