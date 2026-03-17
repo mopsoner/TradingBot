@@ -93,16 +93,44 @@ Profile structure for dual mode:
 - Bear (RSI < 45): UTAD / RR=2.0 / lb=16 → 80 trades, WR=50.0%, +8R
 - **Combined: 196 trades, WR=39.3%, PF=1.78, +77R, MaxDD=12.6%**
 
-**16 USDC Dual-Mode Profiles (ids 18-33)** — Optimized library for Binance Isolated Margin:
+**17 USDC Dual-Mode Profiles (ids 18-34)** — Optimized library for Binance Isolated Margin:
 - **Grid winner**: Bull RR=4.0, Bear RR=2.0 (grid: 3×2×2=12 combos per pair)
 - **wyckoff_lookback**: 16 for pairs with ≥80K candles, 14 for shorter-history pairs
-- **Simulation validation**: All 16 approved for live | WR 68-79% | PF 7.5-13.5 | MaxDD 0.5-1.6%
-- **Ranking by MaxDD**: DOGEUSDC #1 (PF=13.5, DD=0.5%), ATOMUSDC #2, LTCUSDC #3 ... ETHUSDC #16 (DD=1.6%)
 - **DB critical fix**: `idx_mc_sym_tf_ts` index on `marketcandle` (3.5M rows) → queries 4500x faster (4.5s → 0.001s)
-- **Fib tolerance**: Updated from 5% to 8% in `ta_engine.py` for better entry detection in trending markets
-- **Simulation update**: `_simulate_outcomes` now uses `take_profit_rr` from profile params for accurate RR-based metrics
 
-Data imported: 16 USDC pairs × 3 TF (15m/1h/4h) — BTCUSDC 124K candles, etc. Total ~3.5M candles in DB.
+### Step 0 Liquidity Mode (`step0_liq_mode`)
+
+Step 0 (EQH/EQL detection) uses a configurable lookback timeframe per profile, determined by a 4-year × 4-mode grid search (17 coins × 4 modes = 68 backtests):
+
+| Mode | Candles | Lookback | Coins |
+|---|---|---|---|
+| `4h_6bars`  | 4H | 24h (6 bars)  | BTC, BNB, TRX |
+| `4h_42bars` | 4H | 1 week (42 bars) | (legacy default) |
+| `1h_24h`    | 1H | 24h (24 bars) | ETH, XRP, ADA, DOGE, ALGO, ETC |
+| `1h_48h`    | 1H | 48h (48 bars) | LTC, LINK, ATOM, XLM, BCH, NEO, SOL, FET |
+
+**Profile ranking by EXP/T (4-year backtest, best mode per coin):**
+- NEO 1h_48h: PF=2.86 n=12 EXP=+0.775R
+- XLM 1h_48h: PF=2.56 n=17 EXP=+0.733R
+- ALGO 1h_24h: PF=2.36 n=19 EXP=+0.644R
+- TRX 4h_6bars: PF=2.11 n=10 EXP=+0.554R
+- BNB 4h_6bars: PF=2.04 n=12 EXP=+0.520R
+- LTC 1h_48h: PF=2.03 n=37 EXP=+0.530R
+- FET 1h_48h: PF=1.79 n=18 EXP=+0.438R
+- DOGE 1h_24h: PF=1.80 n=17 EXP=+0.424R
+- BTC 4h_6bars: PF=1.78 n=121 EXP=+0.420R ← most statistically robust
+- SOL 1h_48h: PF=1.67 n=39 EXP=+0.380R
+- BCH 1h_48h: PF=1.52 n=28 EXP=+0.313R
+- LINK 1h_48h: PF=1.40 n=24 EXP=+0.248R
+- ETH 1h_24h: PF=1.07 n=89 EXP=+0.043R
+- ADA 1h_24h: PF=1.00 n=30 EXP=+0.002R
+- XRP 1h_24h: PF=0.97 n=51 EXP=-0.018R (excluded from live)
+- ATOM 1h_48h: PF=0.98 n=25 EXP=-0.014R (excluded from live)
+- ETC: insufficient data
+
+`step0_liq_mode` is stored in each profile's `parameters` JSON. The replay engine and live scanner both read it. The API also accepts a `step0_liq_mode` override in the replay request body for ad-hoc testing.
+
+Data imported: 17 USDC pairs × 3 TF (15m/1h/4h) — ~3.5M candles in DB.
 
 ### OpenClaw Reference Layer (`src/openclaw/`)
 
