@@ -1611,6 +1611,7 @@ class ReplayStartRequest(BaseModel):
     htf_short_min_bias: str | None = None
     tf1h_short_min_bias: str | None = None
     tf1h_long_min_bias: str | None = None
+    step0_liq_mode: str | None = None   # override profil : "4h_42bars"|"4h_6bars"|"1h_24h"|"1h_48h"
 
 
 @router.post("/backtest/replay/start")
@@ -1708,6 +1709,10 @@ def replay_start(req: ReplayStartRequest) -> dict:
                         tf1h_long_min_bias = params.get("tf1h_long_min_bias", tf1h_long_min_bias)
                 except Exception:
                     pass
+
+    # Override explicite depuis la requête (priorité sur le profil)
+    if req.step0_liq_mode:
+        step0_liq_mode = req.step0_liq_mode
 
     session_id = replay_manager.start(
         symbol=req.symbol.strip().upper(),
@@ -2522,11 +2527,13 @@ def _run_live_scan(
                 time.sleep(rng.uniform(0.05, 0.12))
             _s0_mode = profile_params.get("step0_liq_mode", "4h_42bars") if profile_params else "4h_42bars"
             if _s0_mode == "1h_24h":
-                _liq_window = candles_1h[-24:]
-                _liq_lb = 24
-            else:
-                _liq_window = candles_4h[-42:]
-                _liq_lb = 42
+                _liq_window, _liq_lb = candles_1h[-24:], 24
+            elif _s0_mode == "1h_48h":
+                _liq_window, _liq_lb = candles_1h[-48:], 48
+            elif _s0_mode == "4h_6bars":
+                _liq_window, _liq_lb = candles_4h[-6:],   6
+            else:  # "4h_42bars"
+                _liq_window, _liq_lb = candles_4h[-42:], 42
             zone_type, zone_price_detected, is_high_zone = ta.detect_liquidity_zone(
                 _liq_window, lookback=_liq_lb, tolerance=0.005,
             )

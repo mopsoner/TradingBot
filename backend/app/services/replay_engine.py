@@ -657,14 +657,17 @@ def _run_replay(
             idx_4h = bisect_right(ts_4h, ts_now) - 1
             idx_1h = bisect_right(ts_1h, ts_now) - 1
 
-            # Fenêtre Step 0 (EQH/EQL) — mode configurable par profil
-            # "1h_24h" : 1H × 24 bars (altcoins) | "4h_42bars" : 4H × 42 bars (large caps)
+            # Fenêtre Step 0 (EQH/EQL) — 4 modes configurables par profil
+            # "4h_42bars" : 4H × 42 bars (1 sem)  | "4h_6bars"  : 4H × 6 bars (24h)
+            # "1h_24h"   : 1H × 24 bars (24h)     | "1h_48h"   : 1H × 48 bars (48h)
             if step0_liq_mode == "1h_24h":
-                _LIQ_N = 24
-                window_4h_liq = candles_1h[max(0, idx_1h - _LIQ_N): idx_1h]
-            else:
-                _LIQ_N = 42
-                window_4h_liq = candles_4h[max(0, idx_4h - _LIQ_N): idx_4h]
+                _LIQ_N, window_4h_liq = 24, candles_1h[max(0, idx_1h - 24): idx_1h]
+            elif step0_liq_mode == "1h_48h":
+                _LIQ_N, window_4h_liq = 48, candles_1h[max(0, idx_1h - 48): idx_1h]
+            elif step0_liq_mode == "4h_6bars":
+                _LIQ_N, window_4h_liq =  6, candles_4h[max(0, idx_4h -  6): idx_4h]
+            else:  # "4h_42bars" (défaut)
+                _LIQ_N, window_4h_liq = 42, candles_4h[max(0, idx_4h - 42): idx_4h]
 
             if idx_4h < WINDOW_4H:
                 htf_bias = None
