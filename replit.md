@@ -93,6 +93,17 @@ Profile structure for dual mode:
 - Bear (RSI < 45): UTAD / RR=2.0 / lb=16 → 80 trades, WR=50.0%, +8R
 - **Combined: 196 trades, WR=39.3%, PF=1.78, +77R, MaxDD=12.6%**
 
+**16 USDC Dual-Mode Profiles (ids 18-33)** — Optimized library for Binance Isolated Margin:
+- **Grid winner**: Bull RR=4.0, Bear RR=2.0 (grid: 3×2×2=12 combos per pair)
+- **wyckoff_lookback**: 16 for pairs with ≥80K candles, 14 for shorter-history pairs
+- **Simulation validation**: All 16 approved for live | WR 68-79% | PF 7.5-13.5 | MaxDD 0.5-1.6%
+- **Ranking by MaxDD**: DOGEUSDC #1 (PF=13.5, DD=0.5%), ATOMUSDC #2, LTCUSDC #3 ... ETHUSDC #16 (DD=1.6%)
+- **DB critical fix**: `idx_mc_sym_tf_ts` index on `marketcandle` (3.5M rows) → queries 4500x faster (4.5s → 0.001s)
+- **Fib tolerance**: Updated from 5% to 8% in `ta_engine.py` for better entry detection in trending markets
+- **Simulation update**: `_simulate_outcomes` now uses `take_profit_rr` from profile params for accurate RR-based metrics
+
+Data imported: 16 USDC pairs × 3 TF (15m/1h/4h) — BTCUSDC 124K candles, etc. Total ~3.5M candles in DB.
+
 ### OpenClaw Reference Layer (`src/openclaw/`)
 
 A parallel Python package in `src/openclaw/` mirrors the same skill set with more sophisticated implementations (real Binance kline fetching with synthetic fallback, slippage/fee simulation in paper trades, walk-forward backtesting). This is the "engine" layer; the `backend/app/services/` layer is the web-adapted version.

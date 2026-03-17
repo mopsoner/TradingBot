@@ -231,6 +231,8 @@ def init_db() -> None:
         with engine.connect() as conn:
             conn.execute(text("PRAGMA journal_mode=WAL"))
             conn.execute(text("PRAGMA busy_timeout=30000"))
+            conn.execute(text("PRAGMA synchronous=NORMAL"))
+            conn.execute(text("PRAGMA cache_size=-32000"))
             conn.commit()
     except Exception as exc:
         logger.warning("WAL pragma failed (non-fatal): %s", exc)
@@ -238,6 +240,21 @@ def init_db() -> None:
     _apply_migrations()
     _patch_profiles_missing_fields()
     _seed_default_profile()
+    # Create performance indexes for backtest walk-forward queries
+    try:
+        with engine.connect() as conn:
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_mc_sym_tf_ts "
+                "ON marketcandle(symbol, timeframe, timestamp)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_signal_run_id "
+                "ON signal(pipeline_run_id)"
+            ))
+            conn.commit()
+        logger.info("DB indexes verified/created")
+    except Exception as exc:
+        logger.warning("Index creation failed (non-fatal): %s", exc)
 
 
 def get_session() -> Session:

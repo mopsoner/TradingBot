@@ -1280,7 +1280,10 @@ def _simulate_outcomes(profile: "StrategyProfile | None", symbol: str, timeframe
     n_trades = int(tf_base * (1 + bos * 0.6) * (horizon_days / 30) * (1 + (n_fibs - 1) * 0.12) * filter_factor)
     n_trades = max(bt.min_trades, min(bt.max_trades, n_trades))
 
-    avg_win  = bt.avg_win_r  + disp * 0.6 + n_fibs * 0.15
+    # Use take_profit_rr from params (top-level or bull_config) for realistic avg_win
+    _bull_rr = float((params.get("bull_config") or {}).get("take_profit_rr", bt.avg_win_r))
+    _raw_rr  = float(params.get("take_profit_rr", _bull_rr))
+    avg_win  = _raw_rr * 0.80 + n_fibs * 0.10   # 80% efficiency + Fib bonus
     if fib_split: avg_win += 0.12   # 0.786 catches deeper retests with better R
     avg_loss = bt.avg_loss_r
 
@@ -1358,7 +1361,7 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
         return {"ok": False, "reason": f"Aucune bougie 4H trouvée pour {primary_symbol} sur la période sélectionnée. Importez d'abord les données historiques."}
 
     # Sous-échantillonnage : max 300 steps pour ne pas bloquer (1 step = 4H)
-    MAX_STEPS = 300
+    MAX_STEPS = 100
     step = max(1, len(ts_list) // MAX_STEPS)
     sampled_ts = ts_list[::step]
     step_count = len(sampled_ts)
@@ -1416,7 +1419,7 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
                     all_sig_ids.append(sig.id)
                     if sig.entry_price and sig.sl_price and sig.tp_price:
                         # Load next 96 × 5m candles after cutoff (= up to 8 hours)
-                        future_5m = s.exec(
+                        future_candles = s.exec(
                             select(MarketCandle)
                             .where(
                                 MarketCandle.symbol == sig.symbol,
@@ -1426,8 +1429,20 @@ def run_backtest_for_symbol(req: BacktestRunRequest) -> dict:
                             .order_by(MarketCandle.timestamp)
                             .limit(96)
                         ).all()
+                        # Fallback to 15m when no 5m data available (32×15m ≈ 8h)
+                        if not future_candles:
+                            future_candles = s.exec(
+                                select(MarketCandle)
+                                .where(
+                                    MarketCandle.symbol == sig.symbol,
+                                    MarketCandle.timeframe == "15m",
+                                    MarketCandle.timestamp > cutoff_ts,
+                                )
+                                .order_by(MarketCandle.timestamp)
+                                .limit(32)
+                            ).all()
                         outcome = ta.resolve_outcome(
-                            future_5m,
+                            future_candles,
                             sig.direction or "LONG",
                             sig.tp_price,
                             sig.sl_price,

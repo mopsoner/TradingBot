@@ -388,7 +388,7 @@ def detect_fibonacci(
             best_dist = d
             best_fib  = fib
 
-    fib_ok = best_dist < 0.05  # within 5 percentage points of the level
+    fib_ok = best_dist < 0.08  # within 8 percentage points of the level (SMC standard)
     return round(best_fib, 3), fib_ok
 
 
