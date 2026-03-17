@@ -553,6 +553,8 @@ def _run_replay(
     use_dual_mode: bool = False,
     dual_bull_config: dict | None = None,
     dual_bear_config: dict | None = None,
+    # --- Step 0 liquidity mode ---
+    step0_liq_mode: str = "4h_42bars",   # "4h_42bars" | "1h_24h"
 ) -> None:
     _persist_running(session)
     try:
@@ -655,8 +657,9 @@ def _run_replay(
             idx_4h = bisect_right(ts_4h, ts_now) - 1
             idx_1h = bisect_right(ts_1h, ts_now) - 1
 
-            # Fenêtre Step 0 (EQH/EQL) — par défaut 4H 1 semaine ; 1H 24h pour FETUSDT
-            if session.symbol == "FETUSDT":
+            # Fenêtre Step 0 (EQH/EQL) — mode configurable par profil
+            # "1h_24h" : 1H × 24 bars (altcoins) | "4h_42bars" : 4H × 42 bars (large caps)
+            if step0_liq_mode == "1h_24h":
                 _LIQ_N = 24
                 window_4h_liq = candles_1h[max(0, idx_1h - _LIQ_N): idx_1h]
             else:
@@ -992,6 +995,8 @@ class ReplayManager:
         use_dual_mode: bool = False,
         dual_bull_config: dict | None = None,
         dual_bear_config: dict | None = None,
+        # --- Step 0 liquidity mode ---
+        step0_liq_mode: str = "4h_42bars",
     ) -> str | None:
         if fib_levels is None:
             fib_levels = [0.5, 0.618, 0.705]
@@ -1047,6 +1052,7 @@ class ReplayManager:
                 use_dual_mode=use_dual_mode,
                 dual_bull_config=dual_bull_config,
                 dual_bear_config=dual_bear_config,
+                step0_liq_mode=step0_liq_mode,
             ),
             daemon=True,
             name=f"replay-{session_id[:8]}",

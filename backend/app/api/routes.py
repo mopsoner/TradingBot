@@ -1663,6 +1663,7 @@ def replay_start(req: ReplayStartRequest) -> dict:
     use_dual_mode            = False
     dual_bull_config         = None
     dual_bear_config         = None
+    step0_liq_mode           = "4h_42bars"
 
     if req.profile_id:
         with Session(engine) as s:
@@ -1696,6 +1697,7 @@ def replay_start(req: ReplayStartRequest) -> dict:
                     use_dual_mode              = bool(params.get("use_dual_mode", False))
                     dual_bull_config           = params.get("bull_config", None)
                     dual_bear_config           = params.get("bear_config", None)
+                    step0_liq_mode             = str(params.get("step0_liq_mode", "4h_42bars"))
                     if req.htf_long_min_bias is None:
                         htf_long_min_bias = params.get("htf_long_min_bias", htf_long_min_bias)
                     if req.htf_short_min_bias is None:
@@ -1740,6 +1742,7 @@ def replay_start(req: ReplayStartRequest) -> dict:
         use_dual_mode=use_dual_mode,
         dual_bull_config=dual_bull_config,
         dual_bear_config=dual_bear_config,
+        step0_liq_mode=step0_liq_mode,
     )
     if session_id is None:
         return {"ok": False, "reason": "Trop de replays en cours. Réessayez dans quelques instants."}
@@ -2513,11 +2516,12 @@ def _run_live_scan(
                     s.commit()
                 continue
 
-            # ── Step 0 — Zone de liquidité EQH/EQL (FET:1H·24h, autres:4H·42 bars) ──
+            # ── Step 0 — Zone de liquidité EQH/EQL (mode configurable par profil) ──
             if not silent:
                 _pipeline[symbol]["steps"][0]["status"] = "checking"
                 time.sleep(rng.uniform(0.05, 0.12))
-            if symbol == "FETUSDT":
+            _s0_mode = profile_params.get("step0_liq_mode", "4h_42bars") if profile_params else "4h_42bars"
+            if _s0_mode == "1h_24h":
                 _liq_window = candles_1h[-24:]
                 _liq_lb = 24
             else:
