@@ -153,44 +153,53 @@ def detect_target_liquidity(
     candles_15m: list,
     direction: str,
     entry_price: float,
+    sl_distance: float = 0.0,
+    rr_ratio: float = 2.0,
     tolerance: float = 0.004,
     min_cluster: int = 2,
-    lookback: int = 100,
+    lookback: int = 200,
 ) -> tuple[float, bool, str]:
     """
-    Cherche la zone de liquidité CIBLE : le cluster EQH (pour LONG) ou EQL (pour SHORT)
-    le plus proche au-delà de l'entry, vers lequel le prix est susceptible de courir.
+    Cherche la zone de liquidité CIBLE distante : cluster EQH (LONG) ou EQL (SHORT)
+    situé AU-DELÀ du TP RR-based courant — pour étendre le TP vers la vraie liquidité.
 
     Logique SMC :
-      - LONG  (Spring) : les EQH au-dessus de l'entry = sell-side liquidity cible
-      - SHORT (UTAD)   : les EQL en-dessous de l'entry = buy-side liquidity cible
+      - LONG  (Spring) : EQH AU-DELÀ de entry + sl_distance × rr_ratio
+      - SHORT (UTAD)   : EQL EN-DEÇÀ de entry − sl_distance × rr_ratio
+
+    Si sl_distance = 0, la distance minimum = 1.0 % de l'entry (fallback permissif).
 
     Paramètres :
-      tolerance   : écart max entre deux pivots pour former un cluster (0.4% par défaut)
-      min_cluster : nombre minimum de pivots pour valider un cluster (2)
-      lookback    : nombre de bougies analysées (100 = ~25h sur 15m)
+      sl_distance : distance SL depuis l'entry (en prix) — sert à calculer le seuil min
+      rr_ratio    : RR minimum configuré — le cluster doit être au-delà de ce niveau
+      tolerance   : tolérance de regroupement des pivots (0.4 % par défaut)
+      min_cluster : minimum de pivots pour valider un cluster (2)
+      lookback    : bougies analysées (200 = ~50h sur 15m)
 
-    Retourne (price, found, label) :
-      price  → prix moyen du cluster cible
-      found  → True si un cluster valide a été trouvé
-      label  → description lisible ("EQH cluster @ X" / "EQL cluster @ X")
+    Retourne (price, found, label).
     """
     if len(candles_15m) < 10 or entry_price <= 0:
         return 0.0, False, "no_data"
+
+    # Seuil minimum : le cluster doit être au-delà du TP RR-based actuel
+    if sl_distance > 0:
+        min_dist = sl_distance * rr_ratio
+    else:
+        min_dist = entry_price * 0.01  # fallback 1 %
 
     window = candles_15m[-lookback:] if len(candles_15m) > lookback else candles_15m
     highs, lows = swing_highs_lows(window, n=2)
 
     if direction == "LONG":
-        # Filtrer les swing highs AU-DESSUS de l'entry
-        candidates = [c.high for c in highs if c.high > entry_price * 1.001]
+        # Chercher uniquement AU-DELÀ du TP RR-based (plus loin que min_dist)
+        min_price = entry_price + min_dist
+        candidates = [c.high for c in highs if c.high > min_price]
         if len(candidates) < min_cluster:
-            return 0.0, False, "no_eqh_above"
+            return 0.0, False, "no_eqh_beyond_rr"
 
         # Trier du plus proche au plus loin
         candidates.sort()
 
-        # Chercher le premier cluster de min_cluster pivots proches (within tolerance)
         for i in range(len(candidates)):
             cluster = [candidates[i]]
             for j in range(i + 1, len(candidates)):
@@ -198,17 +207,18 @@ def detect_target_liquidity(
                     cluster.append(candidates[j])
             if len(cluster) >= min_cluster:
                 price = round(sum(cluster) / len(cluster), 6)
-                return price, True, f"EQH cluster @ {price:.4f} ({len(cluster)} pivots)"
+                dist_r = (price - entry_price) / sl_distance if sl_distance > 0 else 0
+                return price, True, f"EQH @ {price:.4f} ({dist_r:.1f}R, {len(cluster)} pivots)"
 
-        return 0.0, False, "no_eqh_cluster"
+        return 0.0, False, "no_eqh_cluster_beyond_rr"
 
     else:
-        # Filtrer les swing lows EN-DESSOUS de l'entry
-        candidates = [c.low for c in lows if c.low < entry_price * 0.999]
+        # Chercher uniquement EN-DEÇÀ du TP RR-based
+        max_price = entry_price - min_dist
+        candidates = [c.low for c in lows if c.low < max_price]
         if len(candidates) < min_cluster:
-            return 0.0, False, "no_eql_below"
+            return 0.0, False, "no_eql_beyond_rr"
 
-        # Trier du plus proche (plus grand) au plus loin (plus petit)
         candidates.sort(reverse=True)
 
         for i in range(len(candidates)):
@@ -218,9 +228,10 @@ def detect_target_liquidity(
                     cluster.append(candidates[j])
             if len(cluster) >= min_cluster:
                 price = round(sum(cluster) / len(cluster), 6)
-                return price, True, f"EQL cluster @ {price:.4f} ({len(cluster)} pivots)"
+                dist_r = (entry_price - price) / sl_distance if sl_distance > 0 else 0
+                return price, True, f"EQL @ {price:.4f} ({dist_r:.1f}R, {len(cluster)} pivots)"
 
-        return 0.0, False, "no_eql_cluster"
+        return 0.0, False, "no_eql_cluster_beyond_rr"
 
 
 # ── Step 1: Sweep detection ───────────────────────────────────────────────────

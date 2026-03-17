@@ -151,7 +151,11 @@ class ReplaySession:
                 closed.append(pos)
                 last_result = "SL"
             elif hit_tp:
-                self._record_trade_close(pos, "TP", pos["rr_ratio"])
+                # R réel = distance TP→entry / distance entry→SL
+                # (peut dépasser rr_ratio configuré si TP ancré sur un EQH/EQL plus loin)
+                _sl_dist = abs(pos["entry"] - pos["sl"])
+                _actual_r = abs(pos["tp"] - pos["entry"]) / _sl_dist if _sl_dist > 0 else pos["rr_ratio"]
+                self._record_trade_close(pos, "TP", _actual_r)
                 closed.append(pos)
                 if last_result != "SL":
                     last_result = "TP"
@@ -183,6 +187,7 @@ class ReplaySession:
         rsi4h_value: float = float("nan"), rsi4h_direction: str = "",
         sweep_price: float = 0.0,
         window_15m: list | None = None,
+        window_15m_wide: list | None = None,
     ) -> None:
         entry = candle.close
         # Minimum SL buffer: 0.5% of entry to avoid unrealistically tight stops
@@ -195,12 +200,15 @@ class ReplaySession:
             sl = min(sl_atr_based, sl_sweep, entry - min_sl_buffer)
             sl_distance = abs(entry - sl)
             tp_rr = entry + sl_distance * rr_ratio
-            # Ancrage SMC : TP sur le cluster EQH le plus proche au-dessus de l'entry
-            if window_15m:
+            # Ancrage SMC : cherche un cluster EQH AU-DELÀ du TP RR-based
+            # Utilise window_15m_wide (200 bougies) pour avoir assez d'historique
+            _buf = window_15m_wide or window_15m
+            if _buf:
                 tp_liq, liq_found, _ = ta.detect_target_liquidity(
-                    window_15m, "LONG", entry
+                    _buf, "LONG", entry,
+                    sl_distance=sl_distance, rr_ratio=rr_ratio,
                 )
-                tp = max(tp_rr, tp_liq) if liq_found and tp_liq > entry else tp_rr
+                tp = max(tp_rr, tp_liq) if liq_found and tp_liq > tp_rr else tp_rr
             else:
                 tp = tp_rr
         else:
@@ -210,12 +218,14 @@ class ReplaySession:
             sl = max(sl_atr_based, sl_sweep, entry + min_sl_buffer)
             sl_distance = abs(sl - entry)
             tp_rr = entry - sl_distance * rr_ratio
-            # Ancrage SMC : TP sur le cluster EQL le plus proche en-dessous de l'entry
-            if window_15m:
+            # Ancrage SMC : cherche un cluster EQL AU-DELÀ du TP RR-based
+            _buf = window_15m_wide or window_15m
+            if _buf:
                 tp_liq, liq_found, _ = ta.detect_target_liquidity(
-                    window_15m, "SHORT", entry
+                    _buf, "SHORT", entry,
+                    sl_distance=sl_distance, rr_ratio=rr_ratio,
                 )
-                tp = min(tp_rr, tp_liq) if liq_found and tp_liq < entry else tp_rr
+                tp = min(tp_rr, tp_liq) if liq_found and tp_liq < tp_rr else tp_rr
             else:
                 tp = tp_rr
 
@@ -637,6 +647,9 @@ def _run_replay(
                 continue
 
             window_15m = candles_15m[pos_in_full - WINDOW_15M: pos_in_full]
+            # Buffer large (200 bougies ≈ 50h) réservé à la détection de liquidité cible TP
+            _WIDE = 200
+            window_15m_wide = candles_15m[max(0, pos_in_full - _WIDE): pos_in_full]
 
             ts_now = current_candle.timestamp
             idx_4h = bisect_right(ts_4h, ts_now) - 1
@@ -844,6 +857,7 @@ def _run_replay(
                     rsi4h_direction=rsi4h_dir,
                     sweep_price=_sweep_price,
                     window_15m=window_15m,
+                    window_15m_wide=window_15m_wide,
                 )
                 session._open_position(
                     current_candle, direction_15m, atr_val,
@@ -856,6 +870,7 @@ def _run_replay(
                     rsi4h_direction=rsi4h_dir,
                     sweep_price=_sweep_price,
                     window_15m=window_15m,
+                    window_15m_wide=window_15m_wide,
                 )
             else:
                 session._open_position(
@@ -868,6 +883,7 @@ def _run_replay(
                     rsi4h_direction=rsi4h_dir,
                     sweep_price=_sweep_price,
                     window_15m=window_15m,
+                    window_15m_wide=window_15m_wide,
                 )
             cooldown_bars = 6
 
