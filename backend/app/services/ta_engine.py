@@ -120,8 +120,9 @@ def detect_liquidity_zone(
         return "LOD", 0.0, False
 
     recent = candles_4h[-lookback:]
-    # n=2 : pivot confirmé par 2 bougies de chaque côté sur le 4H (±8h) — détecte plus de clusters
-    highs, lows = swing_highs_lows(recent, n=2) if len(recent) >= 7 else ([], [])
+    # n s'adapte à la taille de la fenêtre : n=2 standard, n=1 si fenêtre très courte (<7 bars)
+    _n = 2 if len(recent) >= 7 else 1
+    highs, lows = swing_highs_lows(recent, n=_n) if len(recent) >= 3 else ([], [])
 
     # Equal Highs — cherche le cluster le plus récent dans tout le lookback
     if len(highs) >= 2:

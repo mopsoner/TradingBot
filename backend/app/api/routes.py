@@ -2447,7 +2447,7 @@ def _run_live_scan(
                 _pipeline[sym]["completed_at"] = datetime.now(timezone.utc).isoformat()
 
         # ── Chargement des bougies réelles depuis la DB ───────────────────────
-        candles_4h  = _load_candles(symbol, "4h",   42, cutoff_ts)  # 1 semaine pour EQH/EQL Step 0
+        candles_4h  = _load_candles(symbol, "4h",    6, cutoff_ts)  # 24h pour EQH/EQL Step 0
         candles_1h  = _load_candles(symbol, "1h",   40, cutoff_ts)
         candles_15m = _load_candles(symbol, "15m",  80, cutoff_ts)
         candles_5m  = _load_candles(symbol, "5m",  50, cutoff_ts) if use_5m_refine else []
