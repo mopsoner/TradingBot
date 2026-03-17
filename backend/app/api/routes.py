@@ -703,6 +703,18 @@ def get_strategy_profiles() -> dict:
     return {"rows": [r.model_dump() for r in rows]}
 
 
+def _auto_save_config(label: str = "auto") -> None:
+    """Lance un export de snapshot en arrière-plan (non bloquant)."""
+    import threading
+    def _run():
+        try:
+            from backend.app.services.config_manager import export_snapshot
+            export_snapshot(label=label)
+        except Exception as exc:
+            logger.warning("Auto-save config failed: %s", exc)
+    threading.Thread(target=_run, daemon=True).start()
+
+
 @router.post("/strategy/profiles")
 def save_strategy_profile(payload: StrategyProfileIn) -> dict:
     with Session(engine) as s:
@@ -720,6 +732,7 @@ def save_strategy_profile(payload: StrategyProfileIn) -> dict:
         s.add(Log(level="INFO", message=f"Strategy profile saved: {payload.name} ({payload.mode}) {payload.symbol} {payload.direction}"))
         s.commit()
         s.refresh(profile)
+    _auto_save_config(label=f"create-{payload.name[:20]}")
     return {"ok": True, "profile": profile.model_dump()}
 
 
@@ -740,7 +753,59 @@ def update_strategy_profile(profile_id: int, payload: StrategyProfileIn) -> dict
         s.add(Log(level="INFO", message=f"Strategy profile updated: {payload.name} ({payload.mode}) {payload.symbol} {payload.direction}"))
         s.commit()
         s.refresh(profile)
+    _auto_save_config(label=f"update-{payload.name[:20]}")
     return {"ok": True, "profile": profile.model_dump()}
+
+
+# ── Config Snapshot Endpoints ────────────────────────────────────────────────────
+
+@router.get("/config/snapshots")
+def list_config_snapshots() -> dict:
+    """Liste tous les snapshots de configuration disponibles."""
+    from backend.app.services.config_manager import list_snapshots, LATEST_PATH
+    snaps = list_snapshots()
+    return {
+        "ok": True,
+        "latest": str(LATEST_PATH),
+        "latest_exists": LATEST_PATH.exists(),
+        "snapshots": snaps,
+    }
+
+
+class SnapshotRequest(BaseModel):
+    label: str = Field("", description="Label libre pour ce snapshot")
+
+
+@router.post("/config/snapshot")
+def create_config_snapshot(req: SnapshotRequest = SnapshotRequest()) -> dict:
+    """Crée manuellement un snapshot versionné de tous les profils."""
+    from backend.app.services.config_manager import export_snapshot
+    try:
+        path = export_snapshot(label=req.label or None)
+        return {"ok": True, "path": path, "message": f"Snapshot créé : {path}"}
+    except Exception as exc:
+        return {"ok": False, "reason": str(exc)}
+
+
+class RestoreRequest(BaseModel):
+    filename: str = Field("", description="Nom du fichier snapshot (dans configs/snapshots/). Vide = profiles_latest.json")
+
+
+@router.post("/config/restore")
+def restore_config_snapshot(req: RestoreRequest = RestoreRequest()) -> dict:
+    """Restaure les profils depuis un snapshot JSON."""
+    from backend.app.services.config_manager import import_snapshot, LATEST_PATH, SNAP_DIR
+    try:
+        if req.filename:
+            path = SNAP_DIR / req.filename
+        else:
+            path = LATEST_PATH
+        result = import_snapshot(path)
+        return {"ok": True, **result}
+    except FileNotFoundError as exc:
+        return {"ok": False, "reason": str(exc)}
+    except Exception as exc:
+        return {"ok": False, "reason": str(exc)}
 
 
 @router.delete("/strategy/profiles/{profile_id}")
