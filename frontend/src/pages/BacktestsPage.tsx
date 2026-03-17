@@ -354,6 +354,10 @@ function HistoryRow({ r }: { r: BacktestResult }) {
     try { trades = JSON.parse(r.trades_json); } catch { /**/ }
   }
 
+  const wins = trades.filter(t => t.result === 'TP').length;
+  const losses = trades.filter(t => t.result === 'SL').length;
+  const totalR = trades.reduce((s, t) => s + (t.r_multiple || 0), 0);
+
   return (
     <>
       <tr
@@ -388,11 +392,70 @@ function HistoryRow({ r }: { r: BacktestResult }) {
           )}
         </td>
       </tr>
-      {expanded && trades.length > 0 && (
+
+      {expanded && (
         <tr>
-          <td colSpan={10} style={{ padding: 0, background: 'rgba(6,9,15,0.6)', borderTop: '1px solid rgba(59,130,246,0.15)' }}>
-            <div style={{ maxHeight: 300, overflowY: 'auto' }}>
-              <TradesTable trades={trades} />
+          <td colSpan={10} style={{ padding: 0, background: 'rgba(6,9,15,0.55)', borderTop: '1px solid rgba(59,130,246,0.2)', borderBottom: '1px solid rgba(59,130,246,0.1)' }}>
+            <div style={{ padding: '14px 16px' }}>
+
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+                {[
+                  { label: 'Win Rate', value: pct(r.win_rate), color: r.win_rate >= 0.5 ? '#22c55e' : r.win_rate >= 0.42 ? '#eab308' : '#ef4444' },
+                  { label: 'Profit Factor', value: num(r.profit_factor), color: r.profit_factor >= 1.5 ? '#22c55e' : r.profit_factor >= 1.1 ? '#eab308' : '#ef4444' },
+                  { label: 'Max Drawdown', value: pct(r.drawdown), color: r.drawdown <= 0.1 ? '#22c55e' : r.drawdown <= 0.2 ? '#eab308' : '#ef4444' },
+                  { label: 'Expectancy', value: num(r.expectancy, 4) + 'R', color: r.expectancy > 0 ? '#22c55e' : '#ef4444' },
+                  { label: 'Total R', value: (r.r_multiple > 0 ? '+' : '') + num(r.r_multiple) + 'R', color: r.r_multiple > 0 ? '#22c55e' : '#ef4444' },
+                  { label: 'Signaux', value: String(r.signal_count ?? '—'), color: 'var(--text-secondary)' },
+                  ...(trades.length > 0 ? [
+                    { label: 'Trades', value: String(trades.length), color: 'var(--text-secondary)' },
+                    { label: 'Wins / Losses', value: `${wins} / ${losses}`, color: wins > losses ? '#22c55e' : '#eab308' },
+                    { label: 'Total R (trades)', value: (totalR > 0 ? '+' : '') + totalR.toFixed(2) + 'R', color: totalR > 0 ? '#22c55e' : '#ef4444' },
+                  ] : []),
+                ].map(m => (
+                  <div key={m.label} style={{
+                    padding: '8px 12px', borderRadius: 6, minWidth: 90,
+                    background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)',
+                  }}>
+                    <div style={{ fontSize: 9, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>{m.label}</div>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: m.color, fontFamily: 'monospace' }}>{m.value}</div>
+                  </div>
+                ))}
+              </div>
+
+              {r.strategy_version && (
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 10 }}>
+                  Stratégie : <span style={{ color: 'var(--text-secondary)' }}>{r.strategy_version}</span>
+                  {r.pipeline_run_id && <span style={{ marginLeft: 12 }}>Run ID : <span style={{ fontFamily: 'monospace', fontSize: 9 }}>{r.pipeline_run_id.slice(0, 12)}…</span></span>}
+                </div>
+              )}
+
+              {trades.length > 0 ? (
+                <div style={{
+                  background: 'rgba(0,0,0,0.3)', borderRadius: 8,
+                  border: '1px solid rgba(255,255,255,0.06)', overflow: 'hidden',
+                }}>
+                  <div style={{ padding: '8px 12px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span>Trades ({trades.length})</span>
+                    <span style={{ fontSize: 10, color: '#22c55e' }}>{wins}W</span>
+                    <span style={{ fontSize: 10, color: '#ef4444' }}>{losses}L</span>
+                    <span style={{ fontSize: 10, color: totalR > 0 ? '#22c55e' : '#ef4444', marginLeft: 4 }}>
+                      {totalR > 0 ? '+' : ''}{totalR.toFixed(2)}R total
+                    </span>
+                  </div>
+                  <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+                    <TradesTable trades={trades} />
+                  </div>
+                </div>
+              ) : (
+                <div style={{
+                  padding: '12px 14px', borderRadius: 6, fontSize: 11,
+                  background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)',
+                  color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 8,
+                }}>
+                  <span style={{ fontSize: 14 }}>ℹ️</span>
+                  <span>Détails de trades non disponibles — ce backtest (walk-forward) stocke uniquement les métriques agrégées. Lancez un <strong style={{ color: 'var(--text-secondary)' }}>Replay</strong> pour voir les trades individuels.</span>
+                </div>
+              )}
             </div>
           </td>
         </tr>
