@@ -2701,12 +2701,16 @@ def _run_live_scan(
             # ── Signal accepté — persistance DB + journal ────────────────────
             # Prix réels depuis les bougies : entrée = clôture dernière bougie 15m
             entry_price = round(base_price, 6)
-            # Stop : derrière le niveau de sweep (ATR-based, 2% min)
+            # Stop : ancré sur le sweep_price (wick UTAD/Spring) + 1×ATR, au moins 1.5×ATR depuis entry
             atr_val_15m = ta.atr(candles_15m, 14) if candles_15m else abs(base_price * 0.02)
             if direction == "LONG":
-                stop_price = round(min(sweep_price - atr_val_15m * 0.5, entry_price * 0.98), 6)
+                sl_sweep = sweep_price - atr_val_15m * 1.0
+                sl_atr = entry_price - atr_val_15m * 1.5
+                stop_price = round(min(sl_sweep, sl_atr, entry_price * 0.995), 6)
             else:
-                stop_price = round(max(sweep_price + atr_val_15m * 0.5, entry_price * 1.02), 6)
+                sl_sweep = sweep_price + atr_val_15m * 1.0
+                sl_atr = entry_price + atr_val_15m * 1.5
+                stop_price = round(max(sl_sweep, sl_atr, entry_price * 1.005), 6)
             risk_r = max(abs(entry_price - stop_price), entry_price * 0.005)
             targets_str = ", ".join(
                 str(round(entry_price + t * risk_r * (1 if direction == "LONG" else -1), 2))

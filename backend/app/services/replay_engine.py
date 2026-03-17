@@ -124,8 +124,10 @@ class ReplaySession:
     def timeframe(self) -> str:
         return "4h/1h/15m"
 
-    def _check_open_positions(self, candle: CandleData) -> None:
+    def _check_open_positions(self, candle: CandleData) -> str | None:
+        """Close positions that hit SL or TP. Returns 'SL', 'TP', or None."""
         closed = []
+        last_result: str | None = None
         for pos in self.open_positions:
             direction = pos["direction"]
             sl = pos["sl"]
@@ -147,12 +149,16 @@ class ReplaySession:
             if hit_sl:
                 self._record_trade_close(pos, "SL", -1.0)
                 closed.append(pos)
+                last_result = "SL"
             elif hit_tp:
                 self._record_trade_close(pos, "TP", pos["rr_ratio"])
                 closed.append(pos)
+                if last_result != "SL":
+                    last_result = "TP"
 
         for c in closed:
             self.open_positions.remove(c)
+        return last_result
 
     def _record_trade_close(self, pos: dict, result: str, r_multiple: float) -> None:
         size_mult = pos.get("size_mult", 1.0)
@@ -175,13 +181,20 @@ class ReplaySession:
         htf_bias: str, tf_1h: str, rr_ratio: float = 2.0,
         sl_atr_mult: float = 1.5, size_mult: float = 1.0,
         rsi4h_value: float = float("nan"), rsi4h_direction: str = "",
+        sweep_price: float = 0.0,
     ) -> None:
         entry = candle.close
         if direction == "LONG":
-            sl = entry - atr * sl_atr_mult
+            # SL must be BELOW the Spring wick — anchored on sweep_price (the spike low)
+            sl_atr_based = entry - atr * sl_atr_mult
+            sl_sweep = (sweep_price - atr * 1.0) if sweep_price > 0 else sl_atr_based
+            sl = min(sl_atr_based, sl_sweep)
             tp = entry + atr * sl_atr_mult * rr_ratio
         else:
-            sl = entry + atr * sl_atr_mult
+            # SL must be ABOVE the UTAD wick — anchored on sweep_price (the spike high)
+            sl_atr_based = entry + atr * sl_atr_mult
+            sl_sweep = (sweep_price + atr * 1.0) if sweep_price > 0 else sl_atr_based
+            sl = max(sl_atr_based, sl_sweep)
             tp = entry - atr * sl_atr_mult * rr_ratio
 
         pos = {
@@ -431,7 +444,7 @@ def _get_weekly_bias(
         return cur_close < sma10 and cur_close < close_4w_ago
 
 
-MAX_CONCURRENT_REPLAYS = 3
+MAX_CONCURRENT_REPLAYS = 17
 
 
 def _persist_running(session: ReplaySession) -> None:
@@ -580,7 +593,9 @@ def _run_replay(
             with session._lock:
                 session.candles_processed = idx + 1
 
-            session._check_open_positions(current_candle)
+            close_result = session._check_open_positions(current_candle)
+            if close_result == "SL":
+                cooldown_bars = max(cooldown_bars, 12)
 
             if cooldown_bars > 0:
                 cooldown_bars -= 1
@@ -805,6 +820,7 @@ def _run_replay(
                     size_mult=0.5,
                     rsi4h_value=rsi4h_val,
                     rsi4h_direction=rsi4h_dir,
+                    sweep_price=_sweep_price,
                 )
                 session._open_position(
                     current_candle, direction_15m, atr_val,
@@ -815,6 +831,7 @@ def _run_replay(
                     size_mult=0.5,
                     rsi4h_value=rsi4h_val,
                     rsi4h_direction=rsi4h_dir,
+                    sweep_price=_sweep_price,
                 )
             else:
                 session._open_position(
@@ -825,8 +842,9 @@ def _run_replay(
                     sl_atr_mult=eff_sl_atr_mult,
                     rsi4h_value=rsi4h_val,
                     rsi4h_direction=rsi4h_dir,
+                    sweep_price=_sweep_price,
                 )
-            cooldown_bars = 4
+            cooldown_bars = 6
 
         # Merge local rejection counters into session
         with session._lock:
