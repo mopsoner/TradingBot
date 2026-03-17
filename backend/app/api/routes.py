@@ -2513,12 +2513,18 @@ def _run_live_scan(
                     s.commit()
                 continue
 
-            # ── Step 0 — Zone de liquidité EQH/EQL sur 1H (lookback 24h) ──
+            # ── Step 0 — Zone de liquidité EQH/EQL (FET:1H·24h, autres:4H·42 bars) ──
             if not silent:
                 _pipeline[symbol]["steps"][0]["status"] = "checking"
                 time.sleep(rng.uniform(0.05, 0.12))
+            if symbol == "FETUSDT":
+                _liq_window = candles_1h[-24:]
+                _liq_lb = 24
+            else:
+                _liq_window = candles_4h[-42:]
+                _liq_lb = 42
             zone_type, zone_price_detected, is_high_zone = ta.detect_liquidity_zone(
-                candles_1h[-24:], lookback=24, tolerance=0.005,
+                _liq_window, lookback=_liq_lb, tolerance=0.005,
             )
             liq_ok = zone_price_detected > 0 and bool(zone_type)
             if not silent:
