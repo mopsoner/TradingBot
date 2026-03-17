@@ -675,6 +675,342 @@ function PairsRankingPanel() {
   );
 }
 
+const SIGNAL_MODES = ['Tous', 'backtest', 'research', 'paper', 'live'] as const;
+const SIGNAL_FILTERS = ['Tous', 'Acceptés', 'Rejetés'] as const;
+
+function SignauxPanel() {
+  const { data: profilesData } = useApi(() => api.strategyProfiles());
+  const [collapsed, setCollapsed] = useState(true);
+  const [symbol, setSymbol] = useState('');
+  const [mode, setMode] = useState<string>('Tous');
+  const [filter, setFilter] = useState<string>('Tous');
+  const [page, setPage] = useState(0);
+  const limit = 50;
+
+  const allProfiles = Array.isArray((profilesData as { rows?: unknown[] })?.rows)
+    ? (profilesData as { rows: { name: string }[] }).rows
+    : [];
+  const symbolList = Array.from(new Set(
+    allProfiles
+      .map(p => { const m = p.name.match(/^([A-Z]+USDC|[A-Z]+USDT)/); return m ? m[1] : null; })
+      .filter(Boolean) as string[]
+  )).sort();
+
+  const params = [
+    `limit=${limit}`,
+    `offset=${page * limit}`,
+    symbol ? `symbol=${symbol}` : '',
+    mode !== 'Tous' ? `mode=${mode}` : '',
+    filter === 'Acceptés' ? 'accepted=true' : filter === 'Rejetés' ? 'accepted=false' : '',
+  ].filter(Boolean).join('&');
+
+  const { data, reload: reloadSig } = useApi(
+    () => (collapsed ? Promise.resolve({ total: 0, rows: [] }) : api.signals(`?${params}`)),
+    [collapsed, params]
+  );
+  const signals: Signal[] = (data?.rows ?? []) as Signal[];
+  const total: number = (data?.total ?? 0) as number;
+
+  const dirColor = (d?: string | null) => d === 'LONG' ? '#22c55e' : d === 'SHORT' ? '#ef4444' : 'var(--text-muted)';
+  const outcomeColor = (o?: string | null) => o === 'win' ? '#22c55e' : o === 'loss' ? '#ef4444' : 'var(--text-muted)';
+
+  return (
+    <div style={{
+      background: 'var(--bg-card)', border: '1px solid rgba(139,92,246,0.2)',
+      borderRadius: 10, marginBottom: 16, overflow: 'hidden',
+    }}>
+      <div
+        onClick={() => { setCollapsed(c => !c); }}
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '13px 18px', cursor: 'pointer', background: 'rgba(139,92,246,0.04)',
+          borderBottom: collapsed ? 'none' : '1px solid rgba(139,92,246,0.12)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-primary)' }}>Signaux</span>
+          {!collapsed && total > 0 && (
+            <span style={{
+              fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4,
+              background: 'rgba(139,92,246,0.12)', color: '#a78bfa',
+              border: '1px solid rgba(139,92,246,0.3)',
+            }}>{total.toLocaleString()} total</span>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {!collapsed && (
+            <button onClick={e => { e.stopPropagation(); reloadSig(); }} style={{
+              padding: '3px 10px', borderRadius: 4, fontSize: 11, cursor: 'pointer',
+              background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.25)',
+              color: '#a78bfa', fontWeight: 600,
+            }}>Actualiser</button>
+          )}
+          <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{collapsed ? '▸' : '▾'}</span>
+        </div>
+      </div>
+
+      {!collapsed && (
+        <div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', padding: '12px 14px', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+            <select value={symbol} onChange={e => { setSymbol(e.target.value); setPage(0); }} style={{
+              background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)',
+              borderRadius: 5, color: 'var(--text-primary)', fontSize: 11, padding: '5px 8px',
+            }}>
+              <option value=''>Tous les symboles</option>
+              {symbolList.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <div style={{ display: 'flex', gap: 0, borderRadius: 5, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)' }}>
+              {SIGNAL_MODES.map(m => (
+                <button key={m} onClick={() => { setMode(m); setPage(0); }} style={{
+                  padding: '5px 10px', fontSize: 11, cursor: 'pointer', border: 'none',
+                  background: mode === m ? 'rgba(139,92,246,0.25)' : 'rgba(255,255,255,0.04)',
+                  color: mode === m ? '#a78bfa' : 'var(--text-muted)', fontWeight: mode === m ? 700 : 400,
+                }}>{m}</button>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 0, borderRadius: 5, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)' }}>
+              {SIGNAL_FILTERS.map(f => (
+                <button key={f} onClick={() => { setFilter(f); setPage(0); }} style={{
+                  padding: '5px 10px', fontSize: 11, cursor: 'pointer', border: 'none',
+                  background: filter === f ? 'rgba(139,92,246,0.2)' : 'rgba(255,255,255,0.04)',
+                  color: filter === f ? '#a78bfa' : 'var(--text-muted)', fontWeight: filter === f ? 700 : 400,
+                }}>{f}</button>
+              ))}
+            </div>
+          </div>
+
+          {signals.length === 0 ? (
+            <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>
+              Aucun signal pour ces filtres.
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto', maxHeight: 380, overflowY: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
+                  <tr style={{ background: 'rgba(20,20,35,0.97)', color: 'var(--text-muted)' }}>
+                    {['Date', 'Symbole', 'TF', 'Dir', 'Setup', 'Wyckoff', 'Mode', 'Statut', 'Raison rejet', 'BT Résultat'].map(h => (
+                      <th key={h} style={{ padding: '7px 8px', textAlign: 'left', fontWeight: 500, whiteSpace: 'nowrap' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {signals.map(s => (
+                    <tr key={s.id} style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+                      <td style={{ padding: '6px 8px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                        {new Date(s.timestamp).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                      </td>
+                      <td style={{ padding: '6px 8px', fontWeight: 700, color: 'var(--text-primary)' }}>{s.symbol}</td>
+                      <td style={{ padding: '6px 8px', color: 'var(--text-muted)' }}>{s.timeframe}</td>
+                      <td style={{ padding: '6px 8px', color: dirColor(s.direction), fontWeight: 700 }}>{s.direction || '—'}</td>
+                      <td style={{ padding: '6px 8px', color: 'var(--text-secondary)', maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {s.setup_type || '—'}
+                      </td>
+                      <td style={{ padding: '6px 8px', color: 'var(--text-secondary)', maxWidth: 90, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {s.wyckoff_event || '—'}
+                      </td>
+                      <td style={{ padding: '6px 8px' }}>
+                        {s.mode && (
+                          <span style={{
+                            fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 3,
+                            background: s.mode === 'backtest' ? 'rgba(139,92,246,0.15)' : s.mode === 'paper' ? 'rgba(234,179,8,0.12)' : s.mode === 'live' ? 'rgba(34,197,94,0.12)' : 'rgba(59,130,246,0.12)',
+                            color: s.mode === 'backtest' ? '#a78bfa' : s.mode === 'paper' ? '#eab308' : s.mode === 'live' ? '#22c55e' : '#60a5fa',
+                          }}>{s.mode}</span>
+                        )}
+                      </td>
+                      <td style={{ padding: '6px 8px' }}>
+                        <span style={{
+                          fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 3,
+                          background: s.accepted ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.1)',
+                          color: s.accepted ? '#22c55e' : '#f87171',
+                        }}>{s.accepted ? 'ACCEPTÉ' : 'REJETÉ'}</span>
+                      </td>
+                      <td style={{ padding: '6px 8px', color: '#f87171', fontSize: 10, maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {s.reject_reason || ''}
+                      </td>
+                      <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>
+                        {s.bt_outcome ? (
+                          <span style={{ color: outcomeColor(s.bt_outcome), fontWeight: 700 }}>
+                            {s.bt_outcome.toUpperCase()} {s.bt_r_multiple != null ? `${s.bt_r_multiple > 0 ? '+' : ''}${s.bt_r_multiple.toFixed(2)}R` : ''}
+                          </span>
+                        ) : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {total > limit && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, padding: '10px 14px', borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+              <button disabled={page === 0} onClick={() => setPage(p => p - 1)} style={{
+                padding: '4px 12px', borderRadius: 4, fontSize: 11, cursor: page === 0 ? 'default' : 'pointer',
+                background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)',
+                color: page === 0 ? 'var(--text-muted)' : 'var(--text-primary)', opacity: page === 0 ? 0.4 : 1,
+              }}>← Préc.</button>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                Page {page + 1} / {Math.ceil(total / limit)} · {total.toLocaleString()} signaux
+              </span>
+              <button disabled={(page + 1) * limit >= total} onClick={() => setPage(p => p + 1)} style={{
+                padding: '4px 12px', borderRadius: 4, fontSize: 11, cursor: (page + 1) * limit >= total ? 'default' : 'pointer',
+                background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)',
+                color: (page + 1) * limit >= total ? 'var(--text-muted)' : 'var(--text-primary)',
+                opacity: (page + 1) * limit >= total ? 0.4 : 1,
+              }}>Suiv. →</button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const TRADE_STATUSES = ['Tous', 'OPEN', 'CLOSED_WIN', 'CLOSED_LOSS'] as const;
+
+function TradesPanel() {
+  const [collapsed, setCollapsed] = useState(true);
+  const [status, setStatus] = useState<string>('Tous');
+  const [page, setPage] = useState(0);
+  const limit = 50;
+
+  const params = [
+    `limit=${limit}`,
+    `offset=${page * limit}`,
+    status !== 'Tous' ? `status=${status}` : '',
+  ].filter(Boolean).join('&');
+
+  const { data, reload: reloadTrades } = useApi(
+    () => (collapsed ? Promise.resolve({ total: 0, rows: [] }) : api.trades(`?${params}`)),
+    [collapsed, params]
+  );
+  const trades: Trade[] = (data?.rows ?? []) as Trade[];
+  const total: number = (data?.total ?? 0) as number;
+
+  const sideColor = (side: string) => side === 'LONG' || side === 'BUY' ? '#22c55e' : '#ef4444';
+  const statusColor = (st: string) =>
+    st === 'OPEN' ? '#60a5fa' : st === 'CLOSED_WIN' ? '#22c55e' : st === 'CLOSED_LOSS' ? '#ef4444' : 'var(--text-muted)';
+  const modeColor = (m: string) =>
+    m === 'live' ? '#22c55e' : m === 'paper' ? '#eab308' : '#a78bfa';
+
+  return (
+    <div style={{
+      background: 'var(--bg-card)', border: '1px solid rgba(34,197,94,0.18)',
+      borderRadius: 10, marginBottom: 16, overflow: 'hidden',
+    }}>
+      <div
+        onClick={() => setCollapsed(c => !c)}
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '13px 18px', cursor: 'pointer', background: 'rgba(34,197,94,0.03)',
+          borderBottom: collapsed ? 'none' : '1px solid rgba(34,197,94,0.1)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-primary)' }}>Trades</span>
+          {!collapsed && total > 0 && (
+            <span style={{
+              fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4,
+              background: 'rgba(34,197,94,0.1)', color: '#22c55e',
+              border: '1px solid rgba(34,197,94,0.25)',
+            }}>{total.toLocaleString()} total</span>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {!collapsed && (
+            <button onClick={e => { e.stopPropagation(); reloadTrades(); }} style={{
+              padding: '3px 10px', borderRadius: 4, fontSize: 11, cursor: 'pointer',
+              background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.2)',
+              color: '#22c55e', fontWeight: 600,
+            }}>Actualiser</button>
+          )}
+          <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{collapsed ? '▸' : '▾'}</span>
+        </div>
+      </div>
+
+      {!collapsed && (
+        <div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', padding: '12px 14px', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+            <div style={{ display: 'flex', gap: 0, borderRadius: 5, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)' }}>
+              {TRADE_STATUSES.map(s => (
+                <button key={s} onClick={() => { setStatus(s); setPage(0); }} style={{
+                  padding: '5px 12px', fontSize: 11, cursor: 'pointer', border: 'none',
+                  background: status === s ? 'rgba(34,197,94,0.2)' : 'rgba(255,255,255,0.04)',
+                  color: status === s ? '#22c55e' : 'var(--text-muted)', fontWeight: status === s ? 700 : 400,
+                }}>{s}</button>
+              ))}
+            </div>
+          </div>
+
+          {trades.length === 0 ? (
+            <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>
+              Aucun trade pour ce filtre.
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto', maxHeight: 380, overflowY: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
+                  <tr style={{ background: 'rgba(20,20,35,0.97)', color: 'var(--text-muted)' }}>
+                    {['Date', 'Symbole', 'Côté', 'Entry', 'Stop', 'Target', 'Statut', 'Mode'].map(h => (
+                      <th key={h} style={{ padding: '7px 8px', textAlign: 'left', fontWeight: 500, whiteSpace: 'nowrap' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {trades.map(t => (
+                    <tr key={t.id} style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+                      <td style={{ padding: '6px 8px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                        {new Date(t.timestamp).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                      </td>
+                      <td style={{ padding: '6px 8px', fontWeight: 700, color: 'var(--text-primary)' }}>{t.symbol}</td>
+                      <td style={{ padding: '6px 8px', color: sideColor(t.side), fontWeight: 700 }}>{t.side}</td>
+                      <td style={{ padding: '6px 8px', fontFamily: 'monospace', color: 'var(--text-secondary)' }}>{fmtPrice(t.entry)}</td>
+                      <td style={{ padding: '6px 8px', fontFamily: 'monospace', color: '#ef4444' }}>{fmtPrice(t.stop)}</td>
+                      <td style={{ padding: '6px 8px', fontFamily: 'monospace', color: '#22c55e' }}>{fmtPrice(t.target)}</td>
+                      <td style={{ padding: '6px 8px' }}>
+                        <span style={{
+                          fontSize: 9, fontWeight: 700, padding: '1px 6px', borderRadius: 3,
+                          background: `${statusColor(t.status)}18`,
+                          color: statusColor(t.status),
+                          border: `1px solid ${statusColor(t.status)}35`,
+                        }}>{t.status}</span>
+                      </td>
+                      <td style={{ padding: '6px 8px' }}>
+                        <span style={{
+                          fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 3,
+                          background: `${modeColor(t.mode)}18`, color: modeColor(t.mode),
+                        }}>{t.mode}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {total > limit && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, padding: '10px 14px', borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+              <button disabled={page === 0} onClick={() => setPage(p => p - 1)} style={{
+                padding: '4px 12px', borderRadius: 4, fontSize: 11, cursor: page === 0 ? 'default' : 'pointer',
+                background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)',
+                color: page === 0 ? 'var(--text-muted)' : 'var(--text-primary)', opacity: page === 0 ? 0.4 : 1,
+              }}>← Préc.</button>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                Page {page + 1} / {Math.ceil(total / limit)} · {total.toLocaleString()} trades
+              </span>
+              <button disabled={(page + 1) * limit >= total} onClick={() => setPage(p => p + 1)} style={{
+                padding: '4px 12px', borderRadius: 4, fontSize: 11, cursor: (page + 1) * limit >= total ? 'default' : 'pointer',
+                background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)',
+                color: (page + 1) * limit >= total ? 'var(--text-muted)' : 'var(--text-primary)',
+                opacity: (page + 1) * limit >= total ? 0.4 : 1,
+              }}>Suiv. →</button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function BacktestsPage({ onNavigate: _onNavigate }: { onNavigate?: (page: AdminPage) => void } = {}) {
   const { data, reload } = useApi(() => api.backtests('?limit=100'));
   const rows: BacktestResult[] = (data?.rows ?? []) as BacktestResult[];
@@ -691,6 +1027,9 @@ export function BacktestsPage({ onNavigate: _onNavigate }: { onNavigate?: (page:
       <ReplayLauncher onCompleted={reload} />
 
       <PairsRankingPanel />
+
+      <SignauxPanel />
+      <TradesPanel />
 
       {rows.length === 0 ? (
         <div style={{ textAlign: 'center', padding: 48, color: 'var(--text-muted)', fontSize: 13 }}>
