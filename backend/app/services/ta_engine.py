@@ -102,44 +102,48 @@ def validate_htf_1h(candles_1h: list, structure_4h: str) -> bool:
 # ── Step 0: Liquidity zone (Equal Highs / Equal Lows / HOD / LOD) ────────────
 
 def detect_liquidity_zone(
-    candles_15m: list,
+    candles_4h: list,
     require_eqhl: bool = True,
+    lookback: int = 540,
+    tolerance: float = 0.005,
 ) -> tuple[str, float, bool]:
     """
+    Détecte une zone de liquidité (Equal Highs / Equal Lows) sur le 4H.
+    Remonte jusqu'à `lookback` bougies 4H en arrière (défaut 540 = ~3 mois).
+
     Returns (zone_type, zone_price, is_high_zone).
-    Looks for Equal Highs/Lows (within 0.2%).
-    If require_eqhl=True (strict Wyckoff): rejects the candle (zone_price=0) when
-    no EQH/EQL is found — forces the engine to wait for a proper liquidity cluster.
-    If require_eqhl=False: falls back to HOD/LOD when no EQH/EQL exists.
+    - require_eqhl=True  : strict Wyckoff — rejette si aucun cluster EQH/EQL trouvé.
+    - require_eqhl=False : fallback sur HOD/LOD si aucun cluster trouvé.
+    - tolerance          : écart max entre deux pivots pour être considérés "égaux" (défaut 0.3 %).
     """
-    if not candles_15m:
+    if not candles_4h:
         return "LOD", 0.0, False
 
-    recent = candles_15m[-30:]
+    recent = candles_4h[-lookback:]
+    # n=2 : pivot confirmé par 2 bougies de chaque côté sur le 4H (±8h) — détecte plus de clusters
     highs, lows = swing_highs_lows(recent, n=2) if len(recent) >= 7 else ([], [])
 
-    # Equal Highs
+    # Equal Highs — cherche le cluster le plus récent dans tout le lookback
     if len(highs) >= 2:
-        for i in range(len(highs) - 1):
+        for i in range(len(highs) - 2, -1, -1):
             ratio = abs(highs[-1].high - highs[i].high) / max(highs[i].high, 1e-9)
-            if ratio <= 0.002:
+            if ratio <= tolerance:
                 zone_price = (highs[-1].high + highs[i].high) / 2
                 return "Equal Highs", round(zone_price, 6), True
 
     # Equal Lows
     if len(lows) >= 2:
-        for i in range(len(lows) - 1):
+        for i in range(len(lows) - 2, -1, -1):
             ratio = abs(lows[-1].low - lows[i].low) / max(lows[i].low, 1e-9)
-            if ratio <= 0.002:
+            if ratio <= tolerance:
                 zone_price = (lows[-1].low + lows[i].low) / 2
                 return "Equal Lows", round(zone_price, 6), False
 
-    # No EQH/EQL found
+    # Aucun cluster EQH/EQL trouvé
     if require_eqhl:
-        # Strict Wyckoff mode: only trade from proper equal-level clusters
         return "None", 0.0, False
 
-    # HOD / LOD fallback (permissive mode only)
+    # HOD / LOD fallback (mode permissif uniquement)
     last = recent[-1]
     hod_c = max(recent, key=lambda c: c.high)
     lod_c = min(recent, key=lambda c: c.low)

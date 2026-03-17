@@ -2447,9 +2447,9 @@ def _run_live_scan(
                 _pipeline[sym]["completed_at"] = datetime.now(timezone.utc).isoformat()
 
         # ── Chargement des bougies réelles depuis la DB ───────────────────────
-        candles_4h  = _load_candles(symbol, "4h",  60, cutoff_ts)
-        candles_1h  = _load_candles(symbol, "1h",  40, cutoff_ts)
-        candles_15m = _load_candles(symbol, "15m", 80, cutoff_ts)
+        candles_4h  = _load_candles(symbol, "4h",  720, cutoff_ts)  # ~4 mois pour EQH/EQL Step 0
+        candles_1h  = _load_candles(symbol, "1h",   40, cutoff_ts)
+        candles_15m = _load_candles(symbol, "15m",  80, cutoff_ts)
         candles_5m  = _load_candles(symbol, "5m",  50, cutoff_ts) if use_5m_refine else []
 
         # Prix de référence réel pour ce symbole (dernière bougie 15m ou 5m si disponible)
@@ -2513,11 +2513,11 @@ def _run_live_scan(
                     s.commit()
                 continue
 
-            # ── Step 0 — Zone de liquidité (analyse bougies réelles 15m) ────────
+            # ── Step 0 — Zone de liquidité EQH/EQL sur 4H (lookback ~4 mois) ──
             if not silent:
                 _pipeline[symbol]["steps"][0]["status"] = "checking"
                 time.sleep(rng.uniform(0.05, 0.12))
-            zone_type, zone_price_detected, is_high_zone = ta.detect_liquidity_zone(candles_15m)
+            zone_type, zone_price_detected, is_high_zone = ta.detect_liquidity_zone(candles_4h)
             liq_ok = zone_price_detected > 0 and bool(zone_type)
             if not silent:
                 _set_step(symbol, 0, "passed" if liq_ok else "failed",
