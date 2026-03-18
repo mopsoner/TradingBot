@@ -1,0 +1,23 @@
+{
+  "symbols": ["BTCUSDT", "ETHUSDT"],
+  "intervals": ["1m", "5m", "15m"],
+  "poll_seconds": 30,
+  "lookback_limit": 150,
+  "rsi_period": 14,
+  "swing_window": 5,
+  "signals": {
+    "overbought": 70,
+    "oversold": 30,
+    "price_near_extreme_pct": 0.0025
+  },
+  "session_timezone_offset_hours": -4,
+  "binance_rest_base": "https://data-api.binance.vision",
+  "database_path": "data/signals.db",
+  "log_path": "logs/market.log",
+  "backtest": {
+    "symbol": "ETHUSDT",
+    "interval": "5m",
+    "history_limit": 500,
+    "holding_bars": 6
+  }
+}
