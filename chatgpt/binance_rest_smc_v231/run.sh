@@ -17,7 +17,6 @@ case "$MODE" in
     python runner.py --symbols
     ;;
   serve-ui)
-    cd ui
     python3 -m http.server 8080
     ;;
   *)

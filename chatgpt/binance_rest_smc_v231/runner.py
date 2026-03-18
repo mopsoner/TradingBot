@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -82,7 +82,7 @@ def scan_batch(client: BinanceRestClient, batch: list[str], cfg: dict[str, Any])
             signal = build_signal(symbol, candles_1m, candles_5m, candles_1h, cfg)
             results.append(signal)
             line = (
-                f"[{datetime.utcnow().isoformat()}] {signal['symbol']} session={signal['session']} "
+                f"[{datetime.now(timezone.utc).isoformat()}] {signal['symbol']} session={signal['session']} "
                 f"price={signal['price']:.6f} state={signal['state']} trigger={signal['trigger']} "
                 f"bias={signal['bias']} tp_zone={signal['tp_zone']} score={signal['score']}"
             )
@@ -90,7 +90,7 @@ def scan_batch(client: BinanceRestClient, batch: list[str], cfg: dict[str, Any])
             append_log(cfg["log_path"], line)
             save_signal(cfg["database_path"], signal)
         except Exception as exc:
-            line = f"[{datetime.utcnow().isoformat()}] ERROR symbol={symbol} err={exc}"
+            line = f"[{datetime.now(timezone.utc).isoformat()}] ERROR symbol={symbol} err={exc}"
             print(line)
             append_log(cfg["log_path"], line)
     return results
@@ -99,7 +99,7 @@ def scan_batch(client: BinanceRestClient, batch: list[str], cfg: dict[str, Any])
 def build_dashboard(all_symbols: list[str], batch: list[str], results: list[dict[str, Any]], cfg: dict[str, Any]) -> dict[str, Any]:
     top = sorted(results, key=lambda x: x.get("score", 0), reverse=True)
     return {
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
         "stats": {
             "all_symbols_count": len(all_symbols),
             "batch_count": len(batch),

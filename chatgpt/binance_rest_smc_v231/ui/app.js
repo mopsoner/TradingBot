@@ -1,5 +1,5 @@
 async function loadDashboard() {
-  const res = await fetch('../data/dashboard.json?_=' + Date.now());
+  const res = await fetch('/data/dashboard.json?_=' + Date.now());
   const data = await res.json();
 
   document.getElementById('meta').textContent = 'Dernière génération: ' + data.generated_at;
