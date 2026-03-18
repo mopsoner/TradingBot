@@ -4,6 +4,40 @@ from typing import Any
 from signals import closes, equal_highs_lows, near_level, recent_extremes, rsi, session_extremes, current_session
 
 
+def _pick_liquidity_target(
+    *,
+    bias: str,
+    eq: dict[str, bool],
+    asia_high: float | None,
+    asia_low: float | None,
+    london_high: float | None,
+    london_low: float | None,
+    high_5m: float,
+    low_5m: float,
+    high_1h: float,
+    low_1h: float,
+) -> dict[str, Any]:
+    if bias in {"bear_watch", "bear_confirm"}:
+        if eq["equal_highs"]:
+            return {"type": "equal_highs", "level": high_5m, "reason": "visible buy-side liquidity above equal highs"}
+        if london_high is not None:
+            return {"type": "london_high", "level": london_high, "reason": "london high as buy-side liquidity target"}
+        if asia_high is not None:
+            return {"type": "asia_high", "level": asia_high, "reason": "asia high as buy-side liquidity target"}
+        return {"type": "recent_high", "level": high_1h or high_5m, "reason": "recent visible high liquidity"}
+
+    if bias in {"bull_watch", "bull_confirm"}:
+        if eq["equal_lows"]:
+            return {"type": "equal_lows", "level": low_5m, "reason": "visible sell-side liquidity below equal lows"}
+        if london_low is not None:
+            return {"type": "london_low", "level": london_low, "reason": "london low as sell-side liquidity target"}
+        if asia_low is not None:
+            return {"type": "asia_low", "level": asia_low, "reason": "asia low as sell-side liquidity target"}
+        return {"type": "recent_low", "level": low_1h or low_5m, "reason": "recent visible low liquidity"}
+
+    return {"type": "none", "level": None, "reason": "no clear liquidity target"}
+
+
 def build_signal(symbol: str, candles_1m: list[dict[str, Any]], candles_5m: list[dict[str, Any]], candles_1h: list[dict[str, Any]], cfg: dict[str, Any]) -> dict[str, Any]:
     price = candles_1m[-1]["close"]
     rsi_5m = rsi(closes(candles_5m), cfg["rsi_period"])
@@ -82,6 +116,19 @@ def build_signal(symbol: str, candles_1m: list[dict[str, Any]], candles_5m: list
     if session == "new_york" and (near_recent_high or near_recent_low):
         tp_zone = True
 
+    liquidity_target = _pick_liquidity_target(
+        bias=bias,
+        eq=eq,
+        asia_high=asia_high,
+        asia_low=asia_low,
+        london_high=london_high,
+        london_low=london_low,
+        high_5m=high_5m,
+        low_5m=low_5m,
+        high_1h=high_1h,
+        low_1h=low_1h,
+    )
+
     if trigger == "m5_break_down":
         trade = {"status": "simulated", "side": "short", "entry": price, "stop": high_5m, "target": low_5m}
         pipeline["trade"] = True
@@ -111,4 +158,5 @@ def build_signal(symbol: str, candles_1m: list[dict[str, Any]], candles_5m: list
         "score": score,
         "pipeline": pipeline,
         "trade": trade,
+        "liquidity_target": liquidity_target,
     }

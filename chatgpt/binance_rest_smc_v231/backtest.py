@@ -29,6 +29,7 @@ def backtest(cfg: dict) -> None:
     min_score = cfg["backtest"]["min_score"]
     cache_db = cfg["ohlc_cache_db_path"]
     report_path = cfg.get("backtest_report_path", "data/backtest_report.json")
+    trades_path = cfg.get("backtest_trades_path", "data/backtest_trades.json")
 
     init_ohlc_cache(cache_db)
     client = BinanceRestClient(cfg["binance_rest_base"])
@@ -40,6 +41,7 @@ def backtest(cfg: dict) -> None:
     long_count = 0
     short_count = 0
     trades = []
+    trade_objects = []
     r_multiples = []
     gross_profit = 0.0
     gross_loss = 0.0
@@ -52,21 +54,25 @@ def backtest(cfg: dict) -> None:
         if signal["score"] < min_score:
             continue
 
-        future = candles[i + hold]["close"]
+        future_candle = candles[i + hold]
+        future = future_candle["close"]
         price = signal["price"]
         trade = signal.get("trade", {})
-        side = trade.get("side")
         stop = trade.get("stop")
+        target = trade.get("target")
         risk_pct = None
+        side = None
 
         if signal["bias"] == "bull_confirm":
             ret = (future - price) / price
             long_count += 1
+            side = "long"
             if stop is not None and price > stop:
                 risk_pct = (price - stop) / price
         elif signal["bias"] == "bear_confirm":
             ret = (price - future) / price
             short_count += 1
+            side = "short"
             if stop is not None and stop > price:
                 risk_pct = (stop - price) / price
         else:
@@ -75,8 +81,10 @@ def backtest(cfg: dict) -> None:
         trades.append(ret)
         equity *= (1 + ret)
 
+        r_value = None
         if risk_pct and risk_pct > 0:
-            r_multiples.append(ret / risk_pct)
+            r_value = ret / risk_pct
+            r_multiples.append(r_value)
 
         if ret > 0:
             wins += 1
@@ -84,6 +92,29 @@ def backtest(cfg: dict) -> None:
         else:
             losses += 1
             gross_loss += abs(ret)
+
+        trade_objects.append({
+            "symbol": symbol,
+            "side": side,
+            "session": signal.get("session"),
+            "bias": signal.get("bias"),
+            "state": signal.get("state"),
+            "trigger": signal.get("trigger"),
+            "score": signal.get("score"),
+            "tp_zone": signal.get("tp_zone"),
+            "entry_index": i,
+            "exit_index": i + hold,
+            "entry_time": candles[i]["close_time"],
+            "exit_time": future_candle["close_time"],
+            "entry_price": price,
+            "exit_price": future,
+            "stop_price": stop,
+            "target_price": target,
+            "return_pct": round(ret * 100, 4),
+            "r_multiple": round(r_value, 4) if r_value is not None else None,
+            "holding_bars": hold,
+            "liquidity_target": signal.get("liquidity_target"),
+        })
 
     total = len(trades)
     avg_ret = (sum(trades) / total * 100) if total else 0.0
@@ -125,12 +156,15 @@ def backtest(cfg: dict) -> None:
 
     Path(report_path).parent.mkdir(parents=True, exist_ok=True)
     Path(report_path).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    Path(trades_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(trades_path).write_text(json.dumps(trade_objects, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"Backtest symbol={symbol} interval=5m")
     for k, v in report.items():
         if k in {"symbol", "interval"}:
             continue
         print(f"{k}: {v}")
+    print(f"trades_saved: {len(trade_objects)}")
 
 
 if __name__ == "__main__":

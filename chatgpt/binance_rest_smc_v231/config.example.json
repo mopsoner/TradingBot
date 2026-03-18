@@ -26,6 +26,7 @@
   "log_path": "logs/market.log",
   "dashboard_path": "data/dashboard.json",
   "backtest_report_path": "data/backtest_report.json",
+  "backtest_trades_path": "data/backtest_trades.json",
   "backtest": {
     "symbol": "ETHUSDT",
     "interval": "5m",
