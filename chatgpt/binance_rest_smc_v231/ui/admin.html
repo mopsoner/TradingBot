@@ -18,10 +18,58 @@
   <main>
     <section class="card">
       <div class="section-head">
-        <h2>config.json</h2>
-        <span class="hint">Édition mobile</span>
+        <h2>Général</h2>
+        <span class="hint">Réglages principaux</span>
       </div>
-      <textarea id="configEditor" class="editor" spellcheck="false"></textarea>
+      <div class="controls admin-grid">
+        <input id="poll_seconds" type="number" placeholder="poll_seconds">
+        <input id="lookback_limit" type="number" placeholder="lookback_limit">
+        <input id="rsi_period" type="number" placeholder="rsi_period">
+        <input id="swing_window" type="number" placeholder="swing_window">
+        <input id="session_timezone_offset_hours" type="number" placeholder="timezone offset">
+        <input id="equal_level_tolerance_pct" type="number" step="0.0001" placeholder="equal tolerance pct">
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="section-head">
+        <h2>Signals</h2>
+        <span class="hint">Filtres méthode</span>
+      </div>
+      <div class="controls admin-grid">
+        <input id="overbought" type="number" placeholder="overbought">
+        <input id="oversold" type="number" placeholder="oversold">
+        <input id="price_near_extreme_pct" type="number" step="0.0001" placeholder="price_near_extreme_pct">
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="section-head">
+        <h2>Discovery</h2>
+        <span class="hint">Universe et batch</span>
+      </div>
+      <div class="controls admin-grid">
+        <input id="quote_assets" type="text" placeholder="quote assets ex: USDT,BTC">
+        <input id="max_symbols_total" type="number" placeholder="max_symbols_total">
+        <input id="batch_size" type="number" placeholder="batch_size">
+        <input id="status" type="text" placeholder="status">
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="section-head">
+        <h2>Backtest</h2>
+        <span class="hint">Paramètres test</span>
+      </div>
+      <div class="controls admin-grid">
+        <input id="bt_symbol" type="text" placeholder="backtest symbol">
+        <input id="history_limit" type="number" placeholder="history_limit">
+        <input id="holding_bars" type="number" placeholder="holding_bars">
+        <input id="min_score" type="number" placeholder="min_score">
+      </div>
+    </section>
+
+    <section class="card">
       <div class="actions">
         <button id="reloadBtn">Reload</button>
         <button id="saveBtn">Save config</button>

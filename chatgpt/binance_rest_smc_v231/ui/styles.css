@@ -1,15 +1,6 @@
 :root {
-  --bg: #0f1115;
-  --panel: #171a21;
-  --panel-2: #11141a;
-  --border: #2a2f3a;
-  --text: #f3f4f6;
-  --muted: #aab1bd;
-  --ok: #1f6f43;
-  --wait: #7a5d16;
-  --neutral: #334155;
-  --positive: #22c55e;
-  --negative: #ef4444;
+  --bg: #0f1115; --panel: #171a21; --panel-2: #11141a; --border: #2a2f3a; --text: #f3f4f6;
+  --muted: #aab1bd; --ok: #1f6f43; --wait: #7a5d16; --neutral: #334155; --positive: #22c55e; --negative: #ef4444;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font-family: Arial, sans-serif; -webkit-font-smoothing: antialiased; }
@@ -17,8 +8,9 @@ header { position: sticky; top: 0; z-index: 5; background: rgba(15,17,21,0.96); 
 h1 { margin: 0; font-size: 20px; }
 #meta, #adminMeta { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
 .topnav { display: flex; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
-.topnav a, .navbtn { color: var(--text); text-decoration: none; font-size: 13px; background: var(--panel-2); border: 1px solid var(--border); padding: 8px 10px; border-radius: 999px; }
+.topnav a, .navbtn, .stopbtn { color: var(--text); text-decoration: none; font-size: 13px; background: var(--panel-2); border: 1px solid var(--border); padding: 8px 10px; border-radius: 999px; }
 .navbtn.paused-btn { border-color: var(--wait); color: #f5d37a; }
+.stopbtn { color: #fca5a5; border-color: #7f1d1d; }
 main { padding: 12px; display: grid; gap: 12px; }
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 12px; }
 .card.compact { padding: 10px; }
@@ -34,6 +26,8 @@ h2 { margin: 0; font-size: 16px; }
 .stat-pill.wide { grid-column: 1 / -1; }
 .stat-pill .k { display: block; color: var(--muted); font-size: 11px; margin-bottom: 4px; }
 .controls { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.trade-filters { margin-bottom: 10px; }
+.admin-grid { grid-template-columns: 1fr; }
 .controls input, .controls select, .editor { width: 100%; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: 14px; }
 .editor { min-height: 55vh; font-family: monospace; }
 .actions { display: flex; gap: 8px; margin-top: 10px; }
@@ -58,6 +52,7 @@ h2 { margin: 0; font-size: 16px; }
 .mini-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 8px; margin-top: 12px; }
 .mini-grid strong { display: block; font-size: 13px; }
 .liquidity-box { margin-top: 12px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: rgba(255,255,255,0.02); }
+.cmdline { word-break: break-word; font-size: 12px; }
 .pipeline { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .badge { padding: 6px 9px; border-radius: 999px; font-size: 11px; background: var(--border); }
 .ok { background: var(--ok); }
@@ -69,11 +64,13 @@ h2 { margin: 0; font-size: 16px; }
 @media (min-width: 700px) {
   main { padding: 16px; gap: 16px; }
   .controls { grid-template-columns: 1fr 1fr 120px; }
+  .admin-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stats-grid { grid-template-columns: repeat(4, 1fr); }
   .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (min-width: 1100px) {
   .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .stats-grid { grid-template-columns: repeat(6, 1fr); }
+  .admin-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .card { padding: 14px; }
 }

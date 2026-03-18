@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import signal
+import subprocess
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -33,6 +35,28 @@ class Handler(SimpleHTTPRequestHandler):
             pass
         return RUNTIME_PATH_DEFAULT
 
+    def _list_processes(self) -> list[dict]:
+        try:
+            output = subprocess.check_output(['ps', '-eo', 'pid,etime,cmd'], text=True)
+        except Exception:
+            return []
+        rows = output.splitlines()[1:]
+        out = []
+        keywords = ['runner.py', 'backtest.py', 'admin_server.py', 'http.server', 'binance_rest_smc_v231']
+        for row in rows:
+            parts = row.strip().split(None, 2)
+            if len(parts) < 3:
+                continue
+            pid_s, etime, cmd = parts
+            if not any(k in cmd for k in keywords):
+                continue
+            try:
+                pid = int(pid_s)
+            except ValueError:
+                continue
+            out.append({'pid': pid, 'etime': etime, 'cmd': cmd})
+        return out
+
     def do_GET(self):
         if self.path.startswith('/api/config'):
             try:
@@ -58,6 +82,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json(200, {"ok": True, "runtime": data})
             except Exception as exc:
                 return self._json(500, {"ok": False, "error": str(exc)})
+        if self.path.startswith('/api/processes'):
+            return self._json(200, {"ok": True, "processes": self._list_processes()})
         return super().do_GET()
 
     def do_POST(self):
@@ -85,6 +111,19 @@ class Handler(SimpleHTTPRequestHandler):
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text(json.dumps(runtime, ensure_ascii=False, indent=2), encoding='utf-8')
                 return self._json(200, {"ok": True, "runtime": runtime})
+            except Exception as exc:
+                return self._json(500, {"ok": False, "error": str(exc)})
+        if self.path.startswith('/api/processes/stop'):
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                raw = self.rfile.read(length)
+                payload = json.loads(raw.decode('utf-8'))
+                pid = int(payload.get('pid'))
+                current_pid = os.getpid()
+                if pid == current_pid:
+                    return self._json(400, {"ok": False, "error": "Refusing to stop current admin server process"})
+                os.kill(pid, signal.SIGTERM)
+                return self._json(200, {"ok": True, "stopped_pid": pid})
             except Exception as exc:
                 return self._json(500, {"ok": False, "error": str(exc)})
         return self._json(404, {"ok": False, "error": "not found"})

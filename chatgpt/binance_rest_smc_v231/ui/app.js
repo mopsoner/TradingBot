@@ -1,17 +1,11 @@
 function fmtTime(ms) {
   if (!ms) return 'n/a';
-  try {
-    return new Date(ms).toLocaleString();
-  } catch {
-    return String(ms);
-  }
+  try { return new Date(ms).toLocaleString(); } catch { return String(ms); }
 }
-
 function resultClass(value) {
   if (value == null || value === '' || Number.isNaN(Number(value))) return '';
   return Number(value) > 0 ? 'positive' : Number(value) < 0 ? 'negative' : 'neutraltext';
 }
-
 async function loadRuntime() {
   try {
     const res = await fetch('/api/runtime?_=' + Date.now());
@@ -24,22 +18,57 @@ async function loadRuntime() {
     btn.classList.toggle('paused-btn', paused);
   } catch {}
 }
-
 async function toggleRuntime() {
   const btn = document.getElementById('runtimeToggle');
   const paused = btn?.dataset.paused === '1';
   const res = await fetch('/api/runtime', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ runtime: { paused: !paused } })
   });
   const payload = await res.json();
-  if (payload.ok) {
-    await loadRuntime();
-    await loadDashboard();
+  if (payload.ok) { await loadRuntime(); await loadDashboard(); }
+}
+async function stopProcess(pid) {
+  const res = await fetch('/api/processes/stop', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pid })
+  });
+  await res.json();
+  await loadProcesses();
+}
+async function loadProcesses() {
+  try {
+    const res = await fetch('/api/processes?_=' + Date.now());
+    const payload = await res.json();
+    const el = document.getElementById('processes');
+    if (!el) return;
+    if (!payload.ok || !Array.isArray(payload.processes)) {
+      el.innerHTML = '<div class="stat-pill wide"><span class="k">Processus</span><strong>Erreur chargement</strong></div>';
+      return;
+    }
+    if (!payload.processes.length) {
+      el.innerHTML = '<div class="stat-pill wide"><span class="k">Processus</span><strong>Aucun processus trouvé</strong></div>';
+      return;
+    }
+    el.innerHTML = payload.processes.map(p => `
+      <article class="signal small-card">
+        <div class="topline">
+          <div>
+            <div class="symbol">PID ${p.pid}</div>
+            <div class="subline">${p.etime}</div>
+          </div>
+          <button class="stopbtn" data-pid="${p.pid}">Stop</button>
+        </div>
+        <div class="liquidity-box">
+          <span class="label">Commande</span>
+          <strong class="cmdline">${p.cmd}</strong>
+        </div>
+      </article>
+    `).join('');
+    el.querySelectorAll('.stopbtn').forEach(btn => btn.addEventListener('click', () => stopProcess(Number(btn.dataset.pid))));
+  } catch (err) {
+    document.getElementById('processes').innerHTML = `<div class="stat-pill wide"><span class="k">Processus</span><strong>Erreur: ${err}</strong></div>`;
   }
 }
-
 async function loadBacktest() {
   try {
     const [reportRes, tradesRes] = await Promise.all([
@@ -54,17 +83,11 @@ async function loadBacktest() {
       return;
     }
     const items = [
-      ['Symbol', report.symbol],
-      ['Trades', report.trades],
-      ['Winrate', `${report.winrate_pct}%`],
-      ['Avg', `${report.average_return_pct}%`],
-      ['Median', `${report.median_return_pct}%`],
-      ['Best', `${report.best_trade_pct}%`],
-      ['Worst', `${report.worst_trade_pct}%`],
-      ['PF', report.profit_factor ?? 'n/a'],
-      ['Cum.', `${report.cumulative_return_pct}%`],
-      ['Avg R', report.average_r_multiple ?? 'n/a'],
-      ['Med R', report.median_r_multiple ?? 'n/a'],
+      ['Symbol', report.symbol], ['Trades', report.trades], ['Winrate', `${report.winrate_pct}%`],
+      ['Avg', `${report.average_return_pct}%`], ['Median', `${report.median_return_pct}%`],
+      ['Best', `${report.best_trade_pct}%`], ['Worst', `${report.worst_trade_pct}%`],
+      ['PF', report.profit_factor ?? 'n/a'], ['Cum.', `${report.cumulative_return_pct}%`],
+      ['Avg R', report.average_r_multiple ?? 'n/a'], ['Med R', report.median_r_multiple ?? 'n/a'],
       ['Total R', report.total_r ?? 'n/a']
     ];
     el.innerHTML = items.map(([k,v]) => `<div class="stat-pill"><span class="k">${k}</span><strong class="${resultClass(v)}">${v}</strong></div>`).join('');
@@ -76,11 +99,21 @@ async function loadBacktest() {
       return;
     }
     const trades = await tradesRes.json();
-    if (!Array.isArray(trades) || !trades.length) {
+    const symbolQ = (document.getElementById('tradeFilterSymbol')?.value || '').trim().toUpperCase();
+    const sideQ = document.getElementById('tradeFilterSide')?.value || 'all';
+    const minRRaw = document.getElementById('tradeFilterMinR')?.value || '';
+    const minR = minRRaw === '' ? null : Number(minRRaw);
+    const filteredTrades = (Array.isArray(trades) ? trades : []).filter(t => {
+      if (symbolQ && !(t.symbol || '').includes(symbolQ)) return false;
+      if (sideQ !== 'all' && t.side !== sideQ) return false;
+      if (minR !== null && (t.r_multiple == null || Number(t.r_multiple) < minR)) return false;
+      return true;
+    });
+    if (!filteredTrades.length) {
       tradesContainer.innerHTML = '<div class="stat-pill wide"><span class="k">Trades</span><strong>Aucun trade détaillé</strong></div>';
       return;
     }
-    tradesContainer.innerHTML = trades.slice(0, 50).map(t => `
+    tradesContainer.innerHTML = filteredTrades.slice(0, 80).map(t => `
       <article class="signal small-card">
         <div class="topline">
           <div>
@@ -110,11 +143,9 @@ async function loadBacktest() {
     document.getElementById('backtest').innerHTML = `<div class="stat-pill wide"><span class="k">Backtest</span><strong>Erreur: ${err}</strong></div>`;
   }
 }
-
 async function loadDashboard() {
   const res = await fetch('/data/dashboard.json?_=' + Date.now());
   const data = await res.json();
-
   const mode = data.runtime?.mode ? ` · ${data.runtime.mode}` : '';
   document.getElementById('meta').textContent = 'Dernière génération: ' + data.generated_at + mode;
   document.getElementById('stats').innerHTML = `
@@ -122,7 +153,6 @@ async function loadDashboard() {
     <div class="stat-pill"><span class="k">Batch</span><strong>${data.stats.batch_count}</strong></div>
     <div class="stat-pill"><span class="k">Boucle</span><strong>${data.stats.loop_interval_seconds}s</strong></div>
   `;
-
   const q = (document.getElementById('filterSymbol')?.value || '').trim().toUpperCase();
   const bias = document.getElementById('filterBias')?.value || 'all';
   const minScore = Number(document.getElementById('filterScore')?.value || '0');
@@ -130,14 +160,12 @@ async function loadDashboard() {
   const showPipeline = document.getElementById('togglePipeline')?.checked ?? true;
   const showTrade = document.getElementById('toggleTrade')?.checked ?? true;
   const sourceSignals = showTopOnly ? (data.top_signals || []) : (data.signals || []);
-
   const filtered = sourceSignals.filter(sig => {
     if (q && !sig.symbol.includes(q)) return false;
     if (bias !== 'all' && sig.bias !== bias) return false;
     if ((sig.score || 0) < minScore) return false;
     return true;
   });
-
   const renderSignal = (sig) => {
     const p = sig.pipeline || {};
     const trade = sig.trade || {};
@@ -147,67 +175,49 @@ async function loadDashboard() {
     return `
       <article class="signal">
         <div class="topline">
-          <div>
-            <div class="symbol">${sig.symbol}</div>
-            <div class="subline">${sig.session} · ${sig.bias}</div>
-          </div>
+          <div><div class="symbol">${sig.symbol}</div><div class="subline">${sig.session} · ${sig.bias}</div></div>
           <div class="${scoreClass}">${sig.score}</div>
         </div>
-
         <div class="price-row">
-          <div>
-            <div class="label">Prix</div>
-            <div class="price">${Number(sig.price).toFixed(6)}</div>
-          </div>
-          <div>
-            <div class="label">RSI 5m</div>
-            <div class="value">${sig.rsi_5m ?? 'n/a'}</div>
-          </div>
+          <div><div class="label">Prix</div><div class="price">${Number(sig.price).toFixed(6)}</div></div>
+          <div><div class="label">RSI 5m</div><div class="value">${sig.rsi_5m ?? 'n/a'}</div></div>
         </div>
-
         <div class="mini-grid">
           <div><span class="label">State</span><strong>${sig.state}</strong></div>
           <div><span class="label">Trigger</span><strong>${sig.trigger}</strong></div>
           <div><span class="label">TP zone</span><strong>${sig.tp_zone ? 'yes' : 'no'}</strong></div>
           ${showTrade ? `<div><span class="label">Trade</span><strong>${trade.status || 'watch'} ${trade.side || ''}</strong></div>` : ''}
         </div>
-
         <div class="liquidity-box">
           <span class="label">Liquidity target</span>
           <strong>${liq.type || 'n/a'} ${liq.level ?? ''}</strong>
           <div class="subline">${liq.reason || ''}</div>
         </div>
-
-        ${showPipeline ? `
-        <div class="pipeline">
+        ${showPipeline ? `<div class="pipeline">
           <span class="badge ${badgeClass(p.collect)}">collect</span>
           <span class="badge ${badgeClass(p.liquidity)}">liquidity</span>
           <span class="badge ${badgeClass(p.zone)}">zone</span>
           <span class="badge ${badgeClass(p.confirm)}">confirm</span>
           <span class="badge ${badgeClass(p.trade)}">trade</span>
         </div>` : ''}
-      </article>
-    `;
+      </article>`;
   };
-
   document.getElementById('top').innerHTML = (data.top_signals || []).map(renderSignal).join('');
   document.getElementById('batch').innerHTML = data.batch_symbols.map(s => `<span class="badge neutral">${s}</span>`).join(' ');
   document.getElementById('signals').innerHTML = filtered.map(renderSignal).join('');
 }
-
 function bindControls() {
-  ['filterSymbol', 'filterBias', 'filterScore', 'toggleTopOnly', 'togglePipeline', 'toggleTrade'].forEach(id => {
+  ['filterSymbol', 'filterBias', 'filterScore', 'toggleTopOnly', 'togglePipeline', 'toggleTrade', 'tradeFilterSymbol', 'tradeFilterSide', 'tradeFilterMinR'].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
-    el.addEventListener('input', loadDashboard);
-    el.addEventListener('change', loadDashboard);
+    el.addEventListener('input', () => { if (id.startsWith('tradeFilter')) loadBacktest(); else loadDashboard(); });
+    el.addEventListener('change', () => { if (id.startsWith('tradeFilter')) loadBacktest(); else loadDashboard(); });
   });
   const rt = document.getElementById('runtimeToggle');
   if (rt) rt.addEventListener('click', toggleRuntime);
 }
-
 bindControls();
-Promise.all([loadRuntime(), loadDashboard(), loadBacktest()]).catch(err => {
+Promise.all([loadRuntime(), loadProcesses(), loadDashboard(), loadBacktest()]).catch(err => {
   document.getElementById('meta').textContent = 'Erreur chargement dashboard: ' + err;
 });
-setInterval(() => { loadRuntime(); loadDashboard(); loadBacktest(); }, 15000);
+setInterval(() => { loadRuntime(); loadProcesses(); loadDashboard(); loadBacktest(); }, 15000);
