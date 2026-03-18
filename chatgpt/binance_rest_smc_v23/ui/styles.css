@@ -1,0 +1,13 @@
+body { font-family: Arial, sans-serif; margin: 0; background: #0f1115; color: #f2f2f2; }
+header { padding: 16px; border-bottom: 1px solid #2a2f3a; }
+main { padding: 16px; display: grid; gap: 16px; }
+.card { background: #171a21; border: 1px solid #2a2f3a; border-radius: 12px; padding: 16px; }
+.grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.signal { background: #11141a; border: 1px solid #2a2f3a; border-radius: 10px; padding: 12px; }
+.row { display: flex; justify-content: space-between; gap: 8px; margin: 6px 0; }
+.k { opacity: 0.8; }
+.pipeline { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.badge { padding: 4px 8px; border-radius: 999px; font-size: 12px; background: #2a2f3a; }
+.ok { background: #1f6f43; }
+.wait { background: #7a5d16; }
+small { opacity: 0.75; }
