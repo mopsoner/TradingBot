@@ -17,7 +17,7 @@ case "$MODE" in
     python runner.py --symbols
     ;;
   serve-ui)
-    python3 -m http.server 8080
+    python admin_server.py
     ;;
   *)
     echo "Usage: bash run.sh [once|loop|backtest|symbols|serve-ui]"

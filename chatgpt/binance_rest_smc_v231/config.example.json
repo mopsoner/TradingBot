@@ -25,6 +25,7 @@
   "ohlc_cache_db_path": "data/ohlc_cache.db",
   "log_path": "logs/market.log",
   "dashboard_path": "data/dashboard.json",
+  "backtest_report_path": "data/backtest_report.json",
   "backtest": {
     "symbol": "ETHUSDT",
     "interval": "5m",
