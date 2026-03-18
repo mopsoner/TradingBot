@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Admin Config - Binance REST SMC Lite</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <h1>Admin Config</h1>
+    <p id="adminMeta">Chargement...</p>
+    <nav class="topnav">
+      <a href="/ui/">Dashboard</a>
+      <a href="/ui/admin.html">Admin</a>
+    </nav>
+  </header>
+  <main>
+    <section class="card">
+      <div class="section-head">
+        <h2>config.json</h2>
+        <span class="hint">Édition mobile</span>
+      </div>
+      <textarea id="configEditor" class="editor" spellcheck="false"></textarea>
+      <div class="actions">
+        <button id="reloadBtn">Reload</button>
+        <button id="saveBtn">Save config</button>
+      </div>
+    </section>
+  </main>
+  <script src="admin.js"></script>
+</body>
+</html>
