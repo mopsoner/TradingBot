@@ -10,6 +10,13 @@ function getNum(id, fallback) {
   return v === '' || v == null ? fallback : Number(v);
 }
 
+function setStatus(text, isError = false) {
+  const meta = document.getElementById('adminMeta');
+  if (!meta) return;
+  meta.textContent = text;
+  meta.classList.toggle('negative', !!isError);
+}
+
 async function loadConfig() {
   const res = await fetch('/api/config?_=' + Date.now());
   const payload = await res.json();
@@ -32,7 +39,7 @@ async function loadConfig() {
   setValue('history_limit', currentConfig.backtest?.history_limit);
   setValue('holding_bars', currentConfig.backtest?.holding_bars);
   setValue('min_score', currentConfig.backtest?.min_score);
-  document.getElementById('adminMeta').textContent = 'Config chargée';
+  setStatus('Config chargée');
 }
 
 async function saveConfig() {
@@ -65,12 +72,16 @@ async function saveConfig() {
     body: JSON.stringify({ config: next })
   });
   const payload = await res.json();
-  document.getElementById('adminMeta').textContent = payload.ok ? 'Config sauvegardée' : ('Erreur: ' + payload.error);
-  if (payload.ok) currentConfig = next;
+  if (!payload.ok) {
+    setStatus('Erreur: ' + payload.error, true);
+    return;
+  }
+  currentConfig = next;
+  setStatus('Config sauvegardée');
 }
 
 document.getElementById('reloadBtn').addEventListener('click', loadConfig);
 document.getElementById('saveBtn').addEventListener('click', saveConfig);
 loadConfig().catch(err => {
-  document.getElementById('adminMeta').textContent = 'Erreur chargement config: ' + err;
+  setStatus('Erreur chargement config: ' + err, true);
 });

@@ -18,60 +18,64 @@
   <main>
     <section class="card">
       <div class="section-head">
-        <h2>Général</h2>
-        <span class="hint">Réglages principaux</span>
+        <h2>General settings</h2>
+        <span class="hint">Cycle, historique et sensibilité globale</span>
       </div>
-      <div class="controls admin-grid">
-        <input id="poll_seconds" type="number" placeholder="poll_seconds">
-        <input id="lookback_limit" type="number" placeholder="lookback_limit">
-        <input id="rsi_period" type="number" placeholder="rsi_period">
-        <input id="swing_window" type="number" placeholder="swing_window">
-        <input id="session_timezone_offset_hours" type="number" placeholder="timezone offset">
-        <input id="equal_level_tolerance_pct" type="number" step="0.0001" placeholder="equal tolerance pct">
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="section-head">
-        <h2>Signals</h2>
-        <span class="hint">Filtres méthode</span>
-      </div>
-      <div class="controls admin-grid">
-        <input id="overbought" type="number" placeholder="overbought">
-        <input id="oversold" type="number" placeholder="oversold">
-        <input id="price_near_extreme_pct" type="number" step="0.0001" placeholder="price_near_extreme_pct">
+      <div class="form-grid admin-grid">
+        <label class="field"><span class="field-label">Poll interval (seconds)</span><span class="field-help">Temps entre deux boucles live.</span><input id="poll_seconds" type="number" placeholder="45"></label>
+        <label class="field"><span class="field-label">Lookback limit</span><span class="field-help">Nombre de bougies relues pour les calculs.</span><input id="lookback_limit" type="number" placeholder="180"></label>
+        <label class="field"><span class="field-label">RSI period</span><span class="field-help">Période utilisée pour le RSI.</span><input id="rsi_period" type="number" placeholder="14"></label>
+        <label class="field"><span class="field-label">Swing window</span><span class="field-help">Fenêtre locale pour extrêmes et structure.</span><input id="swing_window" type="number" placeholder="5"></label>
+        <label class="field"><span class="field-label">Session timezone offset</span><span class="field-help">Décalage horaire utilisé pour Asia/London/NY.</span><input id="session_timezone_offset_hours" type="number" placeholder="-4"></label>
+        <label class="field"><span class="field-label">Equal level tolerance</span><span class="field-help">Tolérance pour equal highs / equal lows.</span><input id="equal_level_tolerance_pct" type="number" step="0.0001" placeholder="0.0015"></label>
       </div>
     </section>
 
     <section class="card">
       <div class="section-head">
-        <h2>Discovery</h2>
-        <span class="hint">Universe et batch</span>
+        <h2>Signal settings</h2>
+        <span class="hint">Surachat, survente et proximité des extrêmes</span>
       </div>
-      <div class="controls admin-grid">
-        <input id="quote_assets" type="text" placeholder="quote assets ex: USDT,BTC">
-        <input id="max_symbols_total" type="number" placeholder="max_symbols_total">
-        <input id="batch_size" type="number" placeholder="batch_size">
-        <input id="status" type="text" placeholder="status">
+      <div class="form-grid admin-grid">
+        <label class="field"><span class="field-label">RSI overbought</span><span class="field-help">Seuil haut RSI.</span><input id="overbought" type="number" placeholder="70"></label>
+        <label class="field"><span class="field-label">RSI oversold</span><span class="field-help">Seuil bas RSI.</span><input id="oversold" type="number" placeholder="30"></label>
+        <label class="field"><span class="field-label">Near extreme %</span><span class="field-help">Distance max pour considérer le prix proche d’un extrême.</span><input id="price_near_extreme_pct" type="number" step="0.0001" placeholder="0.003"></label>
       </div>
     </section>
 
     <section class="card">
       <div class="section-head">
-        <h2>Backtest</h2>
-        <span class="hint">Paramètres test</span>
+        <h2>Symbol discovery</h2>
+        <span class="hint">Univers scanné et taille des batches</span>
       </div>
-      <div class="controls admin-grid">
-        <input id="bt_symbol" type="text" placeholder="backtest symbol">
-        <input id="history_limit" type="number" placeholder="history_limit">
-        <input id="holding_bars" type="number" placeholder="holding_bars">
-        <input id="min_score" type="number" placeholder="min_score">
+      <div class="form-grid admin-grid">
+        <label class="field"><span class="field-label">Quote assets</span><span class="field-help">Sépare les quotes par virgule. Exemple : USDT,BTC.</span><input id="quote_assets" type="text" placeholder="USDT"></label>
+        <label class="field"><span class="field-label">Max symbols total</span><span class="field-help">Nombre max de marchés chargés.</span><input id="max_symbols_total" type="number" placeholder="250"></label>
+        <label class="field"><span class="field-label">Batch size</span><span class="field-help">Nombre de symboles traités par rotation.</span><input id="batch_size" type="number" placeholder="20"></label>
+        <label class="field"><span class="field-label">Status filter</span><span class="field-help">État Binance requis. En général TRADING.</span><input id="status" type="text" placeholder="TRADING"></label>
       </div>
     </section>
 
     <section class="card">
+      <div class="section-head">
+        <h2>Backtest settings</h2>
+        <span class="hint">Paire, profondeur et conditions de validation</span>
+      </div>
+      <div class="form-grid admin-grid">
+        <label class="field"><span class="field-label">Backtest symbol</span><span class="field-help">Paire utilisée pour le test historique.</span><input id="bt_symbol" type="text" placeholder="ETHUSDT"></label>
+        <label class="field"><span class="field-label">History limit</span><span class="field-help">Nombre de bougies chargées pour le backtest.</span><input id="history_limit" type="number" placeholder="800"></label>
+        <label class="field"><span class="field-label">Holding bars</span><span class="field-help">Nombre de bougies avant sortie simulée.</span><input id="holding_bars" type="number" placeholder="6"></label>
+        <label class="field"><span class="field-label">Minimum score</span><span class="field-help">Score minimal pour retenir un trade dans le backtest.</span><input id="min_score" type="number" placeholder="5"></label>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="section-head">
+        <h2>Actions</h2>
+        <span class="hint">Recharge ou enregistre le fichier config.json</span>
+      </div>
       <div class="actions">
-        <button id="reloadBtn">Reload</button>
+        <button id="reloadBtn">Reload config</button>
         <button id="saveBtn">Save config</button>
       </div>
     </section>
