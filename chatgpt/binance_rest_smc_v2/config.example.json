@@ -1,0 +1,32 @@
+{
+  "symbol_discovery": {
+    "enabled": true,
+    "quote_assets": ["USDT"],
+    "status": "TRADING",
+    "spot_only": true,
+    "max_symbols_total": 200,
+    "batch_size": 20,
+    "batch_rotation_file": "data/batch_state.json"
+  },
+  "intervals": ["1m", "5m"],
+  "poll_seconds": 45,
+  "lookback_limit": 120,
+  "rsi_period": 14,
+  "swing_window": 5,
+  "signals": {
+    "overbought": 70,
+    "oversold": 30,
+    "price_near_extreme_pct": 0.003
+  },
+  "session_timezone_offset_hours": -4,
+  "binance_rest_base": "https://data-api.binance.vision",
+  "database_path": "data/signals.db",
+  "log_path": "logs/market.log",
+  "dashboard_path": "data/dashboard.json",
+  "backtest": {
+    "symbol": "ETHUSDT",
+    "interval": "5m",
+    "history_limit": 500,
+    "holding_bars": 6
+  }
+}
