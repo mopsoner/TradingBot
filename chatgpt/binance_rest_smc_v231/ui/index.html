@@ -13,6 +13,7 @@
     <nav class="topnav">
       <a href="/ui/">Dashboard</a>
       <a href="/ui/admin.html">Admin</a>
+      <button id="runtimeToggle" class="navbtn">Pause batch</button>
     </nav>
   </header>
   <main>
@@ -21,69 +22,53 @@
       <div id="stats" class="stats-row"></div>
     </section>
 
-    <section class="card compact">
-      <div class="section-head">
-        <h2>Backtest</h2>
-        <span class="hint">Rapport local</span>
-      </div>
-      <div id="backtest" class="stats-grid"></div>
-    </section>
+    <details class="card compact" open>
+      <summary class="accordion-summary">Backtest <span class="hint">Rapport local</span></summary>
+      <div id="backtest" class="stats-grid accordion-body"></div>
+    </details>
 
-    <section class="card">
-      <div class="section-head">
-        <h2>Trades backtest</h2>
-        <span class="hint">Détail lisible</span>
-      </div>
-      <div id="backtestTrades" class="grid"></div>
-    </section>
+    <details class="card" open>
+      <summary class="accordion-summary">Trades backtest <span class="hint">Détail lisible</span></summary>
+      <div id="backtestTrades" class="grid accordion-body"></div>
+    </details>
 
-    <section class="card compact">
-      <div class="section-head">
-        <h2>Filtres</h2>
-        <span class="hint">Mobile friendly</span>
+    <details class="card compact" open>
+      <summary class="accordion-summary">Filtres <span class="hint">Mobile friendly</span></summary>
+      <div class="accordion-body">
+        <div class="controls">
+          <input id="filterSymbol" type="text" placeholder="Symbole (ex: ETH)">
+          <select id="filterBias">
+            <option value="all">Tous les biais</option>
+            <option value="bull_watch">bull_watch</option>
+            <option value="bull_confirm">bull_confirm</option>
+            <option value="bear_watch">bear_watch</option>
+            <option value="bear_confirm">bear_confirm</option>
+            <option value="neutral">neutral</option>
+          </select>
+          <input id="filterScore" type="number" min="0" max="10" step="1" value="0" placeholder="Score min">
+        </div>
+        <div class="toggles">
+          <label class="toggle"><input id="toggleTopOnly" type="checkbox"> Top only</label>
+          <label class="toggle"><input id="togglePipeline" type="checkbox" checked> Pipeline</label>
+          <label class="toggle"><input id="toggleTrade" type="checkbox" checked> Trade</label>
+        </div>
       </div>
-      <div class="controls">
-        <input id="filterSymbol" type="text" placeholder="Symbole (ex: ETH)">
-        <select id="filterBias">
-          <option value="all">Tous les biais</option>
-          <option value="bull_watch">bull_watch</option>
-          <option value="bull_confirm">bull_confirm</option>
-          <option value="bear_watch">bear_watch</option>
-          <option value="bear_confirm">bear_confirm</option>
-          <option value="neutral">neutral</option>
-        </select>
-        <input id="filterScore" type="number" min="0" max="10" step="1" value="0" placeholder="Score min">
-      </div>
-      <div class="toggles">
-        <label class="toggle"><input id="toggleTopOnly" type="checkbox"> Top only</label>
-        <label class="toggle"><input id="togglePipeline" type="checkbox" checked> Pipeline</label>
-        <label class="toggle"><input id="toggleTrade" type="checkbox" checked> Trade</label>
-      </div>
-    </section>
+    </details>
 
-    <section class="card">
-      <div class="section-head">
-        <h2>Top signaux</h2>
-        <span class="hint">Priorité mobile</span>
-      </div>
-      <div id="top" class="grid"></div>
-    </section>
+    <details class="card" open>
+      <summary class="accordion-summary">Top signaux <span class="hint">Priorité mobile</span></summary>
+      <div id="top" class="grid accordion-body"></div>
+    </details>
 
-    <section class="card compact">
-      <div class="section-head">
-        <h2>Batch en cours</h2>
-        <span class="hint">Rotation active</span>
-      </div>
-      <div id="batch" class="batch-wrap"></div>
-    </section>
+    <details class="card compact">
+      <summary class="accordion-summary">Batch en cours <span class="hint">Rotation active</span></summary>
+      <div id="batch" class="batch-wrap accordion-body"></div>
+    </details>
 
-    <section class="card">
-      <div class="section-head">
-        <h2>Signaux du batch</h2>
-        <span class="hint">Vue filtrable</span>
-      </div>
-      <div id="signals" class="grid"></div>
-    </section>
+    <details class="card">
+      <summary class="accordion-summary">Signaux du batch <span class="hint">Vue filtrable</span></summary>
+      <div id="signals" class="grid accordion-body"></div>
+    </details>
   </main>
   <script src="app.js"></script>
 </body>

@@ -11,9 +11,31 @@ from engine import build_signal
 from storage import append_log, init_db, init_ohlc_cache, load_cached_ohlc, save_signal, upsert_ohlc, write_dashboard
 
 
+RUNTIME_DEFAULT = {"paused": False}
+
+
 def load_config() -> dict[str, Any]:
     with open("config.json", "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def runtime_control_path(cfg: dict[str, Any]) -> str:
+    return cfg.get("runtime_control_path", "data/runtime_control.json")
+
+
+def load_runtime_state(cfg: dict[str, Any]) -> dict[str, Any]:
+    p = Path(runtime_control_path(cfg))
+    if not p.exists():
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(RUNTIME_DEFAULT), encoding="utf-8")
+        return dict(RUNTIME_DEFAULT)
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return dict(RUNTIME_DEFAULT)
+        return {**RUNTIME_DEFAULT, **data}
+    except Exception:
+        return dict(RUNTIME_DEFAULT)
 
 
 def _load_batch_index(path: str) -> int:
@@ -96,10 +118,14 @@ def scan_batch(client: BinanceRestClient, batch: list[str], cfg: dict[str, Any])
     return results
 
 
-def build_dashboard(all_symbols: list[str], batch: list[str], results: list[dict[str, Any]], cfg: dict[str, Any]) -> dict[str, Any]:
+def build_dashboard(all_symbols: list[str], batch: list[str], results: list[dict[str, Any]], cfg: dict[str, Any], runtime_state: dict[str, Any]) -> dict[str, Any]:
     top = sorted(results, key=lambda x: x.get("score", 0), reverse=True)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+        "runtime": {
+            "paused": bool(runtime_state.get("paused", False)),
+            "mode": "paused" if runtime_state.get("paused", False) else "running",
+        },
         "stats": {
             "all_symbols_count": len(all_symbols),
             "batch_count": len(batch),
@@ -136,10 +162,13 @@ def main() -> None:
     client = BinanceRestClient(cfg["binance_rest_base"])
 
     def tick() -> None:
+        runtime_state = load_runtime_state(cfg)
         all_symbols = discover_symbols(client, cfg)
         batch = select_batch(all_symbols, cfg)
-        results = scan_batch(client, batch, cfg)
-        dashboard = build_dashboard(all_symbols, batch, results, cfg)
+        results: list[dict[str, Any]] = []
+        if not runtime_state.get("paused", False):
+            results = scan_batch(client, batch, cfg)
+        dashboard = build_dashboard(all_symbols, batch, results, cfg, runtime_state)
         write_dashboard(cfg["dashboard_path"], dashboard)
 
     if args.once:

@@ -1,3 +1,45 @@
+function fmtTime(ms) {
+  if (!ms) return 'n/a';
+  try {
+    return new Date(ms).toLocaleString();
+  } catch {
+    return String(ms);
+  }
+}
+
+function resultClass(value) {
+  if (value == null || value === '' || Number.isNaN(Number(value))) return '';
+  return Number(value) > 0 ? 'positive' : Number(value) < 0 ? 'negative' : 'neutraltext';
+}
+
+async function loadRuntime() {
+  try {
+    const res = await fetch('/api/runtime?_=' + Date.now());
+    const payload = await res.json();
+    const btn = document.getElementById('runtimeToggle');
+    if (!btn || !payload.ok) return;
+    const paused = !!payload.runtime?.paused;
+    btn.textContent = paused ? 'Resume batch' : 'Pause batch';
+    btn.dataset.paused = paused ? '1' : '0';
+    btn.classList.toggle('paused-btn', paused);
+  } catch {}
+}
+
+async function toggleRuntime() {
+  const btn = document.getElementById('runtimeToggle');
+  const paused = btn?.dataset.paused === '1';
+  const res = await fetch('/api/runtime', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ runtime: { paused: !paused } })
+  });
+  const payload = await res.json();
+  if (payload.ok) {
+    await loadRuntime();
+    await loadDashboard();
+  }
+}
+
 async function loadBacktest() {
   try {
     const [reportRes, tradesRes] = await Promise.all([
@@ -25,7 +67,7 @@ async function loadBacktest() {
       ['Med R', report.median_r_multiple ?? 'n/a'],
       ['Total R', report.total_r ?? 'n/a']
     ];
-    el.innerHTML = items.map(([k,v]) => `<div class="stat-pill"><span class="k">${k}</span><strong>${v}</strong></div>`).join('');
+    el.innerHTML = items.map(([k,v]) => `<div class="stat-pill"><span class="k">${k}</span><strong class="${resultClass(v)}">${v}</strong></div>`).join('');
 
     const tradesContainer = document.getElementById('backtestTrades');
     if (!tradesContainer) return;
@@ -52,8 +94,10 @@ async function loadBacktest() {
           <div><span class="label">Exit</span><strong>${t.exit_price}</strong></div>
           <div><span class="label">Stop</span><strong>${t.stop_price ?? 'n/a'}</strong></div>
           <div><span class="label">Target</span><strong>${t.target_price ?? 'n/a'}</strong></div>
-          <div><span class="label">Return %</span><strong>${t.return_pct}</strong></div>
-          <div><span class="label">R</span><strong>${t.r_multiple ?? 'n/a'}</strong></div>
+          <div><span class="label">Return %</span><strong class="${resultClass(t.return_pct)}">${t.return_pct}</strong></div>
+          <div><span class="label">R</span><strong class="${resultClass(t.r_multiple)}">${t.r_multiple ?? 'n/a'}</strong></div>
+          <div><span class="label">Entry time</span><strong>${fmtTime(t.entry_time)}</strong></div>
+          <div><span class="label">Exit time</span><strong>${fmtTime(t.exit_time)}</strong></div>
         </div>
         <div class="liquidity-box">
           <span class="label">Liquidity target</span>
@@ -71,7 +115,8 @@ async function loadDashboard() {
   const res = await fetch('/data/dashboard.json?_=' + Date.now());
   const data = await res.json();
 
-  document.getElementById('meta').textContent = 'Dernière génération: ' + data.generated_at;
+  const mode = data.runtime?.mode ? ` · ${data.runtime.mode}` : '';
+  document.getElementById('meta').textContent = 'Dernière génération: ' + data.generated_at + mode;
   document.getElementById('stats').innerHTML = `
     <div class="stat-pill"><span class="k">Total</span><strong>${data.stats.all_symbols_count}</strong></div>
     <div class="stat-pill"><span class="k">Batch</span><strong>${data.stats.batch_count}</strong></div>
@@ -157,10 +202,12 @@ function bindControls() {
     el.addEventListener('input', loadDashboard);
     el.addEventListener('change', loadDashboard);
   });
+  const rt = document.getElementById('runtimeToggle');
+  if (rt) rt.addEventListener('click', toggleRuntime);
 }
 
 bindControls();
-Promise.all([loadDashboard(), loadBacktest()]).catch(err => {
+Promise.all([loadRuntime(), loadDashboard(), loadBacktest()]).catch(err => {
   document.getElementById('meta').textContent = 'Erreur chargement dashboard: ' + err;
 });
-setInterval(() => { loadDashboard(); loadBacktest(); }, 15000);
+setInterval(() => { loadRuntime(); loadDashboard(); loadBacktest(); }, 15000);

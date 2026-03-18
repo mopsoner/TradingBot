@@ -8,20 +8,26 @@
   --ok: #1f6f43;
   --wait: #7a5d16;
   --neutral: #334155;
+  --positive: #22c55e;
+  --negative: #ef4444;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font-family: Arial, sans-serif; -webkit-font-smoothing: antialiased; }
 header { position: sticky; top: 0; z-index: 5; background: rgba(15,17,21,0.96); backdrop-filter: blur(6px); padding: 14px 14px 10px; border-bottom: 1px solid var(--border); }
 h1 { margin: 0; font-size: 20px; }
 #meta, #adminMeta { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
-.topnav { display: flex; gap: 12px; margin-top: 10px; }
-.topnav a { color: var(--text); text-decoration: none; font-size: 13px; background: var(--panel-2); border: 1px solid var(--border); padding: 8px 10px; border-radius: 999px; }
+.topnav { display: flex; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+.topnav a, .navbtn { color: var(--text); text-decoration: none; font-size: 13px; background: var(--panel-2); border: 1px solid var(--border); padding: 8px 10px; border-radius: 999px; }
+.navbtn.paused-btn { border-color: var(--wait); color: #f5d37a; }
 main { padding: 12px; display: grid; gap: 12px; }
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 12px; }
 .card.compact { padding: 10px; }
+.accordion-summary { cursor: pointer; list-style: none; font-size: 16px; font-weight: 700; display: flex; justify-content: space-between; align-items: center; }
+.accordion-summary::-webkit-details-marker { display: none; }
+.accordion-body { margin-top: 10px; }
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
 h2 { margin: 0; font-size: 16px; }
-.hint { color: var(--muted); font-size: 12px; }
+.hint { color: var(--muted); font-size: 12px; font-weight: 400; }
 .stats-row, .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .stats-grid { grid-template-columns: repeat(2, 1fr); }
 .stat-pill { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 10px; text-align: center; }
@@ -57,6 +63,9 @@ h2 { margin: 0; font-size: 16px; }
 .ok { background: var(--ok); }
 .wait { background: var(--wait); }
 .neutral { background: var(--neutral); }
+.positive { color: var(--positive); }
+.negative { color: var(--negative); }
+.neutraltext { color: var(--text); }
 @media (min-width: 700px) {
   main { padding: 16px; gap: 16px; }
   .controls { grid-template-columns: 1fr 1fr 120px; }
