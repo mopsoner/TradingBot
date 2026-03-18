@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
-from signals import closes, equal_highs_lows, near_level, recent_extremes, rsi, session_extremes, current_session
+from signals import closes, equal_highs_lows, infer_interval_label, near_level, recent_extremes, rsi, session_extremes, session_from_timestamp
 
 
 def _pick_liquidity_target(
@@ -46,7 +46,10 @@ def build_signal(symbol: str, candles_1m: list[dict[str, Any]], candles_5m: list
     prev_high = max(c["high"] for c in candles_5m[-6:-1])
     prev_low = min(c["low"] for c in candles_5m[-6:-1])
     last = candles_5m[-1]
-    session = current_session(cfg["session_timezone_offset_hours"])
+    signal_open_time = last.get("open_time")
+    signal_close_time = last.get("close_time")
+    signal_interval = infer_interval_label(candles_5m)
+    session = session_from_timestamp(signal_close_time, cfg["session_timezone_offset_hours"])
     near_extreme_pct = cfg["signals"]["price_near_extreme_pct"]
     eq = equal_highs_lows(candles_5m, cfg["equal_level_tolerance_pct"], lookback=20)
     asia_high, asia_low = session_extremes(candles_5m, cfg["session_timezone_offset_hours"], "asia")
@@ -139,6 +142,10 @@ def build_signal(symbol: str, candles_1m: list[dict[str, Any]], candles_5m: list
     return {
         "symbol": symbol,
         "session": session,
+        "signal_time": signal_close_time,
+        "signal_open_time": signal_open_time,
+        "signal_close_time": signal_close_time,
+        "signal_interval": signal_interval,
         "price": price,
         "rsi_5m": rsi_5m,
         "range_high_5m": high_5m,

@@ -38,7 +38,6 @@ async function loadConfig() {
   setValue('bt_symbol', currentConfig.backtest?.symbol);
   setValue('bt_interval', currentConfig.backtest?.interval);
   setValue('history_limit', currentConfig.backtest?.history_limit);
-  setValue('holding_bars', currentConfig.backtest?.holding_bars);
   setValue('min_score', currentConfig.backtest?.min_score);
   setStatus('Config chargée');
 }
@@ -65,7 +64,6 @@ async function saveConfig() {
   next.backtest.symbol = document.getElementById('bt_symbol')?.value || next.backtest.symbol;
   next.backtest.interval = document.getElementById('bt_interval')?.value || next.backtest.interval;
   next.backtest.history_limit = getNum('history_limit', next.backtest.history_limit);
-  next.backtest.holding_bars = getNum('holding_bars', next.backtest.holding_bars);
   next.backtest.min_score = getNum('min_score', next.backtest.min_score);
 
   const res = await fetch('/api/config', {

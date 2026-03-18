@@ -83,11 +83,10 @@ async function loadBacktest() {
       return;
     }
     const items = [
-      ['Symbol', report.symbol], ['Trades', report.trades], ['Winrate', `${report.winrate_pct}%`],
-      ['Avg', `${report.average_return_pct}%`], ['Median', `${report.median_return_pct}%`],
-      ['Best', `${report.best_trade_pct}%`], ['Worst', `${report.worst_trade_pct}%`],
-      ['PF', report.profit_factor ?? 'n/a'], ['Cum.', `${report.cumulative_return_pct}%`],
-      ['Avg R', report.average_r_multiple ?? 'n/a'], ['Med R', report.median_r_multiple ?? 'n/a'],
+      ['Symbol', report.symbol], ['Interval', report.interval], ['Closed', report.closed_trades], ['Open', report.open_trades],
+      ['Winrate', `${report.winrate_pct}%`], ['Avg', `${report.average_return_pct}%`], ['Median', `${report.median_return_pct}%`],
+      ['Best', `${report.best_trade_pct}%`], ['Worst', `${report.worst_trade_pct}%`], ['PF', report.profit_factor ?? 'n/a'],
+      ['Cum.', `${report.cumulative_return_pct}%`], ['Avg R', report.average_r_multiple ?? 'n/a'], ['Med R', report.median_r_multiple ?? 'n/a'],
       ['Total R', report.total_r ?? 'n/a']
     ];
     el.innerHTML = items.map(([k,v]) => `<div class="stat-pill"><span class="k">${k}</span><strong class="${resultClass(v)}">${v}</strong></div>`).join('');
@@ -101,12 +100,15 @@ async function loadBacktest() {
     const trades = await tradesRes.json();
     const symbolQ = (document.getElementById('tradeFilterSymbol')?.value || '').trim().toUpperCase();
     const sideQ = document.getElementById('tradeFilterSide')?.value || 'all';
+    const statusQ = document.getElementById('tradeFilterStatus')?.value || 'all';
     const minRRaw = document.getElementById('tradeFilterMinR')?.value || '';
     const minR = minRRaw === '' ? null : Number(minRRaw);
     const filteredTrades = (Array.isArray(trades) ? trades : []).filter(t => {
       if (symbolQ && !(t.symbol || '').includes(symbolQ)) return false;
       if (sideQ !== 'all' && t.side !== sideQ) return false;
-      if (minR !== null && (t.r_multiple == null || Number(t.r_multiple) < minR)) return false;
+      if (statusQ !== 'all' && t.status !== statusQ) return false;
+      const rValue = t.r_multiple ?? t.unrealized_r_multiple;
+      if (minR !== null && (rValue == null || Number(rValue) < minR)) return false;
       return true;
     });
     if (!filteredTrades.length) {
@@ -117,25 +119,27 @@ async function loadBacktest() {
       <article class="signal small-card">
         <div class="topline">
           <div>
-            <div class="symbol">${t.symbol} · ${t.side}</div>
-            <div class="subline">${t.session} · ${t.bias}</div>
+            <div class="symbol">${t.symbol} · ${t.side} · ${t.status}</div>
+            <div class="subline">${t.entry_session} · ${t.entry_signal_bias}</div>
           </div>
           <div class="score">${t.score}</div>
         </div>
         <div class="mini-grid">
+          <div><span class="label">Signal time</span><strong>${fmtTime(t.entry_signal_time)}</strong></div>
+          <div><span class="label">Exit signal time</span><strong>${fmtTime(t.exit_signal_time)}</strong></div>
           <div><span class="label">Entry</span><strong>${t.entry_price}</strong></div>
-          <div><span class="label">Exit</span><strong>${t.exit_price}</strong></div>
+          <div><span class="label">Exit</span><strong>${t.exit_price ?? t.mark_price ?? 'open'}</strong></div>
           <div><span class="label">Stop</span><strong>${t.stop_price ?? 'n/a'}</strong></div>
           <div><span class="label">Target</span><strong>${t.target_price ?? 'n/a'}</strong></div>
-          <div><span class="label">Return %</span><strong class="${resultClass(t.return_pct)}">${t.return_pct}</strong></div>
-          <div><span class="label">R</span><strong class="${resultClass(t.r_multiple)}">${t.r_multiple ?? 'n/a'}</strong></div>
-          <div><span class="label">Entry time</span><strong>${fmtTime(t.entry_time)}</strong></div>
-          <div><span class="label">Exit time</span><strong>${fmtTime(t.exit_time)}</strong></div>
+          <div><span class="label">Return %</span><strong class="${resultClass(t.return_pct ?? t.unrealized_return_pct)}">${t.return_pct ?? t.unrealized_return_pct ?? 'n/a'}</strong></div>
+          <div><span class="label">R</span><strong class="${resultClass(t.r_multiple ?? t.unrealized_r_multiple)}">${t.r_multiple ?? t.unrealized_r_multiple ?? 'n/a'}</strong></div>
+          <div><span class="label">Exit reason</span><strong>${t.exit_reason ?? 'n/a'}</strong></div>
+          <div><span class="label">Bars held</span><strong>${t.bars_held ?? 'n/a'}</strong></div>
         </div>
         <div class="liquidity-box">
-          <span class="label">Liquidity target</span>
-          <strong>${t.liquidity_target?.type || 'n/a'} ${t.liquidity_target?.level ?? ''}</strong>
-          <div class="subline">${t.liquidity_target?.reason || ''}</div>
+          <span class="label">Liquidity target at entry</span>
+          <strong>${t.liquidity_target_at_entry?.type || 'n/a'} ${t.liquidity_target_at_entry?.level ?? ''}</strong>
+          <div class="subline">${t.liquidity_target_at_entry?.reason || ''}</div>
         </div>
       </article>
     `).join('');
@@ -180,9 +184,11 @@ async function loadDashboard() {
         </div>
         <div class="price-row">
           <div><div class="label">Prix</div><div class="price">${Number(sig.price).toFixed(6)}</div></div>
-          <div><div class="label">RSI 5m</div><div class="value">${sig.rsi_5m ?? 'n/a'}</div></div>
+          <div><div class="label">RSI</div><div class="value">${sig.rsi_5m ?? 'n/a'}</div></div>
         </div>
         <div class="mini-grid">
+          <div><span class="label">Signal time</span><strong>${fmtTime(sig.signal_time)}</strong></div>
+          <div><span class="label">Interval</span><strong>${sig.signal_interval ?? 'n/a'}</strong></div>
           <div><span class="label">State</span><strong>${sig.state}</strong></div>
           <div><span class="label">Trigger</span><strong>${sig.trigger}</strong></div>
           <div><span class="label">TP zone</span><strong>${sig.tp_zone ? 'yes' : 'no'}</strong></div>
@@ -207,7 +213,7 @@ async function loadDashboard() {
   document.getElementById('signals').innerHTML = filtered.map(renderSignal).join('');
 }
 function bindControls() {
-  ['filterSymbol', 'filterBias', 'filterScore', 'toggleTopOnly', 'togglePipeline', 'toggleTrade', 'tradeFilterSymbol', 'tradeFilterSide', 'tradeFilterMinR'].forEach(id => {
+  ['filterSymbol', 'filterBias', 'filterScore', 'toggleTopOnly', 'togglePipeline', 'toggleTrade', 'tradeFilterSymbol', 'tradeFilterSide', 'tradeFilterMinR', 'tradeFilterStatus'].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('input', () => { if (id.startsWith('tradeFilter')) loadBacktest(); else loadDashboard(); });

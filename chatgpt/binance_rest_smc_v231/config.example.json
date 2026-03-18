@@ -32,7 +32,6 @@
     "symbol": "ETHUSDT",
     "interval": "5m",
     "history_limit": 800,
-    "holding_bars": 6,
     "min_score": 5
   }
 }

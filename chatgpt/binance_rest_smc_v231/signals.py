@@ -42,9 +42,7 @@ def recent_extremes(candles: list[dict[str, Any]], window: int) -> tuple[float, 
     return max(c["high"] for c in subset), min(c["low"] for c in subset)
 
 
-def current_session(offset_hours: int) -> str:
-    now = datetime.now(timezone.utc) + timedelta(hours=offset_hours)
-    h = now.hour
+def _session_from_hour(h: int) -> str:
     if 2 <= h < 4:
         return "asia"
     if 4 <= h < 6:
@@ -56,6 +54,27 @@ def current_session(offset_hours: int) -> str:
     return "off_session"
 
 
+def current_session(offset_hours: int) -> str:
+    now = datetime.now(timezone.utc) + timedelta(hours=offset_hours)
+    return _session_from_hour(now.hour)
+
+
+def session_from_timestamp(ts_ms: int | None, offset_hours: int) -> str:
+    if not ts_ms:
+        return current_session(offset_hours)
+    dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc) + timedelta(hours=offset_hours)
+    return _session_from_hour(dt.hour)
+
+
+def infer_interval_label(candles: list[dict[str, Any]]) -> str:
+    if len(candles) < 2:
+        return "unknown"
+    delta_ms = candles[-1]["open_time"] - candles[-2]["open_time"]
+    minutes = int(round(delta_ms / 60000))
+    mapping = {1: "1m", 3: "3m", 5: "5m", 15: "15m", 30: "30m", 60: "1h", 120: "2h", 240: "4h", 360: "6h", 480: "8h", 720: "12h", 1440: "1d"}
+    return mapping.get(minutes, f"{minutes}m")
+
+
 def near_level(price: float, level: float, pct: float) -> bool:
     if level == 0:
         return False
@@ -65,17 +84,7 @@ def near_level(price: float, level: float, pct: float) -> bool:
 def session_extremes(candles: list[dict[str, Any]], offset_hours: int, session_name: str) -> tuple[float | None, float | None]:
     selected: list[dict[str, Any]] = []
     for c in candles:
-        dt = datetime.fromtimestamp(c["open_time"] / 1000, tz=timezone.utc) + timedelta(hours=offset_hours)
-        h = dt.hour
-        ses = "off_session"
-        if 2 <= h < 4:
-            ses = "asia"
-        elif 4 <= h < 6:
-            ses = "london_open"
-        elif 6 <= h < 9:
-            ses = "london"
-        elif 9 <= h < 12:
-            ses = "new_york"
+        ses = session_from_timestamp(c["open_time"], offset_hours)
         if ses == session_name:
             selected.append(c)
     if not selected:
