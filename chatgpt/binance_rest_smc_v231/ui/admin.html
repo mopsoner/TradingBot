@@ -60,11 +60,11 @@
     <section class="card">
       <div class="section-head">
         <h2>Backtest settings</h2>
-        <span class="hint">Paire, timeframe, profondeur, score et ratio minimum</span>
+        <span class="hint">Paire, profondeur, score et ratio minimum</span>
       </div>
       <div class="form-grid admin-grid">
         <label class="field"><span class="field-label">Backtest symbol</span><span class="field-help">Paire utilisée pour le test historique.</span><input id="bt_symbol" type="text" placeholder="ETHUSDT"></label>
-        <label class="field"><span class="field-label">Backtest interval</span><span class="field-help">Timeframe du backtest. Exemples : 1m, 5m, 15m, 1h.</span><input id="bt_interval" type="text" placeholder="5m"></label>
+        <div class="field readonly-field"><span class="field-label">Backtest interval</span><span class="field-help">Piloté par le processus, non modifiable ici.</span><div id="bt_interval_display" class="readonly-value">n/a</div></div>
         <label class="field"><span class="field-label">History limit</span><span class="field-help">Nombre de bougies chargées pour le backtest.</span><input id="history_limit" type="number" placeholder="800"></label>
         <label class="field"><span class="field-label">Minimum score</span><span class="field-help">Score minimal pour retenir un trade dans le backtest.</span><input id="min_score" type="number" placeholder="5"></label>
         <label class="field"><span class="field-label">Minimum reward/risk</span><span class="field-help">Filtre les entrées trop proches de la target.</span><input id="min_rr" type="number" step="0.1" placeholder="0.8"></label>

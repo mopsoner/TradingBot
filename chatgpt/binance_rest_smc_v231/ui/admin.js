@@ -10,6 +10,11 @@ function getNum(id, fallback) {
   return v === '' || v == null ? fallback : Number(v);
 }
 
+function setText(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = value ?? '';
+}
+
 function setStatus(text, isError = false) {
   const meta = document.getElementById('adminMeta');
   if (!meta) return;
@@ -36,7 +41,7 @@ async function loadConfig() {
   setValue('batch_size', currentConfig.symbol_discovery?.batch_size);
   setValue('status', currentConfig.symbol_discovery?.status);
   setValue('bt_symbol', currentConfig.backtest?.symbol);
-  setValue('bt_interval', currentConfig.backtest?.interval);
+  setText('bt_interval_display', currentConfig.backtest?.interval || 'n/a');
   setValue('history_limit', currentConfig.backtest?.history_limit);
   setValue('min_score', currentConfig.backtest?.min_score);
   setValue('min_rr', currentConfig.backtest?.min_rr);
@@ -63,7 +68,6 @@ async function saveConfig() {
   next.symbol_discovery.status = document.getElementById('status')?.value || next.symbol_discovery.status;
   next.backtest = next.backtest || {};
   next.backtest.symbol = document.getElementById('bt_symbol')?.value || next.backtest.symbol;
-  next.backtest.interval = document.getElementById('bt_interval')?.value || next.backtest.interval;
   next.backtest.history_limit = getNum('history_limit', next.backtest.history_limit);
   next.backtest.min_score = getNum('min_score', next.backtest.min_score);
   next.backtest.min_rr = getNum('min_rr', next.backtest.min_rr ?? 0.8);
@@ -79,6 +83,7 @@ async function saveConfig() {
     return;
   }
   currentConfig = next;
+  setText('bt_interval_display', currentConfig.backtest?.interval || 'n/a');
   setStatus('Config sauvegardée');
 }
 
