@@ -109,6 +109,7 @@ def load_cached_ohlc(path: str, symbol: str, interval: str, limit: int) -> list[
 
 
 def save_signal(path: str, signal: dict[str, Any]) -> None:
+    rsi_value = signal.get("rsi_main", signal.get("rsi_5m"))
     with sqlite3.connect(path) as conn:
         conn.execute(
             "INSERT INTO signals (symbol, session, price, rsi_5m, state, trigger, bias, tp_zone, score, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -116,7 +117,7 @@ def save_signal(path: str, signal: dict[str, Any]) -> None:
                 signal["symbol"],
                 signal["session"],
                 signal["price"],
-                signal["rsi_5m"],
+                rsi_value,
                 signal["state"],
                 signal["trigger"],
                 signal["bias"],
