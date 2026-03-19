@@ -59,6 +59,22 @@ def _reward_risk_ratio(side: str, entry: float, target: float | None, stop: floa
     return reward / risk
 
 
+def _close_trade(open_trade: dict, signal: dict | None, exit_price: float, exit_session: str | None, exit_reason: str, bars_held: int) -> dict:
+    open_trade["status"] = "closed"
+    open_trade["exit_signal_time"] = signal.get("signal_time") if signal else None
+    open_trade["exit_signal_type"] = signal.get("trigger") if signal else None
+    open_trade["exit_signal_bias"] = signal.get("bias") if signal else None
+    open_trade["exit_price"] = exit_price
+    open_trade["exit_session"] = exit_session
+    open_trade["exit_reason"] = exit_reason
+    open_trade["bars_held"] = bars_held
+    ret = _calc_return_pct(open_trade["side"], open_trade["entry_price"], exit_price)
+    open_trade["return_pct"] = round(ret, 4) if ret is not None else None
+    r_val = _calc_r_multiple(open_trade["side"], open_trade["entry_price"], exit_price, open_trade["stop_price"])
+    open_trade["r_multiple"] = round(r_val, 4) if r_val is not None else None
+    return open_trade
+
+
 def backtest(cfg: dict) -> None:
     bt = cfg["backtest"]
     symbol = bt["symbol"]
@@ -90,6 +106,7 @@ def backtest(cfg: dict) -> None:
     closed_count = 0
     open_count = 0
     opposite_signal_exit_count = 0
+    stop_invalidation_count = 0
     filtered_rr_count = 0
     bars_held_closed: list[int] = []
     durations_minutes_closed: list[float] = []
@@ -102,6 +119,43 @@ def backtest(cfg: dict) -> None:
         if len(c_htf) < 10:
             continue
         signal = build_signal(symbol, c_fast, c_main, c_htf, cfg)
+
+        if open_trade is not None:
+            invalidated = (
+                open_trade["side"] == "short" and current["close"] > open_trade["stop_price"]
+            ) or (
+                open_trade["side"] == "long" and current["close"] < open_trade["stop_price"]
+            )
+            if invalidated:
+                open_trade = _close_trade(
+                    open_trade=open_trade,
+                    signal=None,
+                    exit_price=current["close"],
+                    exit_session=signal.get("session"),
+                    exit_reason="stop_invalidation",
+                    bars_held=i - open_trade["entry_index"],
+                )
+                trade_objects.append(open_trade)
+                ret_pct = open_trade["return_pct"]
+                if ret_pct is not None:
+                    closed_returns.append(ret_pct)
+                    equity *= (1 + ret_pct / 100)
+                    if ret_pct > 0:
+                        wins += 1
+                        gross_profit += ret_pct / 100
+                    elif ret_pct < 0:
+                        losses += 1
+                        gross_loss += abs(ret_pct / 100)
+                if open_trade["r_multiple"] is not None:
+                    closed_r.append(open_trade["r_multiple"])
+                closed_count += 1
+                stop_invalidation_count += 1
+                bars_held_closed.append(open_trade["bars_held"])
+                if open_trade["entry_signal_time"] and current["close_time"]:
+                    durations_minutes_closed.append((current["close_time"] - open_trade["entry_signal_time"]) / 60000)
+                open_trade = None
+                continue
+
         if signal["score"] < min_score:
             continue
         bias = signal["bias"]
@@ -155,17 +209,14 @@ def backtest(cfg: dict) -> None:
         if not is_opposite:
             continue
 
-        open_trade["status"] = "closed"
-        open_trade["exit_signal_time"] = signal.get("signal_time")
-        open_trade["exit_signal_type"] = signal.get("trigger")
-        open_trade["exit_signal_bias"] = bias
-        open_trade["exit_price"] = signal["price"]
-        open_trade["exit_session"] = signal.get("session")
-        open_trade["exit_reason"] = "opposite_signal"
-        open_trade["bars_held"] = i - open_trade["entry_index"]
-        open_trade["return_pct"] = round(_calc_return_pct(open_trade["side"], open_trade["entry_price"], open_trade["exit_price"]), 4)
-        r_val = _calc_r_multiple(open_trade["side"], open_trade["entry_price"], open_trade["exit_price"], open_trade["stop_price"])
-        open_trade["r_multiple"] = round(r_val, 4) if r_val is not None else None
+        open_trade = _close_trade(
+            open_trade=open_trade,
+            signal=signal,
+            exit_price=signal["price"],
+            exit_session=signal.get("session"),
+            exit_reason="opposite_signal",
+            bars_held=i - open_trade["entry_index"],
+        )
         trade_objects.append(open_trade)
 
         ret_pct = open_trade["return_pct"]
@@ -240,6 +291,7 @@ def backtest(cfg: dict) -> None:
         "min_rr": min_rr,
         "filtered_rr_count": filtered_rr_count,
         "opposite_signal_exit_count": opposite_signal_exit_count,
+        "stop_invalidation_count": stop_invalidation_count,
         "average_bars_held_closed": round(sum(bars_held_closed) / len(bars_held_closed), 2) if bars_held_closed else None,
         "average_trade_duration_minutes_closed": round(sum(durations_minutes_closed) / len(durations_minutes_closed), 2) if durations_minutes_closed else None
     }
