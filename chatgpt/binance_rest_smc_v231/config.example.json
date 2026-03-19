@@ -3,7 +3,8 @@
     "enabled": true,
     "quote_assets": ["USDT"],
     "status": "TRADING",
-    "spot_only": true,
+    "spot_only": false,
+    "margin_only": true,
     "max_symbols_total": 250,
     "batch_size": 20,
     "batch_rotation_file": "data/batch_state.json"

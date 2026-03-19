@@ -62,6 +62,7 @@ def discover_symbols(client: BinanceRestClient, cfg: dict[str, Any]) -> list[str
         status=sd["status"],
         spot_only=sd["spot_only"],
         max_symbols_total=sd["max_symbols_total"],
+        margin_only=sd.get("margin_only", False),
     )
 
 

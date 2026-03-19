@@ -20,11 +20,13 @@ class BinanceRestClient:
     def exchange_info(self) -> dict[str, Any]:
         return self._get("/api/v3/exchangeInfo")
 
-    def discover_symbols(self, quote_assets: list[str], status: str, spot_only: bool, max_symbols_total: int) -> list[str]:
+    def discover_symbols(self, quote_assets: list[str], status: str, spot_only: bool, max_symbols_total: int, margin_only: bool = False) -> list[str]:
         info = self.exchange_info()
         out: list[str] = []
         for symbol in info.get("symbols", []):
             if spot_only and not symbol.get("isSpotTradingAllowed", False):
+                continue
+            if margin_only and not symbol.get("isMarginTradingAllowed", False):
                 continue
             if symbol.get("status") != status:
                 continue
