@@ -87,7 +87,7 @@ async function loadBacktest() {
       ['Winrate', `${report.winrate_pct}%`], ['Avg', `${report.average_return_pct}%`], ['Median', `${report.median_return_pct}%`],
       ['Best', `${report.best_trade_pct}%`], ['Worst', `${report.worst_trade_pct}%`], ['PF', report.profit_factor ?? 'n/a'],
       ['Cum.', `${report.cumulative_return_pct}%`], ['Avg R', report.average_r_multiple ?? 'n/a'], ['Med R', report.median_r_multiple ?? 'n/a'],
-      ['Total R', report.total_r ?? 'n/a']
+      ['Total R', report.total_r ?? 'n/a'], ['Min RR', report.min_rr ?? 'n/a'], ['RR filtered', report.filtered_rr_count ?? 0]
     ];
     el.innerHTML = items.map(([k,v]) => `<div class="stat-pill"><span class="k">${k}</span><strong class="${resultClass(v)}">${v}</strong></div>`).join('');
 
@@ -131,6 +131,8 @@ async function loadBacktest() {
           <div><span class="label">Exit</span><strong>${t.exit_price ?? t.mark_price ?? 'open'}</strong></div>
           <div><span class="label">Stop</span><strong>${t.stop_price ?? 'n/a'}</strong></div>
           <div><span class="label">Target</span><strong>${t.target_price ?? 'n/a'}</strong></div>
+          <div><span class="label">RSI entry</span><strong>${t.entry_rsi_main ?? 'n/a'}</strong></div>
+          <div><span class="label">RR entry</span><strong>${t.entry_reward_risk_ratio ?? 'n/a'}</strong></div>
           <div><span class="label">Return %</span><strong class="${resultClass(t.return_pct ?? t.unrealized_return_pct)}">${t.return_pct ?? t.unrealized_return_pct ?? 'n/a'}</strong></div>
           <div><span class="label">R</span><strong class="${resultClass(t.r_multiple ?? t.unrealized_r_multiple)}">${t.r_multiple ?? t.unrealized_r_multiple ?? 'n/a'}</strong></div>
           <div><span class="label">Exit reason</span><strong>${t.exit_reason ?? 'n/a'}</strong></div>
@@ -184,7 +186,7 @@ async function loadDashboard() {
         </div>
         <div class="price-row">
           <div><div class="label">Prix</div><div class="price">${Number(sig.price).toFixed(6)}</div></div>
-          <div><div class="label">RSI</div><div class="value">${sig.rsi_5m ?? 'n/a'}</div></div>
+          <div><div class="label">RSI</div><div class="value">${sig.rsi_main ?? 'n/a'}</div></div>
         </div>
         <div class="mini-grid">
           <div><span class="label">Signal time</span><strong>${fmtTime(sig.signal_time)}</strong></div>

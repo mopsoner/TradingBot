@@ -39,6 +39,7 @@ async function loadConfig() {
   setValue('bt_interval', currentConfig.backtest?.interval);
   setValue('history_limit', currentConfig.backtest?.history_limit);
   setValue('min_score', currentConfig.backtest?.min_score);
+  setValue('min_rr', currentConfig.backtest?.min_rr);
   setStatus('Config chargée');
 }
 
@@ -65,6 +66,7 @@ async function saveConfig() {
   next.backtest.interval = document.getElementById('bt_interval')?.value || next.backtest.interval;
   next.backtest.history_limit = getNum('history_limit', next.backtest.history_limit);
   next.backtest.min_score = getNum('min_score', next.backtest.min_score);
+  next.backtest.min_rr = getNum('min_rr', next.backtest.min_rr ?? 0.8);
 
   const res = await fetch('/api/config', {
     method: 'POST',

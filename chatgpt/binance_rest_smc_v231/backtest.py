@@ -45,12 +45,27 @@ def _calc_return_pct(side: str, entry: float, exit_price: float | None) -> float
     return (entry - exit_price) / entry * 100
 
 
+def _reward_risk_ratio(side: str, entry: float, target: float | None, stop: float | None) -> float | None:
+    if target is None or stop is None:
+        return None
+    if side == "long":
+        reward = target - entry
+        risk = entry - stop
+    else:
+        reward = entry - target
+        risk = stop - entry
+    if reward <= 0 or risk <= 0:
+        return None
+    return reward / risk
+
+
 def backtest(cfg: dict) -> None:
     bt = cfg["backtest"]
     symbol = bt["symbol"]
     interval = bt.get("interval", "5m")
     limit = bt["history_limit"]
     min_score = bt["min_score"]
+    min_rr = bt.get("min_rr", 0.8)
     cache_db = cfg["ohlc_cache_db_path"]
     report_path = cfg.get("backtest_report_path", "data/backtest_report.json")
     trades_path = cfg.get("backtest_trades_path", "data/backtest_trades.json")
@@ -75,6 +90,7 @@ def backtest(cfg: dict) -> None:
     closed_count = 0
     open_count = 0
     opposite_signal_exit_count = 0
+    filtered_rr_count = 0
     bars_held_closed: list[int] = []
     durations_minutes_closed: list[float] = []
 
@@ -94,6 +110,10 @@ def backtest(cfg: dict) -> None:
 
         if open_trade is None:
             side = "long" if bias == "bull_confirm" else "short"
+            rr_ratio = _reward_risk_ratio(side, signal["price"], signal.get("trade", {}).get("target"), signal.get("trade", {}).get("stop"))
+            if rr_ratio is None or rr_ratio < min_rr:
+                filtered_rr_count += 1
+                continue
             if side == "long":
                 long_count += 1
             else:
@@ -111,6 +131,8 @@ def backtest(cfg: dict) -> None:
                 "entry_price": signal["price"],
                 "entry_session": signal.get("session"),
                 "entry_index": i,
+                "entry_rsi_main": signal.get("rsi_main"),
+                "entry_reward_risk_ratio": round(rr_ratio, 4) if rr_ratio is not None else None,
                 "score": signal.get("score"),
                 "state": signal.get("state"),
                 "tp_zone": signal.get("tp_zone"),
@@ -215,6 +237,8 @@ def backtest(cfg: dict) -> None:
         "long_count": long_count,
         "short_count": short_count,
         "min_score": min_score,
+        "min_rr": min_rr,
+        "filtered_rr_count": filtered_rr_count,
         "opposite_signal_exit_count": opposite_signal_exit_count,
         "average_bars_held_closed": round(sum(bars_held_closed) / len(bars_held_closed), 2) if bars_held_closed else None,
         "average_trade_duration_minutes_closed": round(sum(durations_minutes_closed) / len(durations_minutes_closed), 2) if durations_minutes_closed else None
