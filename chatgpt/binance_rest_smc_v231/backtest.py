@@ -5,11 +5,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from statistics import median
 from collector import BinanceRestClient
-from engine import build_signal
+from pipeline import build_batch_signal, replay_slices
 from storage import init_ohlc_cache, load_cached_ohlc, upsert_ohlc
 
-
-HTF_MAP = {"1m": "15m", "3m": "30m", "5m": "1h", "15m": "4h", "30m": "4h", "1h": "1d", "2h": "1d", "4h": "1d"}
+BATCH_REPLAY_INTERVAL = "batch_replay_1m_5m_1h"
 
 
 def load_config() -> dict:
@@ -112,22 +111,22 @@ def _write_backtest_archive(base_dir: Path, run_id: str, report: dict, trades: l
 def backtest(cfg: dict) -> None:
     bt = cfg["backtest"]
     symbol = bt["symbol"]
-    interval = bt.get("interval", "5m")
     limit = bt["history_limit"]
     min_score = bt["min_score"]
     min_rr = bt.get("min_rr", 0.8)
     cache_db = cfg["ohlc_cache_db_path"]
+    lookback_limit = cfg.get("lookback_limit", 180)
     report_path = cfg.get("backtest_report_path", "data/backtest_report.json")
     trades_path = cfg.get("backtest_trades_path", "data/backtest_trades.json")
     archive_dir = Path(cfg.get("backtest_runs_dir", "data/backtests"))
-    htf_interval = HTF_MAP.get(interval, "1h")
     created_at = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
-    run_id = f"{symbol}_{interval}_{created_at.replace(':', '').replace('-', '').replace('T', '_').replace('Z', '')}"
+    run_id = f"{symbol}_{BATCH_REPLAY_INTERVAL}_{created_at.replace(':', '').replace('-', '').replace('T', '_').replace('Z', '')}"
 
     init_ohlc_cache(cache_db)
     client = BinanceRestClient(cfg["binance_rest_base"])
-    candles = get_candles(client, cache_db, symbol, interval, limit)
-    candles_htf = get_candles(client, cache_db, symbol, htf_interval, min(max(120, limit // 4), limit))
+    candles_1m = get_candles(client, cache_db, symbol, "1m", limit)
+    candles_5m = get_candles(client, cache_db, symbol, "5m", max(lookback_limit, (limit // 5) + lookback_limit))
+    candles_1h = get_candles(client, cache_db, symbol, "1h", max(120, (limit // 60) + lookback_limit))
 
     closed_returns = []
     closed_r = []
@@ -148,14 +147,13 @@ def backtest(cfg: dict) -> None:
     bars_held_closed: list[int] = []
     durations_minutes_closed: list[float] = []
 
-    for i in range(40, len(candles)):
-        current = candles[i]
-        c_main = candles[: i + 1]
-        c_fast = c_main[-min(len(c_main), 60):]
-        c_htf = [c for c in candles_htf if c["close_time"] <= current["close_time"]]
-        if len(c_htf) < 10:
+    warmup = min(max(40, lookback_limit), max(40, len(candles_1m) - 1))
+    for i in range(warmup, len(candles_1m)):
+        current = candles_1m[i]
+        c1, c5, c1h = replay_slices(candles_1m, candles_5m, candles_1h, current["close_time"], lookback_limit)
+        if len(c1) < 20 or len(c5) < 20 or len(c1h) < 10:
             continue
-        signal = build_signal(symbol, c_fast, c_main, c_htf, cfg)
+        signal = build_batch_signal(symbol, c1, c5, c1h, cfg)
 
         if open_trade is not None:
             invalidated = (
@@ -278,12 +276,12 @@ def backtest(cfg: dict) -> None:
     if open_trade is not None:
         open_trade["status"] = "open"
         open_trade["exit_reason"] = "open_end_of_data"
-        open_trade["mark_price"] = candles[-1]["close"]
-        unrealized = _calc_return_pct(open_trade["side"], open_trade["entry_price"], candles[-1]["close"])
+        open_trade["mark_price"] = candles_1m[-1]["close"]
+        unrealized = _calc_return_pct(open_trade["side"], open_trade["entry_price"], candles_1m[-1]["close"])
         open_trade["unrealized_return_pct"] = round(unrealized, 4) if unrealized is not None else None
-        r_unrealized = _calc_r_multiple(open_trade["side"], open_trade["entry_price"], candles[-1]["close"], open_trade["stop_price"])
+        r_unrealized = _calc_r_multiple(open_trade["side"], open_trade["entry_price"], candles_1m[-1]["close"], open_trade["stop_price"])
         open_trade["unrealized_r_multiple"] = round(r_unrealized, 4) if r_unrealized is not None else None
-        open_trade["bars_held"] = len(candles) - 1 - open_trade["entry_index"]
+        open_trade["bars_held"] = len(candles_1m) - 1 - open_trade["entry_index"]
         trade_objects.append(open_trade)
         open_count += 1
 
@@ -305,8 +303,9 @@ def backtest(cfg: dict) -> None:
         "run_id": run_id,
         "created_at": created_at,
         "symbol": symbol,
-        "interval": interval,
-        "htf_interval": htf_interval,
+        "interval": BATCH_REPLAY_INTERVAL,
+        "replay_timeframes": ["1m", "5m", "1h"],
+        "scan_step_interval": "1m",
         "trades": closed_count + open_count,
         "closed_trades": closed_count,
         "open_trades": open_count,
@@ -341,9 +340,9 @@ def backtest(cfg: dict) -> None:
     Path(trades_path).write_text(json.dumps(trade_objects, ensure_ascii=False, indent=2), encoding="utf-8")
     _write_backtest_archive(archive_dir, run_id, report, trade_objects)
 
-    print(f"Backtest symbol={symbol} interval={interval} run_id={run_id}")
+    print(f"Backtest symbol={symbol} interval={BATCH_REPLAY_INTERVAL} run_id={run_id}")
     for k, v in report.items():
-        if k in {"symbol", "interval", "run_id", "created_at"}:
+        if k in {"symbol", "interval", "run_id", "created_at", "replay_timeframes", "scan_step_interval"}:
             continue
         print(f"{k}: {v}")
     print(f"trades_saved: {len(trade_objects)}")

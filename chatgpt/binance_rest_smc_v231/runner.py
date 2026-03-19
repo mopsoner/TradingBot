@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from collector import BinanceRestClient, safe_sleep
-from engine import build_signal
+from pipeline import build_batch_signal
 from storage import append_log, init_db, init_ohlc_cache, load_cached_ohlc, save_signal, upsert_ohlc, write_dashboard
 
 
@@ -101,8 +101,8 @@ def scan_batch(client: BinanceRestClient, batch: list[str], cfg: dict[str, Any])
         try:
             candles_1m = get_candles(client, cache_db, symbol, "1m", cfg["lookback_limit"])
             candles_5m = get_candles(client, cache_db, symbol, "5m", cfg["lookback_limit"])
-            candles_1h = get_candles(client, cache_db, symbol, "1h", min(120, cfg["lookback_limit"]))
-            signal = build_signal(symbol, candles_1m, candles_5m, candles_1h, cfg)
+            candles_1h = get_candles(client, cache_db, symbol, "1h", max(120, cfg["lookback_limit"]))
+            signal = build_batch_signal(symbol, candles_1m, candles_5m, candles_1h, cfg)
             results.append(signal)
             line = (
                 f"[{datetime.now(timezone.utc).isoformat()}] {signal['symbol']} session={signal['session']} "
