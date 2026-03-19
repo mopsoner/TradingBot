@@ -69,6 +69,44 @@ async function loadProcesses() {
     document.getElementById('processes').innerHTML = `<div class="stat-pill wide"><span class="k">Processus</span><strong>Erreur: ${err}</strong></div>`;
   }
 }
+async function loadCachedSymbols() {
+  try {
+    const res = await fetch('/api/cached-symbols?_=' + Date.now());
+    const payload = await res.json();
+    const select = document.getElementById('cachedSymbolSelect');
+    if (!select) return;
+    if (!payload.ok || !Array.isArray(payload.symbols) || !payload.symbols.length) {
+      select.innerHTML = '<option value="">Aucune crypto en cache</option>';
+      return;
+    }
+    select.innerHTML = payload.symbols.map(s => `<option value="${s}">${s}</option>`).join('');
+  } catch {
+    const select = document.getElementById('cachedSymbolSelect');
+    if (select) select.innerHTML = '<option value="">Erreur chargement cache</option>';
+  }
+}
+async function runQuickBacktest() {
+  const select = document.getElementById('cachedSymbolSelect');
+  const meta = document.getElementById('backtestRunMeta');
+  const symbol = select?.value;
+  if (!symbol) {
+    if (meta) meta.textContent = 'Choisis une crypto en cache.';
+    return;
+  }
+  if (meta) meta.textContent = `Lancement du backtest sur ${symbol}...`;
+  const res = await fetch('/api/run-backtest', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ symbol })
+  });
+  const payload = await res.json();
+  if (!payload.ok) {
+    if (meta) meta.textContent = `Erreur: ${payload.error || 'backtest failed'}`;
+    return;
+  }
+  if (meta) meta.textContent = `Backtest lancé sur ${payload.symbol} (pid ${payload.pid}). Recharge dans quelques secondes.`;
+  setTimeout(() => { loadBacktest(); loadProcesses(); }, 3000);
+}
 async function loadBacktest() {
   try {
     const [reportRes, tradesRes] = await Promise.all([
@@ -223,9 +261,11 @@ function bindControls() {
   });
   const rt = document.getElementById('runtimeToggle');
   if (rt) rt.addEventListener('click', toggleRuntime);
+  const backtestBtn = document.getElementById('runBacktestBtn');
+  if (backtestBtn) backtestBtn.addEventListener('click', runQuickBacktest);
 }
 bindControls();
-Promise.all([loadRuntime(), loadProcesses(), loadDashboard(), loadBacktest()]).catch(err => {
+Promise.all([loadRuntime(), loadProcesses(), loadCachedSymbols(), loadDashboard(), loadBacktest()]).catch(err => {
   document.getElementById('meta').textContent = 'Erreur chargement dashboard: ' + err;
 });
 setInterval(() => { loadRuntime(); loadProcesses(); loadDashboard(); loadBacktest(); }, 15000);

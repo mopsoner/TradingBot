@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import sqlite3
 import subprocess
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -65,15 +66,22 @@ class Handler(SimpleHTTPRequestHandler):
         for p in sorted(DATA_DIR.glob('*.json')):
             try:
                 stat = p.stat()
-                out.append({
-                    'name': p.name,
-                    'size': stat.st_size,
-                    'mtime': int(stat.st_mtime * 1000),
-                    'url': f'/data/{p.name}'
-                })
+                out.append({'name': p.name, 'size': stat.st_size, 'mtime': int(stat.st_mtime * 1000), 'url': f'/data/{p.name}'})
             except Exception:
                 continue
         return out
+
+    def _list_cached_symbols(self) -> list[str]:
+        try:
+            cfg = json.loads(CONFIG_PATH.read_text(encoding='utf-8'))
+            db_path = ROOT / cfg.get('ohlc_cache_db_path', 'data/ohlc_cache.db')
+            if not db_path.exists():
+                return []
+            with sqlite3.connect(db_path) as conn:
+                rows = conn.execute("SELECT DISTINCT symbol FROM ohlc_cache ORDER BY symbol ASC").fetchall()
+            return [r[0] for r in rows if r and r[0]]
+        except Exception:
+            return []
 
     def do_GET(self):
         if self.path.startswith('/api/config'):
@@ -104,6 +112,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(200, {"ok": True, "processes": self._list_processes()})
         if self.path.startswith('/api/data-files'):
             return self._json(200, {"ok": True, "files": self._list_data_files()})
+        if self.path.startswith('/api/cached-symbols'):
+            return self._json(200, {"ok": True, "symbols": self._list_cached_symbols()})
         return super().do_GET()
 
     def do_POST(self):
@@ -144,6 +154,21 @@ class Handler(SimpleHTTPRequestHandler):
                     return self._json(400, {"ok": False, "error": "Refusing to stop current admin server process"})
                 os.kill(pid, signal.SIGTERM)
                 return self._json(200, {"ok": True, "stopped_pid": pid})
+            except Exception as exc:
+                return self._json(500, {"ok": False, "error": str(exc)})
+        if self.path.startswith('/api/run-backtest'):
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                raw = self.rfile.read(length)
+                payload = json.loads(raw.decode('utf-8')) if length else {}
+                symbol = payload.get('symbol')
+                if not symbol or not isinstance(symbol, str):
+                    return self._json(400, {"ok": False, "error": "symbol is required"})
+                cfg = json.loads(CONFIG_PATH.read_text(encoding='utf-8'))
+                cfg.setdefault('backtest', {})['symbol'] = symbol.strip().upper()
+                CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding='utf-8')
+                proc = subprocess.Popen(['python3', 'backtest.py'], cwd=str(ROOT), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return self._json(200, {"ok": True, "symbol": cfg['backtest']['symbol'], "pid": proc.pid})
             except Exception as exc:
                 return self._json(500, {"ok": False, "error": str(exc)})
         return self._json(404, {"ok": False, "error": "not found"})

@@ -23,6 +23,20 @@
       <div id="stats" class="stats-row"></div>
     </section>
 
+    <section class="card compact">
+      <div class="section-head">
+        <h2>Backtest rapide</h2>
+        <span class="hint">Choisis une crypto déjà en cache puis lance un backtest</span>
+      </div>
+      <div class="controls quick-backtest">
+        <select id="cachedSymbolSelect">
+          <option value="">Chargement des cryptos...</option>
+        </select>
+        <button id="runBacktestBtn">Lancer backtest</button>
+      </div>
+      <p id="backtestRunMeta" class="hint"></p>
+    </section>
+
     <details class="card compact" open>
       <summary class="accordion-summary">Processus <span class="hint">Vue live</span></summary>
       <div id="processes" class="accordion-body grid"></div>
