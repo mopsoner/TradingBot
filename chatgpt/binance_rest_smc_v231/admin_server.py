@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config.json"
 REPORT_PATH = ROOT / "data" / "backtest_report.json"
 RUNTIME_PATH_DEFAULT = ROOT / "data" / "runtime_control.json"
+DATA_DIR = ROOT / "data"
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -57,6 +58,23 @@ class Handler(SimpleHTTPRequestHandler):
             out.append({'pid': pid, 'etime': etime, 'cmd': cmd})
         return out
 
+    def _list_data_files(self) -> list[dict]:
+        if not DATA_DIR.exists():
+            return []
+        out = []
+        for p in sorted(DATA_DIR.glob('*.json')):
+            try:
+                stat = p.stat()
+                out.append({
+                    'name': p.name,
+                    'size': stat.st_size,
+                    'mtime': int(stat.st_mtime * 1000),
+                    'url': f'/data/{p.name}'
+                })
+            except Exception:
+                continue
+        return out
+
     def do_GET(self):
         if self.path.startswith('/api/config'):
             try:
@@ -84,6 +102,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json(500, {"ok": False, "error": str(exc)})
         if self.path.startswith('/api/processes'):
             return self._json(200, {"ok": True, "processes": self._list_processes()})
+        if self.path.startswith('/api/data-files'):
+            return self._json(200, {"ok": True, "files": self._list_data_files()})
         return super().do_GET()
 
     def do_POST(self):
