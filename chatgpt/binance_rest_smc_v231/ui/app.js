@@ -1,3 +1,5 @@
+let currentBacktestRunId = 'latest';
+
 function fmtTime(ms) {
   if (!ms) return 'n/a';
   try { return new Date(ms).toLocaleString(); } catch { return String(ms); }
@@ -85,6 +87,26 @@ async function loadCachedSymbols() {
     if (select) select.innerHTML = '<option value="">Erreur chargement cache</option>';
   }
 }
+async function loadBacktestRuns() {
+  try {
+    const res = await fetch('/api/backtest-runs?_=' + Date.now());
+    const payload = await res.json();
+    const select = document.getElementById('backtestHistorySelect');
+    const meta = document.getElementById('backtestHistoryMeta');
+    if (!select) return;
+    let html = '<option value="latest">Dernier backtest</option>';
+    const runs = Array.isArray(payload.runs) ? payload.runs : [];
+    for (const run of runs) {
+      const label = `${run.symbol || '?'} · ${run.interval || '?'} · ${run.created_at || run.run_id}`;
+      html += `<option value="${run.run_id}">${label}</option>`;
+    }
+    select.innerHTML = html;
+    if (meta) meta.textContent = runs.length ? `${runs.length} backtest(s) sauvegardé(s)` : 'Aucun historique sauvegardé';
+  } catch (err) {
+    const meta = document.getElementById('backtestHistoryMeta');
+    if (meta) meta.textContent = `Erreur historique: ${err}`;
+  }
+}
 async function runQuickBacktest() {
   const select = document.getElementById('cachedSymbolSelect');
   const meta = document.getElementById('backtestRunMeta');
@@ -104,85 +126,97 @@ async function runQuickBacktest() {
     if (meta) meta.textContent = `Erreur: ${payload.error || 'backtest failed'}`;
     return;
   }
+  currentBacktestRunId = 'latest';
   if (meta) meta.textContent = `Backtest lancé sur ${payload.symbol} (pid ${payload.pid}). Recharge dans quelques secondes.`;
-  setTimeout(() => { loadBacktest(); loadProcesses(); }, 3000);
+  setTimeout(() => { loadBacktestRuns(); loadBacktest('latest'); loadProcesses(); }, 3500);
 }
-async function loadBacktest() {
-  try {
-    const [reportRes, tradesRes] = await Promise.all([
-      fetch('/api/backtest_report?_=' + Date.now()),
-      fetch('/data/backtest_trades.json?_=' + Date.now()).catch(() => null),
-    ]);
-    const payload = await reportRes.json();
-    const report = payload.report;
-    const el = document.getElementById('backtest');
-    if (!report) {
-      el.innerHTML = '<div class="stat-pill wide"><span class="k">Backtest</span><strong>Aucun rapport</strong></div>';
-      return;
-    }
-    const items = [
-      ['Symbol', report.symbol], ['Interval', report.interval], ['Closed', report.closed_trades], ['Open', report.open_trades],
-      ['Winrate', `${report.winrate_pct}%`], ['Avg', `${report.average_return_pct}%`], ['Median', `${report.median_return_pct}%`],
-      ['Best', `${report.best_trade_pct}%`], ['Worst', `${report.worst_trade_pct}%`], ['PF', report.profit_factor ?? 'n/a'],
-      ['Cum.', `${report.cumulative_return_pct}%`], ['Avg R', report.average_r_multiple ?? 'n/a'], ['Med R', report.median_r_multiple ?? 'n/a'],
-      ['Total R', report.total_r ?? 'n/a'], ['Min RR', report.min_rr ?? 'n/a'], ['RR filtered', report.filtered_rr_count ?? 0]
-    ];
-    el.innerHTML = items.map(([k,v]) => `<div class="stat-pill"><span class="k">${k}</span><strong class="${resultClass(v)}">${v}</strong></div>`).join('');
+async function loadSelectedBacktest() {
+  const select = document.getElementById('backtestHistorySelect');
+  currentBacktestRunId = select?.value || 'latest';
+  await loadBacktest(currentBacktestRunId);
+}
+function renderBacktest(report, trades) {
+  const el = document.getElementById('backtest');
+  const items = [
+    ['Run', report.run_id || 'latest'], ['Symbol', report.symbol], ['Interval', report.interval], ['Closed', report.closed_trades], ['Open', report.open_trades],
+    ['Winrate', `${report.winrate_pct}%`], ['Avg', `${report.average_return_pct}%`], ['Median', `${report.median_return_pct}%`],
+    ['Best', `${report.best_trade_pct}%`], ['Worst', `${report.worst_trade_pct}%`], ['PF', report.profit_factor ?? 'n/a'],
+    ['Cum.', `${report.cumulative_return_pct}%`], ['Avg R', report.average_r_multiple ?? 'n/a'], ['Med R', report.median_r_multiple ?? 'n/a'],
+    ['Total R', report.total_r ?? 'n/a'], ['Min RR', report.min_rr ?? 'n/a'], ['RR filtered', report.filtered_rr_count ?? 0]
+  ];
+  el.innerHTML = items.map(([k,v]) => `<div class="stat-pill"><span class="k">${k}</span><strong class="${resultClass(v)}">${v}</strong></div>`).join('');
 
-    const tradesContainer = document.getElementById('backtestTrades');
-    if (!tradesContainer) return;
-    if (!tradesRes) {
-      tradesContainer.innerHTML = '<div class="stat-pill wide"><span class="k">Trades</span><strong>Aucun fichier de trades</strong></div>';
+  const tradesContainer = document.getElementById('backtestTrades');
+  const symbolQ = (document.getElementById('tradeFilterSymbol')?.value || '').trim().toUpperCase();
+  const sideQ = document.getElementById('tradeFilterSide')?.value || 'all';
+  const statusQ = document.getElementById('tradeFilterStatus')?.value || 'all';
+  const minRRaw = document.getElementById('tradeFilterMinR')?.value || '';
+  const minR = minRRaw === '' ? null : Number(minRRaw);
+  const filteredTrades = (Array.isArray(trades) ? trades : []).filter(t => {
+    if (symbolQ && !(t.symbol || '').includes(symbolQ)) return false;
+    if (sideQ !== 'all' && t.side !== sideQ) return false;
+    if (statusQ !== 'all' && t.status !== statusQ) return false;
+    const rValue = t.r_multiple ?? t.unrealized_r_multiple;
+    if (minR !== null && (rValue == null || Number(rValue) < minR)) return false;
+    return true;
+  });
+  if (!filteredTrades.length) {
+    tradesContainer.innerHTML = '<div class="stat-pill wide"><span class="k">Trades</span><strong>Aucun trade détaillé</strong></div>';
+    return;
+  }
+  tradesContainer.innerHTML = filteredTrades.slice(0, 120).map(t => `
+    <article class="signal small-card">
+      <div class="topline">
+        <div>
+          <div class="symbol">${t.symbol} · ${t.side} · ${t.status}</div>
+          <div class="subline">${t.entry_session} · ${t.entry_signal_bias}</div>
+        </div>
+        <div class="score">${t.score}</div>
+      </div>
+      <div class="mini-grid">
+        <div><span class="label">Signal time</span><strong>${fmtTime(t.entry_signal_time)}</strong></div>
+        <div><span class="label">Exit signal time</span><strong>${fmtTime(t.exit_signal_time)}</strong></div>
+        <div><span class="label">Entry</span><strong>${t.entry_price}</strong></div>
+        <div><span class="label">Exit</span><strong>${t.exit_price ?? t.mark_price ?? 'open'}</strong></div>
+        <div><span class="label">Stop</span><strong>${t.stop_price ?? 'n/a'}</strong></div>
+        <div><span class="label">Target</span><strong>${t.target_price ?? 'n/a'}</strong></div>
+        <div><span class="label">RSI entry</span><strong>${t.entry_rsi_main ?? 'n/a'}</strong></div>
+        <div><span class="label">RR entry</span><strong>${t.entry_reward_risk_ratio ?? 'n/a'}</strong></div>
+        <div><span class="label">Return %</span><strong class="${resultClass(t.return_pct ?? t.unrealized_return_pct)}">${t.return_pct ?? t.unrealized_return_pct ?? 'n/a'}</strong></div>
+        <div><span class="label">R</span><strong class="${resultClass(t.r_multiple ?? t.unrealized_r_multiple)}">${t.r_multiple ?? t.unrealized_r_multiple ?? 'n/a'}</strong></div>
+        <div><span class="label">Exit reason</span><strong>${t.exit_reason ?? 'n/a'}</strong></div>
+        <div><span class="label">Bars held</span><strong>${t.bars_held ?? 'n/a'}</strong></div>
+      </div>
+      <div class="liquidity-box">
+        <span class="label">Liquidity target at entry</span>
+        <strong>${t.liquidity_target_at_entry?.type || 'n/a'} ${t.liquidity_target_at_entry?.level ?? ''}</strong>
+        <div class="subline">${t.liquidity_target_at_entry?.reason || ''}</div>
+      </div>
+    </article>
+  `).join('');
+}
+async function loadBacktest(runId = 'latest') {
+  try {
+    if (runId === 'latest') {
+      const [reportRes, tradesRes] = await Promise.all([
+        fetch('/api/backtest_report?_=' + Date.now()),
+        fetch('/data/backtest_trades.json?_=' + Date.now()).catch(() => null),
+      ]);
+      const payload = await reportRes.json();
+      const report = payload.report;
+      if (!report) {
+        document.getElementById('backtest').innerHTML = '<div class="stat-pill wide"><span class="k">Backtest</span><strong>Aucun rapport</strong></div>';
+        document.getElementById('backtestTrades').innerHTML = '<div class="stat-pill wide"><span class="k">Trades</span><strong>Aucun trade détaillé</strong></div>';
+        return;
+      }
+      const trades = tradesRes ? await tradesRes.json() : [];
+      renderBacktest(report, trades);
       return;
     }
-    const trades = await tradesRes.json();
-    const symbolQ = (document.getElementById('tradeFilterSymbol')?.value || '').trim().toUpperCase();
-    const sideQ = document.getElementById('tradeFilterSide')?.value || 'all';
-    const statusQ = document.getElementById('tradeFilterStatus')?.value || 'all';
-    const minRRaw = document.getElementById('tradeFilterMinR')?.value || '';
-    const minR = minRRaw === '' ? null : Number(minRRaw);
-    const filteredTrades = (Array.isArray(trades) ? trades : []).filter(t => {
-      if (symbolQ && !(t.symbol || '').includes(symbolQ)) return false;
-      if (sideQ !== 'all' && t.side !== sideQ) return false;
-      if (statusQ !== 'all' && t.status !== statusQ) return false;
-      const rValue = t.r_multiple ?? t.unrealized_r_multiple;
-      if (minR !== null && (rValue == null || Number(rValue) < minR)) return false;
-      return true;
-    });
-    if (!filteredTrades.length) {
-      tradesContainer.innerHTML = '<div class="stat-pill wide"><span class="k">Trades</span><strong>Aucun trade détaillé</strong></div>';
-      return;
-    }
-    tradesContainer.innerHTML = filteredTrades.slice(0, 80).map(t => `
-      <article class="signal small-card">
-        <div class="topline">
-          <div>
-            <div class="symbol">${t.symbol} · ${t.side} · ${t.status}</div>
-            <div class="subline">${t.entry_session} · ${t.entry_signal_bias}</div>
-          </div>
-          <div class="score">${t.score}</div>
-        </div>
-        <div class="mini-grid">
-          <div><span class="label">Signal time</span><strong>${fmtTime(t.entry_signal_time)}</strong></div>
-          <div><span class="label">Exit signal time</span><strong>${fmtTime(t.exit_signal_time)}</strong></div>
-          <div><span class="label">Entry</span><strong>${t.entry_price}</strong></div>
-          <div><span class="label">Exit</span><strong>${t.exit_price ?? t.mark_price ?? 'open'}</strong></div>
-          <div><span class="label">Stop</span><strong>${t.stop_price ?? 'n/a'}</strong></div>
-          <div><span class="label">Target</span><strong>${t.target_price ?? 'n/a'}</strong></div>
-          <div><span class="label">RSI entry</span><strong>${t.entry_rsi_main ?? 'n/a'}</strong></div>
-          <div><span class="label">RR entry</span><strong>${t.entry_reward_risk_ratio ?? 'n/a'}</strong></div>
-          <div><span class="label">Return %</span><strong class="${resultClass(t.return_pct ?? t.unrealized_return_pct)}">${t.return_pct ?? t.unrealized_return_pct ?? 'n/a'}</strong></div>
-          <div><span class="label">R</span><strong class="${resultClass(t.r_multiple ?? t.unrealized_r_multiple)}">${t.r_multiple ?? t.unrealized_r_multiple ?? 'n/a'}</strong></div>
-          <div><span class="label">Exit reason</span><strong>${t.exit_reason ?? 'n/a'}</strong></div>
-          <div><span class="label">Bars held</span><strong>${t.bars_held ?? 'n/a'}</strong></div>
-        </div>
-        <div class="liquidity-box">
-          <span class="label">Liquidity target at entry</span>
-          <strong>${t.liquidity_target_at_entry?.type || 'n/a'} ${t.liquidity_target_at_entry?.level ?? ''}</strong>
-          <div class="subline">${t.liquidity_target_at_entry?.reason || ''}</div>
-        </div>
-      </article>
-    `).join('');
+    const res = await fetch(`/api/backtest-run?run_id=${encodeURIComponent(runId)}&_=${Date.now()}`);
+    const payload = await res.json();
+    if (!payload.ok) throw new Error(payload.error || 'run load failed');
+    renderBacktest(payload.report, payload.trades || []);
   } catch (err) {
     document.getElementById('backtest').innerHTML = `<div class="stat-pill wide"><span class="k">Backtest</span><strong>Erreur: ${err}</strong></div>`;
   }
@@ -256,16 +290,18 @@ function bindControls() {
   ['filterSymbol', 'filterBias', 'filterScore', 'toggleTopOnly', 'togglePipeline', 'toggleTrade', 'tradeFilterSymbol', 'tradeFilterSide', 'tradeFilterMinR', 'tradeFilterStatus'].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
-    el.addEventListener('input', () => { if (id.startsWith('tradeFilter')) loadBacktest(); else loadDashboard(); });
-    el.addEventListener('change', () => { if (id.startsWith('tradeFilter')) loadBacktest(); else loadDashboard(); });
+    el.addEventListener('input', () => { if (id.startsWith('tradeFilter')) loadBacktest(currentBacktestRunId); else loadDashboard(); });
+    el.addEventListener('change', () => { if (id.startsWith('tradeFilter')) loadBacktest(currentBacktestRunId); else loadDashboard(); });
   });
   const rt = document.getElementById('runtimeToggle');
   if (rt) rt.addEventListener('click', toggleRuntime);
   const backtestBtn = document.getElementById('runBacktestBtn');
   if (backtestBtn) backtestBtn.addEventListener('click', runQuickBacktest);
+  const historyBtn = document.getElementById('loadBacktestHistoryBtn');
+  if (historyBtn) historyBtn.addEventListener('click', loadSelectedBacktest);
 }
 bindControls();
-Promise.all([loadRuntime(), loadProcesses(), loadCachedSymbols(), loadDashboard(), loadBacktest()]).catch(err => {
+Promise.all([loadRuntime(), loadProcesses(), loadCachedSymbols(), loadBacktestRuns(), loadDashboard(), loadBacktest('latest')]).catch(err => {
   document.getElementById('meta').textContent = 'Erreur chargement dashboard: ' + err;
 });
-setInterval(() => { loadRuntime(); loadProcesses(); loadDashboard(); loadBacktest(); }, 15000);
+setInterval(() => { loadRuntime(); loadProcesses(); loadDashboard(); if (currentBacktestRunId === 'latest') loadBacktest('latest'); }, 15000);

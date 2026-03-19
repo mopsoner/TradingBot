@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from statistics import median
 from collector import BinanceRestClient
@@ -75,6 +76,39 @@ def _close_trade(open_trade: dict, signal: dict | None, exit_price: float, exit_
     return open_trade
 
 
+def _write_backtest_archive(base_dir: Path, run_id: str, report: dict, trades: list[dict]) -> None:
+    base_dir.mkdir(parents=True, exist_ok=True)
+    report_name = f"{run_id}_report.json"
+    trades_name = f"{run_id}_trades.json"
+    (base_dir / report_name).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    (base_dir / trades_name).write_text(json.dumps(trades, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    index_path = base_dir / "index.json"
+    entries: list[dict] = []
+    if index_path.exists():
+        try:
+            data = json.loads(index_path.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                entries = data
+        except Exception:
+            entries = []
+    entry = {
+        "run_id": run_id,
+        "created_at": report.get("created_at"),
+        "symbol": report.get("symbol"),
+        "interval": report.get("interval"),
+        "closed_trades": report.get("closed_trades"),
+        "open_trades": report.get("open_trades"),
+        "winrate_pct": report.get("winrate_pct"),
+        "total_r": report.get("total_r"),
+        "report_file": report_name,
+        "trades_file": trades_name,
+    }
+    entries = [e for e in entries if e.get("run_id") != run_id]
+    entries.insert(0, entry)
+    index_path.write_text(json.dumps(entries[:200], ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def backtest(cfg: dict) -> None:
     bt = cfg["backtest"]
     symbol = bt["symbol"]
@@ -85,7 +119,10 @@ def backtest(cfg: dict) -> None:
     cache_db = cfg["ohlc_cache_db_path"]
     report_path = cfg.get("backtest_report_path", "data/backtest_report.json")
     trades_path = cfg.get("backtest_trades_path", "data/backtest_trades.json")
+    archive_dir = Path(cfg.get("backtest_runs_dir", "data/backtests"))
     htf_interval = HTF_MAP.get(interval, "1h")
+    created_at = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+    run_id = f"{symbol}_{interval}_{created_at.replace(':', '').replace('-', '').replace('T', '_').replace('Z', '')}"
 
     init_ohlc_cache(cache_db)
     client = BinanceRestClient(cfg["binance_rest_base"])
@@ -265,6 +302,8 @@ def backtest(cfg: dict) -> None:
     total_r = sum(closed_r) if closed_r else None
 
     report = {
+        "run_id": run_id,
+        "created_at": created_at,
         "symbol": symbol,
         "interval": interval,
         "htf_interval": htf_interval,
@@ -300,10 +339,11 @@ def backtest(cfg: dict) -> None:
     Path(report_path).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     Path(trades_path).parent.mkdir(parents=True, exist_ok=True)
     Path(trades_path).write_text(json.dumps(trade_objects, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_backtest_archive(archive_dir, run_id, report, trade_objects)
 
-    print(f"Backtest symbol={symbol} interval={interval}")
+    print(f"Backtest symbol={symbol} interval={interval} run_id={run_id}")
     for k, v in report.items():
-        if k in {"symbol", "interval"}:
+        if k in {"symbol", "interval", "run_id", "created_at"}:
             continue
         print(f"{k}: {v}")
     print(f"trades_saved: {len(trade_objects)}")

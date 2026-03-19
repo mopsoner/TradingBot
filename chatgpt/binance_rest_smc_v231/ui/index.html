@@ -37,6 +37,20 @@
       <p id="backtestRunMeta" class="hint"></p>
     </section>
 
+    <section class="card compact">
+      <div class="section-head">
+        <h2>Historique backtests</h2>
+        <span class="hint">Tous les runs sauvegardés</span>
+      </div>
+      <div class="controls quick-backtest">
+        <select id="backtestHistorySelect">
+          <option value="latest">Dernier backtest</option>
+        </select>
+        <button id="loadBacktestHistoryBtn">Afficher</button>
+      </div>
+      <p id="backtestHistoryMeta" class="hint"></p>
+    </section>
+
     <details class="card compact" open>
       <summary class="accordion-summary">Processus <span class="hint">Vue live</span></summary>
       <div id="processes" class="accordion-body grid"></div>

@@ -7,12 +7,16 @@ import sqlite3
 import subprocess
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config.json"
 REPORT_PATH = ROOT / "data" / "backtest_report.json"
+TRADES_PATH = ROOT / "data" / "backtest_trades.json"
 RUNTIME_PATH_DEFAULT = ROOT / "data" / "runtime_control.json"
 DATA_DIR = ROOT / "data"
+BACKTEST_RUNS_DIR = DATA_DIR / "backtests"
+BACKTEST_RUNS_INDEX = BACKTEST_RUNS_DIR / "index.json"
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -83,14 +87,43 @@ class Handler(SimpleHTTPRequestHandler):
         except Exception:
             return []
 
+    def _list_backtest_runs(self) -> list[dict]:
+        if not BACKTEST_RUNS_INDEX.exists():
+            return []
+        try:
+            data = json.loads(BACKTEST_RUNS_INDEX.read_text(encoding='utf-8'))
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+
+    def _load_backtest_run(self, run_id: str) -> tuple[dict | None, list | None]:
+        for entry in self._list_backtest_runs():
+            if entry.get('run_id') != run_id:
+                continue
+            report_file = entry.get('report_file')
+            trades_file = entry.get('trades_file')
+            if not report_file or not trades_file:
+                return None, None
+            report_path = BACKTEST_RUNS_DIR / report_file
+            trades_path = BACKTEST_RUNS_DIR / trades_file
+            if not report_path.exists() or not trades_path.exists():
+                return None, None
+            report = json.loads(report_path.read_text(encoding='utf-8'))
+            trades = json.loads(trades_path.read_text(encoding='utf-8'))
+            return report, trades
+        return None, None
+
     def do_GET(self):
-        if self.path.startswith('/api/config'):
+        parsed = urlparse(self.path)
+        path = parsed.path
+        query = parse_qs(parsed.query)
+        if path.startswith('/api/config'):
             try:
                 data = json.loads(CONFIG_PATH.read_text(encoding='utf-8'))
                 return self._json(200, {"ok": True, "config": data})
             except Exception as exc:
                 return self._json(500, {"ok": False, "error": str(exc)})
-        if self.path.startswith('/api/backtest_report'):
+        if path.startswith('/api/backtest_report'):
             if not REPORT_PATH.exists():
                 return self._json(200, {"ok": True, "report": None})
             try:
@@ -98,7 +131,20 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json(200, {"ok": True, "report": data})
             except Exception as exc:
                 return self._json(500, {"ok": False, "error": str(exc)})
-        if self.path.startswith('/api/runtime'):
+        if path.startswith('/api/backtest-runs'):
+            return self._json(200, {"ok": True, "runs": self._list_backtest_runs()})
+        if path.startswith('/api/backtest-run'):
+            run_id = (query.get('run_id') or [None])[0]
+            if not run_id:
+                return self._json(400, {"ok": False, "error": 'run_id is required'})
+            try:
+                report, trades = self._load_backtest_run(run_id)
+                if report is None:
+                    return self._json(404, {"ok": False, "error": 'run not found'})
+                return self._json(200, {"ok": True, "report": report, "trades": trades})
+            except Exception as exc:
+                return self._json(500, {"ok": False, "error": str(exc)})
+        if path.startswith('/api/runtime'):
             p = self._runtime_path()
             if not p.exists():
                 p.parent.mkdir(parents=True, exist_ok=True)
@@ -108,11 +154,11 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json(200, {"ok": True, "runtime": data})
             except Exception as exc:
                 return self._json(500, {"ok": False, "error": str(exc)})
-        if self.path.startswith('/api/processes'):
+        if path.startswith('/api/processes'):
             return self._json(200, {"ok": True, "processes": self._list_processes()})
-        if self.path.startswith('/api/data-files'):
+        if path.startswith('/api/data-files'):
             return self._json(200, {"ok": True, "files": self._list_data_files()})
-        if self.path.startswith('/api/cached-symbols'):
+        if path.startswith('/api/cached-symbols'):
             return self._json(200, {"ok": True, "symbols": self._list_cached_symbols()})
         return super().do_GET()
 
