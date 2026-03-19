@@ -35,7 +35,7 @@ header {
   border-bottom: 1px solid rgba(56,189,248,0.12);
 }
 h1 { margin: 0; font-size: 21px; letter-spacing: 0.2px; }
-#meta, #adminMeta { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+#meta, #adminMeta, #dataMeta { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
 .topnav { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
 .topnav a, .navbtn, .stopbtn, .actions button, #runBacktestBtn, #loadBacktestHistoryBtn {
   color: var(--text);
@@ -60,6 +60,14 @@ main { padding: 12px; display: grid; gap: 12px; }
 }
 .card.compact { padding: 10px; }
 .hero-card { border-color: rgba(56,189,248,0.28); }
+.quick-grid { display: grid; gap: 10px; grid-template-columns: 1fr; }
+.subcard {
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 10px;
+}
+.subcard-title { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
 .accordion-summary {
   cursor: pointer;
   list-style: none;
@@ -185,6 +193,7 @@ h2 { margin: 0; font-size: 16px; }
   main { padding: 16px; gap: 16px; }
   .controls { grid-template-columns: 1fr 1fr 120px; }
   .quick-backtest { grid-template-columns: 1fr auto; }
+  .quick-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .admin-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stats-grid { grid-template-columns: repeat(4, 1fr); }
   .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

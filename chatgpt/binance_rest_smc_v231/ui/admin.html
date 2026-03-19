@@ -3,24 +3,33 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Admin Config - Binance REST SMC Lite</title>
+  <title>Réglages Desk - Binance REST SMC Lite</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <header>
-    <h1>Admin Config</h1>
+    <h1>Réglages du desk</h1>
     <p id="adminMeta">Chargement...</p>
     <nav class="topnav">
-      <a href="/ui/">Dashboard</a>
-      <a href="/ui/admin.html">Admin</a>
-      <a href="/ui/data.html">Data</a>
+      <a href="/ui/">Desk</a>
+      <a href="/ui/admin.html">Réglages</a>
+      <a href="/ui/data.html">Données</a>
     </nav>
   </header>
   <main>
+    <section class="card compact hero-card">
+      <div class="section-head">
+        <div>
+          <h2>Configuration de la plateforme</h2>
+          <div class="hint">Ajuste le batch live, les règles de signal et les paramètres du replay sans casser le moteur.</div>
+        </div>
+      </div>
+    </section>
+
     <section class="card">
       <div class="section-head">
-        <h2>General settings</h2>
-        <span class="hint">Cycle, historique et sensibilité globale</span>
+        <h2>Moteur live</h2>
+        <span class="hint">Cycle, profondeur de lecture et structure générale</span>
       </div>
       <div class="form-grid admin-grid">
         <label class="field"><span class="field-label">Poll interval (seconds)</span><span class="field-help">Temps entre deux boucles live.</span><input id="poll_seconds" type="number" placeholder="45"></label>
@@ -34,8 +43,8 @@
 
     <section class="card">
       <div class="section-head">
-        <h2>Signal settings</h2>
-        <span class="hint">Surachat, survente et proximité des extrêmes</span>
+        <h2>Règles de signal</h2>
+        <span class="hint">Surachat, survente et distance aux extrêmes</span>
       </div>
       <div class="form-grid admin-grid">
         <label class="field"><span class="field-label">RSI overbought</span><span class="field-help">Seuil haut RSI.</span><input id="overbought" type="number" placeholder="70"></label>
@@ -46,8 +55,8 @@
 
     <section class="card">
       <div class="section-head">
-        <h2>Symbol discovery</h2>
-        <span class="hint">Univers scanné et taille des batches</span>
+        <h2>Univers scanné</h2>
+        <span class="hint">Quels marchés entrent dans la rotation</span>
       </div>
       <div class="form-grid admin-grid">
         <label class="field"><span class="field-label">Quote assets</span><span class="field-help">Sépare les quotes par virgule. Exemple : USDT,BTC.</span><input id="quote_assets" type="text" placeholder="USDT"></label>
@@ -59,14 +68,14 @@
 
     <section class="card">
       <div class="section-head">
-        <h2>Backtest settings</h2>
-        <span class="hint">Paire, profondeur, score et ratio minimum</span>
+        <h2>Replay backtest</h2>
+        <span class="hint">Paramètres du replay historique batch</span>
       </div>
       <div class="form-grid admin-grid">
-        <label class="field"><span class="field-label">Backtest symbol</span><span class="field-help">Paire utilisée pour le test historique.</span><input id="bt_symbol" type="text" placeholder="ETHUSDT"></label>
+        <label class="field"><span class="field-label">Backtest symbol</span><span class="field-help">Paire utilisée pour le replay historique.</span><input id="bt_symbol" type="text" placeholder="ETHUSDT"></label>
         <div class="field readonly-field"><span class="field-label">Backtest interval</span><span class="field-help">Piloté par le processus, non modifiable ici.</span><div id="bt_interval_display" class="readonly-value">n/a</div></div>
         <label class="field"><span class="field-label">History limit</span><span class="field-help">Nombre de bougies chargées pour le backtest.</span><input id="history_limit" type="number" placeholder="800"></label>
-        <label class="field"><span class="field-label">Minimum score</span><span class="field-help">Score minimal pour retenir un trade dans le backtest.</span><input id="min_score" type="number" placeholder="5"></label>
+        <label class="field"><span class="field-label">Minimum score</span><span class="field-help">Score minimal pour retenir un trade dans le replay.</span><input id="min_score" type="number" placeholder="5"></label>
         <label class="field"><span class="field-label">Minimum reward/risk</span><span class="field-help">Filtre les entrées trop proches de la target.</span><input id="min_rr" type="number" step="0.1" placeholder="0.8"></label>
       </div>
     </section>

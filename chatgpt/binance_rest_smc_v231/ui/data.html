@@ -3,24 +3,33 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Data Files - Binance REST SMC Lite</title>
+  <title>Données Desk - Binance REST SMC Lite</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <header>
-    <h1>Data Files</h1>
+    <h1>Données du desk</h1>
     <p id="dataMeta">Chargement...</p>
     <nav class="topnav">
-      <a href="/ui/">Dashboard</a>
-      <a href="/ui/admin.html">Admin</a>
-      <a href="/ui/data.html">Data</a>
+      <a href="/ui/">Desk</a>
+      <a href="/ui/admin.html">Réglages</a>
+      <a href="/ui/data.html">Données</a>
     </nav>
   </header>
   <main>
+    <section class="card compact hero-card">
+      <div class="section-head">
+        <div>
+          <h2>Exports et fichiers JSON</h2>
+          <div class="hint">Téléchargement direct des rapports, runs sauvegardés et fichiers de travail du dossier data.</div>
+        </div>
+      </div>
+    </section>
+
     <section class="card">
       <div class="section-head">
-        <h2>JSON export</h2>
-        <span class="hint">Téléchargement direct des fichiers du dossier data</span>
+        <h2>Exports disponibles</h2>
+        <span class="hint">Accès rapide aux fichiers produits par le moteur</span>
       </div>
       <div id="dataFiles" class="grid"></div>
     </section>
