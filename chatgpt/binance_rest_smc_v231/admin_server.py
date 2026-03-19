@@ -41,6 +41,14 @@ class Handler(SimpleHTTPRequestHandler):
             pass
         return RUNTIME_PATH_DEFAULT
 
+    def _db_path(self) -> Path:
+        try:
+            cfg = json.loads(CONFIG_PATH.read_text(encoding='utf-8'))
+            custom = cfg.get('database_path', 'data/signals.db')
+            return ROOT / custom if not str(custom).startswith('/') else Path(custom)
+        except Exception:
+            return ROOT / 'data/signals.db'
+
     def _list_processes(self) -> list[dict]:
         try:
             output = subprocess.check_output(['ps', '-eo', 'pid,etime,cmd'], text=True)
@@ -86,6 +94,47 @@ class Handler(SimpleHTTPRequestHandler):
             return [r[0] for r in rows if r and r[0]]
         except Exception:
             return []
+
+    def _list_live_confirmed_signals(self, limit: int = 200) -> list[dict]:
+        db_path = self._db_path()
+        if not db_path.exists():
+            return []
+        limit = max(1, min(limit, 1000))
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, ts, symbol, session, price, rsi_5m, state, trigger, bias, tp_zone, score, payload FROM signals ORDER BY id DESC LIMIT ?",
+                (limit * 5,),
+            ).fetchall()
+        out: list[dict] = []
+        for row in rows:
+            try:
+                payload = json.loads(row[11]) if row[11] else {}
+            except Exception:
+                payload = {}
+            trigger = payload.get('trigger') or row[7]
+            bias = payload.get('bias') or row[8]
+            if trigger == 'wait' and bias not in {'bull_confirm', 'bear_confirm'}:
+                continue
+            out.append({
+                'id': row[0],
+                'ts': row[1],
+                'symbol': payload.get('symbol') or row[2],
+                'session': payload.get('session') or row[3],
+                'price': payload.get('price') or row[4],
+                'rsi_main': payload.get('rsi_main', row[5]),
+                'state': payload.get('state') or row[6],
+                'trigger': trigger,
+                'bias': bias,
+                'tp_zone': bool(payload.get('tp_zone', row[9])),
+                'score': payload.get('score', row[10]),
+                'signal_time': payload.get('signal_time'),
+                'signal_interval': payload.get('signal_interval'),
+                'trade': payload.get('trade', {}),
+                'liquidity_target': payload.get('liquidity_target', {}),
+            })
+            if len(out) >= limit:
+                break
+        return out
 
     def _list_backtest_runs(self) -> list[dict]:
         if not BACKTEST_RUNS_INDEX.exists():
@@ -142,6 +191,13 @@ class Handler(SimpleHTTPRequestHandler):
                 if report is None:
                     return self._json(404, {"ok": False, "error": 'run not found'})
                 return self._json(200, {"ok": True, "report": report, "trades": trades})
+            except Exception as exc:
+                return self._json(500, {"ok": False, "error": str(exc)})
+        if path.startswith('/api/live-confirmed-signals'):
+            try:
+                limit = int((query.get('limit') or ['200'])[0])
+                signals = self._list_live_confirmed_signals(limit=limit)
+                return self._json(200, {"ok": True, "signals": signals})
             except Exception as exc:
                 return self._json(500, {"ok": False, "error": str(exc)})
         if path.startswith('/api/runtime'):
