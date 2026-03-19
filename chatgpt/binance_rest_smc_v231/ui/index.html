@@ -18,8 +18,13 @@
     </nav>
   </header>
   <main>
-    <section class="card compact">
-      <h2>Résumé</h2>
+    <section class="card compact hero-card">
+      <div class="section-head">
+        <div>
+          <h2>Trading overview</h2>
+          <div class="hint">Monitoring live, replay backtest et historique des confirmations</div>
+        </div>
+      </div>
       <div id="stats" class="stats-row"></div>
     </section>
 
@@ -79,6 +84,32 @@
           </select>
         </div>
         <div id="backtestTrades" class="grid"></div>
+      </div>
+    </details>
+
+    <details class="card" open>
+      <summary class="accordion-summary">Historique signaux confirmés live <span class="hint">Dernières confirmations stockées</span></summary>
+      <div class="accordion-body">
+        <div class="controls trade-filters">
+          <input id="liveConfirmedFilterSymbol" type="text" placeholder="Symbole (ex: ETH)">
+          <select id="liveConfirmedFilterBias">
+            <option value="all">Tous biais</option>
+            <option value="bull_confirm">bull_confirm</option>
+            <option value="bear_confirm">bear_confirm</option>
+          </select>
+          <select id="liveConfirmedFilterTrigger">
+            <option value="all">Tous triggers</option>
+            <option value="break_up_confirm">break_up_confirm</option>
+            <option value="break_down_confirm">break_down_confirm</option>
+          </select>
+          <select id="liveConfirmedLimit">
+            <option value="50">50</option>
+            <option value="100" selected>100</option>
+            <option value="200">200</option>
+          </select>
+        </div>
+        <p id="liveConfirmedMeta" class="hint"></p>
+        <div id="liveConfirmedSignals" class="grid"></div>
       </div>
     </details>
 
