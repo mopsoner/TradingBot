@@ -7,31 +7,31 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <header>
-    <h1>Données du desk</h1>
-    <p id="dataMeta">Chargement...</p>
+  <header class="app-header">
+    <div>
+      <h1>Données du desk</h1>
+      <p id="dataMeta">Chargement...</p>
+    </div>
     <nav class="topnav">
-      <a href="/ui/">Desk</a>
+      <a href="/ui/">Dashboard</a>
+      <a href="/ui/backtest.html">Backtest</a>
       <a href="/ui/admin.html">Réglages</a>
-      <a href="/ui/data.html">Données</a>
+      <a href="/ui/data.html" class="active">Données</a>
     </nav>
   </header>
-  <main>
-    <section class="card compact hero-card">
-      <div class="section-head">
-        <div>
-          <h2>Exports et fichiers JSON</h2>
-          <div class="hint">Téléchargement direct des rapports, runs sauvegardés et fichiers de travail du dossier data.</div>
-        </div>
+  <main class="page-shell">
+    <section class="card hero-simple">
+      <div>
+        <span class="eyebrow">Exports</span>
+        <h2>Fichiers produits par le moteur</h2>
+        <p>Téléchargement direct des rapports, runs sauvegardés et fichiers de travail du dossier data.</p>
       </div>
     </section>
-
     <section class="card">
       <div class="section-head">
         <h2>Exports disponibles</h2>
-        <span class="hint">Accès rapide aux fichiers produits par le moteur</span>
       </div>
-      <div id="dataFiles" class="grid"></div>
+      <div id="dataFiles" class="list-stack"></div>
     </section>
   </main>
   <script src="data.js"></script>
