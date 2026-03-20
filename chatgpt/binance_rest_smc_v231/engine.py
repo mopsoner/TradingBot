@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any
 from signals import closes, equal_highs_lows, infer_interval_label, near_level, recent_extremes, rsi, session_extremes, session_from_timestamp
 
+ALLOWED_CONFIRM_SESSIONS = {"london_open", "london", "new_york"}
+
 
 def _pick_liquidity_target(
     *,
@@ -63,6 +65,7 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
     score = 0
     tp_zone = False
     confirm_source = "none"
+    confirm_blocked_by_session = False
     pipeline = {"collect": True, "liquidity": False, "zone": False, "confirm": False, "trade": False}
     trade = {"status": "watch", "side": "none", "entry": None, "stop": None, "target": None}
 
@@ -115,32 +118,30 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
         and last["close"] > prev_bar["close"]
     )
 
+    confirm_candidate = None
+    confirm_score_bonus = 0
     if bear_strong_confirm:
-        trigger = "break_down_confirm"
-        bias = "bear_confirm"
-        pipeline["confirm"] = True
-        confirm_source = "5m_break"
-        score += 3
+        confirm_candidate = ("break_down_confirm", "bear_confirm", "5m_break")
+        confirm_score_bonus = 3
     elif bull_strong_confirm:
-        trigger = "break_up_confirm"
-        bias = "bull_confirm"
-        pipeline["confirm"] = True
-        confirm_source = "5m_break"
-        score += 3
+        confirm_candidate = ("break_up_confirm", "bull_confirm", "5m_break")
+        confirm_score_bonus = 3
     elif bear_soft_confirm:
-        trigger = "break_down_confirm_soft"
-        bias = "bear_confirm"
-        pipeline["confirm"] = True
-        confirm_source = "5m_soft"
-        score += 2
+        confirm_candidate = ("break_down_confirm_soft", "bear_confirm", "5m_soft")
+        confirm_score_bonus = 2
     elif bull_soft_confirm:
-        trigger = "break_up_confirm_soft"
-        bias = "bull_confirm"
-        pipeline["confirm"] = True
-        confirm_source = "5m_soft"
-        score += 2
+        confirm_candidate = ("break_up_confirm_soft", "bull_confirm", "5m_soft")
+        confirm_score_bonus = 2
 
-    if session in {"london_open", "london", "new_york"}:
+    if confirm_candidate is not None:
+        if session in ALLOWED_CONFIRM_SESSIONS:
+            trigger, bias, confirm_source = confirm_candidate
+            pipeline["confirm"] = True
+            score += confirm_score_bonus
+        else:
+            confirm_blocked_by_session = True
+
+    if session in ALLOWED_CONFIRM_SESSIONS:
         score += 1
 
     if session == "london_open" and rsi_main is not None and rsi_main >= cfg["signals"]["overbought"]:
@@ -195,6 +196,7 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
         "tp_zone": tp_zone,
         "score": score,
         "confirm_source": confirm_source,
+        "confirm_blocked_by_session": confirm_blocked_by_session,
         "pipeline": pipeline,
         "trade": trade,
         "liquidity_target": liquidity_target,
