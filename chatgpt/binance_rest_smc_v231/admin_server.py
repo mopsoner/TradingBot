@@ -9,6 +9,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from console_colors import headline, success
+
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config.json"
 REPORT_PATH = ROOT / "data" / "backtest_report.json"
@@ -279,7 +281,8 @@ class Handler(SimpleHTTPRequestHandler):
 def main():
     port = int(os.environ.get('PORT', '8080'))
     httpd = ThreadingHTTPServer(('0.0.0.0', port), Handler)
-    print(f'Serving on http://0.0.0.0:{port}')
+    print(headline(f'Serving admin UI on http://0.0.0.0:{port}'))
+    print(success('Admin server ready'))
     httpd.serve_forever()
 
 

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from statistics import median
 from collector import BinanceRestClient
+from console_colors import error, headline, info, muted, success, warning
 from pipeline import build_batch_signal, replay_slices
 from storage import init_ohlc_cache, load_cached_ohlc, upsert_ohlc
 
@@ -122,11 +123,14 @@ def backtest(cfg: dict) -> None:
     created_at = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
     run_id = f"{symbol}_{BATCH_REPLAY_INTERVAL}_{created_at.replace(':', '').replace('-', '').replace('T', '_').replace('Z', '')}"
 
+    print(headline(f"Backtest start symbol={symbol} interval={BATCH_REPLAY_INTERVAL} run_id={run_id}"))
+
     init_ohlc_cache(cache_db)
     client = BinanceRestClient(cfg["binance_rest_base"])
     candles_1m = get_candles(client, cache_db, symbol, "1m", limit)
     candles_5m = get_candles(client, cache_db, symbol, "5m", max(lookback_limit, (limit // 5) + lookback_limit))
     candles_1h = get_candles(client, cache_db, symbol, "1h", max(120, (limit // 60) + lookback_limit))
+    print(info(f"Loaded candles: 1m={len(candles_1m)} 5m={len(candles_5m)} 1h={len(candles_1h)}"))
 
     closed_returns = []
     closed_r = []
@@ -340,12 +344,17 @@ def backtest(cfg: dict) -> None:
     Path(trades_path).write_text(json.dumps(trade_objects, ensure_ascii=False, indent=2), encoding="utf-8")
     _write_backtest_archive(archive_dir, run_id, report, trade_objects)
 
-    print(f"Backtest symbol={symbol} interval={BATCH_REPLAY_INTERVAL} run_id={run_id}")
+    print(success(f"Backtest completed symbol={symbol} interval={BATCH_REPLAY_INTERVAL} run_id={run_id}"))
     for k, v in report.items():
         if k in {"symbol", "interval", "run_id", "created_at", "replay_timeframes", "scan_step_interval"}:
             continue
-        print(f"{k}: {v}")
-    print(f"trades_saved: {len(trade_objects)}")
+        value = f"{k}: {v}"
+        if k in {"winrate_pct", "average_return_pct", "cumulative_return_pct", "average_r_multiple", "total_r"} and v is not None:
+            cls = success if float(v) > 0 else error if float(v) < 0 else muted
+            print(cls(value))
+        else:
+            print(info(value))
+    print(warning(f"trades_saved: {len(trade_objects)}"))
 
 
 if __name__ == "__main__":

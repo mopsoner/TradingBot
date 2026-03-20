@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from collector import BinanceRestClient, safe_sleep
+from console_colors import error, headline, info, muted, signal_line, success, warning
 from pipeline import build_batch_signal
 from storage import append_log, init_db, init_ohlc_cache, load_cached_ohlc, save_signal, upsert_ohlc, write_dashboard
 
@@ -109,12 +110,19 @@ def scan_batch(client: BinanceRestClient, batch: list[str], cfg: dict[str, Any])
                 f"price={signal['price']:.6f} state={signal['state']} trigger={signal['trigger']} "
                 f"bias={signal['bias']} tp_zone={signal['tp_zone']} score={signal['score']}"
             )
-            print(line)
+            print(signal_line(
+                line,
+                trigger=signal.get("trigger", ""),
+                bias=signal.get("bias", ""),
+                blocked=bool(signal.get("confirm_blocked_by_session", False)),
+                tp_zone=bool(signal.get("tp_zone", False)),
+                score=signal.get("score"),
+            ))
             append_log(cfg["log_path"], line)
             save_signal(cfg["database_path"], signal)
         except Exception as exc:
             line = f"[{datetime.now(timezone.utc).isoformat()}] ERROR symbol={symbol} err={exc}"
-            print(line)
+            print(error(line))
             append_log(cfg["log_path"], line)
     return results
 
@@ -142,9 +150,9 @@ def list_symbols() -> None:
     cfg = load_config()
     client = BinanceRestClient(cfg["binance_rest_base"])
     symbols = discover_symbols(client, cfg)
-    print(f"Discovered {len(symbols)} symbols")
+    print(headline(f"Discovered {len(symbols)} symbols"))
     for s in symbols:
-        print(s)
+        print(info(s))
 
 
 def main() -> None:
@@ -167,17 +175,25 @@ def main() -> None:
         all_symbols = discover_symbols(client, cfg)
         batch = select_batch(all_symbols, cfg)
         results: list[dict[str, Any]] = []
+        header = f"[{datetime.now(timezone.utc).isoformat()}] loop mode={'paused' if runtime_state.get('paused', False) else 'running'} all={len(all_symbols)} batch={len(batch)}"
+        print(warning(header) if runtime_state.get("paused", False) else headline(header))
+        if batch:
+            print(muted(f"Batch symbols: {', '.join(batch)}"))
         if not runtime_state.get("paused", False):
             results = scan_batch(client, batch, cfg)
         dashboard = build_dashboard(all_symbols, batch, results, cfg, runtime_state)
         write_dashboard(cfg["dashboard_path"], dashboard)
+        print(success(f"Dashboard written: {cfg['dashboard_path']} with {len(results)} signal(s)"))
 
     if args.once:
+        print(headline("Running single scan tick"))
         tick()
         return
 
+    print(headline("Starting live loop"))
     while True:
         tick()
+        print(info(f"Sleeping {cfg['poll_seconds']}s"))
         safe_sleep(cfg["poll_seconds"])
 
 
