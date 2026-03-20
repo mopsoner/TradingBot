@@ -22,16 +22,24 @@
       <div class="section-head">
         <div>
           <h2>Vue d’ensemble</h2>
-          <div class="hint">Surveillance live, historique confirmé, replay backtest et contrôle du batch.</div>
+          <div class="hint">Desk live pour décider vite : statut moteur, opportunités, confirmations et replay.</div>
         </div>
       </div>
       <div id="stats" class="stats-row"></div>
     </section>
 
+    <section class="card compact">
+      <div class="section-head">
+        <h2>Barre de statut</h2>
+        <span class="hint">État du moteur, du batch et du flux confirmé.</span>
+      </div>
+      <div id="statusBoard" class="status-grid"></div>
+    </section>
+
     <section class="card compact quick-grid-card">
       <div class="section-head">
         <h2>Actions rapides</h2>
-        <span class="hint">Lancer un replay ou relire un run sauvegardé.</span>
+        <span class="hint">Lancer un replay, relire un run ou piloter l’environnement.</span>
       </div>
       <div class="quick-grid">
         <div class="subcard">
@@ -57,10 +65,39 @@
       </div>
     </section>
 
-    <details class="card compact" open>
-      <summary class="accordion-summary">Santé de la plateforme <span class="hint">Processus et contrôle batch</span></summary>
-      <div id="processes" class="accordion-body grid"></div>
-    </details>
+    <section class="deck-grid">
+      <section class="card" id="actionableCard">
+        <div class="section-head">
+          <h2>Opportunités actionnables</h2>
+          <span class="hint">Signaux confirmés visibles maintenant dans le batch live.</span>
+        </div>
+        <div id="actionableSignals" class="grid grid-tight"></div>
+      </section>
+      <section class="card" id="watchlistCard">
+        <div class="section-head">
+          <h2>Presque confirmés</h2>
+          <span class="hint">Setups watch à surveiller de près.</span>
+        </div>
+        <div id="watchSignals" class="grid grid-tight"></div>
+      </section>
+    </section>
+
+    <section class="deck-grid">
+      <section class="card compact">
+        <div class="section-head">
+          <h2>Pulse sessions</h2>
+          <span class="hint">Répartition des setups du batch par session.</span>
+        </div>
+        <div id="sessionPulse" class="stats-grid"></div>
+      </section>
+      <section class="card compact">
+        <div class="section-head">
+          <h2>Confirmations du jour</h2>
+          <span class="hint">Résumé live confirmé, utile pour valider la journée.</span>
+        </div>
+        <div id="confirmedToday" class="stats-grid"></div>
+      </section>
+    </section>
 
     <details class="card" open>
       <summary class="accordion-summary">Historique signaux confirmés live <span class="hint">Dernières confirmations stockées</span></summary>
@@ -112,6 +149,11 @@
         </div>
         <div id="backtestTrades" class="grid"></div>
       </div>
+    </details>
+
+    <details class="card compact" open>
+      <summary class="accordion-summary">Santé de la plateforme <span class="hint">Processus et contrôle batch</span></summary>
+      <div id="processes" class="accordion-body grid"></div>
     </details>
 
     <details class="card compact" open>
