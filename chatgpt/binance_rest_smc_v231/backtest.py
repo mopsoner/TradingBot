@@ -9,7 +9,7 @@ from console_colors import error, headline, info, muted, success, warning
 from pipeline import build_batch_signal, replay_slices
 from storage import init_ohlc_cache, load_cached_ohlc, upsert_ohlc
 
-BATCH_REPLAY_INTERVAL = "batch_replay_1m_5m_1h"
+BATCH_REPLAY_INTERVAL = "batch_replay_1m_5m_1h_4h"
 
 
 def load_config() -> dict:
@@ -130,7 +130,8 @@ def backtest(cfg: dict) -> None:
     candles_1m = get_candles(client, cache_db, symbol, "1m", limit)
     candles_5m = get_candles(client, cache_db, symbol, "5m", max(lookback_limit, (limit // 5) + lookback_limit))
     candles_1h = get_candles(client, cache_db, symbol, "1h", max(120, (limit // 60) + lookback_limit))
-    print(info(f"Loaded candles: 1m={len(candles_1m)} 5m={len(candles_5m)} 1h={len(candles_1h)}"))
+    candles_4h = get_candles(client, cache_db, symbol, "4h", max(90, (limit // 240) + lookback_limit))
+    print(info(f"Loaded candles: 1m={len(candles_1m)} 5m={len(candles_5m)} 1h={len(candles_1h)} 4h={len(candles_4h)}"))
 
     closed_returns = []
     closed_r = []
@@ -154,10 +155,10 @@ def backtest(cfg: dict) -> None:
     warmup = min(max(40, lookback_limit), max(40, len(candles_1m) - 1))
     for i in range(warmup, len(candles_1m)):
         current = candles_1m[i]
-        c1, c5, c1h = replay_slices(candles_1m, candles_5m, candles_1h, current["close_time"], lookback_limit)
-        if len(c1) < 20 or len(c5) < 20 or len(c1h) < 10:
+        c1, c5, c1h, c4h = replay_slices(candles_1m, candles_5m, candles_1h, candles_4h, current["close_time"], lookback_limit)
+        if len(c1) < 20 or len(c5) < 20 or len(c1h) < 10 or len(c4h) < 6:
             continue
-        signal = build_batch_signal(symbol, c1, c5, c1h, cfg)
+        signal = build_batch_signal(symbol, c1, c5, c1h, c4h, cfg)
 
         if open_trade is not None:
             invalidated = (
@@ -166,14 +167,7 @@ def backtest(cfg: dict) -> None:
                 open_trade["side"] == "long" and current["close"] < open_trade["stop_price"]
             )
             if invalidated:
-                open_trade = _close_trade(
-                    open_trade=open_trade,
-                    signal=None,
-                    exit_price=current["close"],
-                    exit_session=signal.get("session"),
-                    exit_reason="stop_invalidation",
-                    bars_held=i - open_trade["entry_index"],
-                )
+                open_trade = _close_trade(open_trade=open_trade, signal=None, exit_price=current["close"], exit_session=signal.get("session"), exit_reason="stop_invalidation", bars_held=i - open_trade["entry_index"])
                 trade_objects.append(open_trade)
                 ret_pct = open_trade["return_pct"]
                 if ret_pct is not None:
@@ -248,14 +242,7 @@ def backtest(cfg: dict) -> None:
         if not is_opposite:
             continue
 
-        open_trade = _close_trade(
-            open_trade=open_trade,
-            signal=signal,
-            exit_price=signal["price"],
-            exit_session=signal.get("session"),
-            exit_reason="opposite_signal",
-            bars_held=i - open_trade["entry_index"],
-        )
+        open_trade = _close_trade(open_trade=open_trade, signal=signal, exit_price=signal["price"], exit_session=signal.get("session"), exit_reason="opposite_signal", bars_held=i - open_trade["entry_index"])
         trade_objects.append(open_trade)
 
         ret_pct = open_trade["return_pct"]
@@ -308,8 +295,9 @@ def backtest(cfg: dict) -> None:
         "created_at": created_at,
         "symbol": symbol,
         "interval": BATCH_REPLAY_INTERVAL,
-        "replay_timeframes": ["1m", "5m", "1h"],
+        "replay_timeframes": ["1m", "5m", "1h", "4h"],
         "scan_step_interval": "1m",
+        "macro_liquidity_timeframe": "4h",
         "trades": closed_count + open_count,
         "closed_trades": closed_count,
         "open_trades": open_count,
@@ -335,7 +323,7 @@ def backtest(cfg: dict) -> None:
         "opposite_signal_exit_count": opposite_signal_exit_count,
         "stop_invalidation_count": stop_invalidation_count,
         "average_bars_held_closed": round(sum(bars_held_closed) / len(bars_held_closed), 2) if bars_held_closed else None,
-        "average_trade_duration_minutes_closed": round(sum(durations_minutes_closed) / len(durations_minutes_closed), 2) if durations_minutes_closed else None
+        "average_trade_duration_minutes_closed": round(sum(durations_minutes_closed) / len(durations_minutes_closed), 2) if durations_minutes_closed else None,
     }
 
     Path(report_path).parent.mkdir(parents=True, exist_ok=True)
@@ -346,7 +334,7 @@ def backtest(cfg: dict) -> None:
 
     print(success(f"Backtest completed symbol={symbol} interval={BATCH_REPLAY_INTERVAL} run_id={run_id}"))
     for k, v in report.items():
-        if k in {"symbol", "interval", "run_id", "created_at", "replay_timeframes", "scan_step_interval"}:
+        if k in {"symbol", "interval", "run_id", "created_at", "replay_timeframes", "scan_step_interval", "macro_liquidity_timeframe"}:
             continue
         value = f"{k}: {v}"
         if k in {"winrate_pct", "average_return_pct", "cumulative_return_pct", "average_r_multiple", "total_r"} and v is not None:

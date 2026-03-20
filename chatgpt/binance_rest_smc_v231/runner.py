@@ -11,7 +11,6 @@ from console_colors import error, headline, info, muted, signal_line, success, w
 from pipeline import build_batch_signal
 from storage import append_log, init_db, init_ohlc_cache, load_cached_ohlc, save_signal, upsert_ohlc, write_dashboard
 
-
 RUNTIME_DEFAULT = {"paused": False}
 
 
@@ -103,12 +102,13 @@ def scan_batch(client: BinanceRestClient, batch: list[str], cfg: dict[str, Any])
             candles_1m = get_candles(client, cache_db, symbol, "1m", cfg["lookback_limit"])
             candles_5m = get_candles(client, cache_db, symbol, "5m", cfg["lookback_limit"])
             candles_1h = get_candles(client, cache_db, symbol, "1h", max(120, cfg["lookback_limit"]))
-            signal = build_batch_signal(symbol, candles_1m, candles_5m, candles_1h, cfg)
+            candles_4h = get_candles(client, cache_db, symbol, "4h", max(90, cfg["lookback_limit"]))
+            signal = build_batch_signal(symbol, candles_1m, candles_5m, candles_1h, candles_4h, cfg)
             results.append(signal)
             line = (
                 f"[{datetime.now(timezone.utc).isoformat()}] {signal['symbol']} session={signal['session']} "
                 f"price={signal['price']:.6f} state={signal['state']} trigger={signal['trigger']} "
-                f"bias={signal['bias']} tp_zone={signal['tp_zone']} score={signal['score']}"
+                f"bias={signal['bias']} tp_zone={signal['tp_zone']} score={signal['score']} liquidity={signal.get('liquidity_target', {}).get('type', 'n/a')}"
             )
             print(signal_line(
                 line,
@@ -139,6 +139,7 @@ def build_dashboard(all_symbols: list[str], batch: list[str], results: list[dict
             "all_symbols_count": len(all_symbols),
             "batch_count": len(batch),
             "loop_interval_seconds": cfg["poll_seconds"],
+            "macro_liquidity_timeframe": "4h",
         },
         "batch_symbols": batch,
         "top_signals": top[:10],
