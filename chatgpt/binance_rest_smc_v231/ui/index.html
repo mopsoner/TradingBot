@@ -7,103 +7,86 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <header>
-    <h1>Trading Desk</h1>
-    <p id="meta">Chargement...</p>
+  <header class="app-header">
+    <div>
+      <h1>Trading Desk</h1>
+      <p id="meta">Chargement...</p>
+    </div>
     <nav class="topnav">
-      <a href="/ui/">Desk</a>
+      <a href="/ui/" class="active">Desk</a>
       <a href="/ui/admin.html">Réglages</a>
       <a href="/ui/data.html">Données</a>
       <button id="runtimeToggle" class="navbtn">Pause batch</button>
     </nav>
   </header>
-  <main>
-    <section class="card compact hero-card">
-      <div class="section-head">
-        <div>
-          <h2>Vue d’ensemble</h2>
-          <div class="hint">Desk live pour décider vite : statut moteur, opportunités, confirmations et replay.</div>
-        </div>
+
+  <main class="desk-layout">
+    <section class="hero-panel card">
+      <div class="hero-copy">
+        <span class="eyebrow">Live strategy cockpit</span>
+        <h2>Ce qu’il faut trader maintenant</h2>
+        <p>La plateforme est organisée pour répondre à deux questions en priorité : quelles positions sont plausibles maintenant, et comment la stratégie évolue en direct.</p>
       </div>
-      <div id="stats" class="stats-row"></div>
+      <div id="heroMetrics" class="hero-metrics"></div>
     </section>
 
-    <section class="card compact">
-      <div class="section-head">
-        <h2>Barre de statut</h2>
-        <span class="hint">État du moteur, du batch et du flux confirmé.</span>
-      </div>
-      <div id="statusBoard" class="status-grid"></div>
-    </section>
-
-    <section class="card compact quick-grid-card">
-      <div class="section-head">
-        <h2>Actions rapides</h2>
-        <span class="hint">Lancer un replay, relire un run ou piloter l’environnement.</span>
-      </div>
-      <div class="quick-grid">
-        <div class="subcard">
-          <div class="subcard-title">Replay rapide</div>
-          <div class="controls quick-backtest">
-            <select id="cachedSymbolSelect">
-              <option value="">Chargement des cryptos...</option>
-            </select>
-            <button id="runBacktestBtn">Lancer backtest</button>
+    <section class="primary-grid">
+      <section class="card emphasis-card">
+        <div class="section-head">
+          <div>
+            <h2>Trades à placer</h2>
+            <div class="hint">Signaux confirmés actifs dans les fenêtres de trading.</div>
           </div>
-          <p id="backtestRunMeta" class="hint"></p>
         </div>
-        <div class="subcard">
-          <div class="subcard-title">Historique des runs</div>
-          <div class="controls quick-backtest">
-            <select id="backtestHistorySelect">
-              <option value="latest">Dernier backtest</option>
-            </select>
-            <button id="loadBacktestHistoryBtn">Afficher</button>
+        <div id="tradeNowBoard" class="signal-stack"></div>
+      </section>
+
+      <section class="card side-card">
+        <div class="section-head">
+          <div>
+            <h2>Radar stratégie</h2>
+            <div class="hint">Résumé temps réel de l’état du moteur.</div>
           </div>
-          <p id="backtestHistoryMeta" class="hint"></p>
         </div>
-      </div>
-    </section>
-
-    <section class="deck-grid">
-      <section class="card" id="actionableCard">
-        <div class="section-head">
-          <h2>Opportunités actionnables</h2>
-          <span class="hint">Signaux confirmés visibles maintenant dans le batch live.</span>
+        <div id="strategyRadar" class="metrics-grid compact-grid"></div>
+        <div class="divider"></div>
+        <div class="section-subhead">
+          <h3>Watchlist</h3>
+          <span class="hint">Setups proches d’une confirmation.</span>
         </div>
-        <div id="actionableSignals" class="grid grid-tight"></div>
-      </section>
-      <section class="card" id="watchlistCard">
-        <div class="section-head">
-          <h2>Presque confirmés</h2>
-          <span class="hint">Setups watch à surveiller de près.</span>
-        </div>
-        <div id="watchSignals" class="grid grid-tight"></div>
+        <div id="watchSignals" class="mini-stack"></div>
       </section>
     </section>
 
-    <section class="deck-grid">
-      <section class="card compact">
+    <section class="secondary-grid">
+      <section class="card">
         <div class="section-head">
-          <h2>Pulse sessions</h2>
-          <span class="hint">Répartition des setups du batch par session.</span>
+          <div>
+            <h2>Évolution temps réel</h2>
+            <div class="hint">Lecture continue du batch courant et de la journée.</div>
+          </div>
         </div>
-        <div id="sessionPulse" class="stats-grid"></div>
-      </section>
-      <section class="card compact">
-        <div class="section-head">
-          <h2>Confirmations du jour</h2>
-          <span class="hint">Résumé live confirmé, utile pour valider la journée.</span>
+        <div class="analytics-grid">
+          <div>
+            <div class="section-subhead">
+              <h3>Confirmations du jour</h3>
+            </div>
+            <div id="confirmedToday" class="metrics-grid"></div>
+          </div>
+          <div>
+            <div class="section-subhead">
+              <h3>Pulse sessions</h3>
+            </div>
+            <div id="sessionPulse" class="metrics-grid"></div>
+          </div>
         </div>
-        <div id="confirmedToday" class="stats-grid"></div>
-      </section>
-    </section>
-
-    <details class="card" open>
-      <summary class="accordion-summary">Historique signaux confirmés live <span class="hint">Dernières confirmations stockées</span></summary>
-      <div class="accordion-body">
-        <div class="controls trade-filters">
-          <input id="liveConfirmedFilterSymbol" type="text" placeholder="Symbole (ex: ETH)">
+        <div class="divider"></div>
+        <div class="section-subhead">
+          <h3>Dernières confirmations live</h3>
+          <span id="liveConfirmedMeta" class="hint"></span>
+        </div>
+        <div class="filters-row">
+          <input id="liveConfirmedFilterSymbol" type="text" placeholder="Symbole (ETH)">
           <select id="liveConfirmedFilterBias">
             <option value="all">Tous biais</option>
             <option value="bull_confirm">bull_confirm</option>
@@ -112,7 +95,9 @@
           <select id="liveConfirmedFilterTrigger">
             <option value="all">Tous triggers</option>
             <option value="break_up_confirm">break_up_confirm</option>
+            <option value="break_up_confirm_soft">break_up_confirm_soft</option>
             <option value="break_down_confirm">break_down_confirm</option>
+            <option value="break_down_confirm_soft">break_down_confirm_soft</option>
           </select>
           <select id="liveConfirmedLimit">
             <option value="50">50</option>
@@ -120,79 +105,110 @@
             <option value="200">200</option>
           </select>
         </div>
-        <p id="liveConfirmedMeta" class="hint"></p>
-        <div id="liveConfirmedSignals" class="grid"></div>
-      </div>
-    </details>
+        <div id="liveConfirmedSignals" class="table-stack"></div>
+      </section>
 
-    <details class="card compact" open>
-      <summary class="accordion-summary">Replay backtest <span class="hint">Rapport du run chargé</span></summary>
-      <div id="backtest" class="stats-grid accordion-body"></div>
-    </details>
-
-    <details class="card" open>
-      <summary class="accordion-summary">Trades du replay <span class="hint">Détail des positions simulées</span></summary>
-      <div class="accordion-body">
-        <div class="controls trade-filters">
-          <input id="tradeFilterSymbol" type="text" placeholder="Trade symbol">
-          <select id="tradeFilterSide">
-            <option value="all">Tous côtés</option>
-            <option value="long">long</option>
-            <option value="short">short</option>
-          </select>
-          <input id="tradeFilterMinR" type="number" step="0.1" value="" placeholder="R min">
-          <select id="tradeFilterStatus">
-            <option value="all">Tous statuts</option>
-            <option value="closed">closed</option>
-            <option value="open">open</option>
-          </select>
+      <section class="card side-card">
+        <div class="section-head">
+          <div>
+            <h2>Santé plateforme</h2>
+            <div class="hint">Contrôle du batch, process et couverture du flux.</div>
+          </div>
         </div>
-        <div id="backtestTrades" class="grid"></div>
-      </div>
-    </details>
-
-    <details class="card compact" open>
-      <summary class="accordion-summary">Santé de la plateforme <span class="hint">Processus et contrôle batch</span></summary>
-      <div id="processes" class="accordion-body grid"></div>
-    </details>
-
-    <details class="card compact" open>
-      <summary class="accordion-summary">Filtre du flux live <span class="hint">Pour trier le batch courant</span></summary>
-      <div class="accordion-body">
-        <div class="controls">
-          <input id="filterSymbol" type="text" placeholder="Symbole (ex: ETH)">
-          <select id="filterBias">
-            <option value="all">Tous les biais</option>
-            <option value="bull_watch">bull_watch</option>
-            <option value="bull_confirm">bull_confirm</option>
-            <option value="bear_watch">bear_watch</option>
-            <option value="bear_confirm">bear_confirm</option>
-            <option value="neutral">neutral</option>
-          </select>
-          <input id="filterScore" type="number" min="0" max="10" step="1" value="0" placeholder="Score min">
+        <div id="statusBoard" class="metrics-grid compact-grid"></div>
+        <div class="divider"></div>
+        <div class="section-subhead">
+          <h3>Processus actifs</h3>
         </div>
-        <div class="toggles">
-          <label class="toggle"><input id="toggleTopOnly" type="checkbox"> Top only</label>
-          <label class="toggle"><input id="togglePipeline" type="checkbox" checked> Pipeline</label>
-          <label class="toggle"><input id="toggleTrade" type="checkbox" checked> Trade</label>
+        <div id="processes" class="mini-stack"></div>
+      </section>
+    </section>
+
+    <section class="card">
+      <div class="section-head">
+        <div>
+          <h2>Flux du batch live</h2>
+          <div class="hint">Pour suivre l’évolution de la stratégie en temps réel.</div>
         </div>
       </div>
-    </details>
+      <div class="filters-row">
+        <input id="filterSymbol" type="text" placeholder="Symbole (ETH)">
+        <select id="filterBias">
+          <option value="all">Tous les biais</option>
+          <option value="bull_watch">bull_watch</option>
+          <option value="bull_confirm">bull_confirm</option>
+          <option value="bear_watch">bear_watch</option>
+          <option value="bear_confirm">bear_confirm</option>
+          <option value="neutral">neutral</option>
+        </select>
+        <input id="filterScore" type="number" min="0" max="10" step="1" value="0" placeholder="Score min">
+        <label class="toggle inline-toggle"><input id="toggleTopOnly" type="checkbox"> Top only</label>
+        <label class="toggle inline-toggle"><input id="togglePipeline" type="checkbox" checked> Pipeline</label>
+      </div>
+      <div class="section-subhead">
+        <h3>Top signaux du cycle</h3>
+      </div>
+      <div id="top" class="signal-grid"></div>
+      <div class="divider"></div>
+      <div class="section-subhead between">
+        <h3>Rotation batch</h3>
+        <span id="batchMeta" class="hint"></span>
+      </div>
+      <div id="batch" class="batch-wrap"></div>
+      <div class="divider"></div>
+      <div class="section-subhead">
+        <h3>Signal monitor</h3>
+      </div>
+      <div id="signals" class="signal-grid"></div>
+    </section>
 
-    <details class="card" open>
-      <summary class="accordion-summary">Setup prioritaires <span class="hint">Top signaux actuels</span></summary>
-      <div id="top" class="grid accordion-body"></div>
-    </details>
-
-    <details class="card compact">
-      <summary class="accordion-summary">Rotation du batch <span class="hint">Actifs scannés maintenant</span></summary>
-      <div id="batch" class="batch-wrap accordion-body"></div>
-    </details>
-
-    <details class="card">
-      <summary class="accordion-summary">Flux live du batch <span class="hint">Tous les signaux du cycle courant</span></summary>
-      <div id="signals" class="grid accordion-body"></div>
-    </details>
+    <section class="card">
+      <div class="section-head">
+        <div>
+          <h2>Backtest labo</h2>
+          <div class="hint">Outil unitaire pour tester la stratégie sur une crypto donnée.</div>
+        </div>
+      </div>
+      <div class="backtest-toolbar">
+        <div class="subcard">
+          <div class="subcard-title">Lancer un test</div>
+          <div class="filters-row backtest-controls">
+            <select id="cachedSymbolSelect">
+              <option value="">Chargement des cryptos...</option>
+            </select>
+            <button id="runBacktestBtn">Lancer backtest</button>
+          </div>
+          <p id="backtestRunMeta" class="hint"></p>
+        </div>
+        <div class="subcard">
+          <div class="subcard-title">Relire un run</div>
+          <div class="filters-row backtest-controls">
+            <select id="backtestHistorySelect">
+              <option value="latest">Dernier backtest</option>
+            </select>
+            <button id="loadBacktestHistoryBtn">Afficher</button>
+          </div>
+          <p id="backtestHistoryMeta" class="hint"></p>
+        </div>
+      </div>
+      <div id="backtest" class="metrics-grid backtest-metrics"></div>
+      <div class="divider"></div>
+      <div class="filters-row">
+        <input id="tradeFilterSymbol" type="text" placeholder="Trade symbol">
+        <select id="tradeFilterSide">
+          <option value="all">Tous côtés</option>
+          <option value="long">long</option>
+          <option value="short">short</option>
+        </select>
+        <input id="tradeFilterMinR" type="number" step="0.1" value="" placeholder="R min">
+        <select id="tradeFilterStatus">
+          <option value="all">Tous statuts</option>
+          <option value="closed">closed</option>
+          <option value="open">open</option>
+        </select>
+      </div>
+      <div id="backtestTrades" class="table-stack"></div>
+    </section>
   </main>
   <script src="app.js"></script>
 </body>

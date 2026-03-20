@@ -8,6 +8,10 @@ function fmtTime(ms) {
   if (!ms) return 'n/a';
   try { return new Date(ms).toLocaleString(); } catch { return String(ms); }
 }
+function fmtNum(v, d = 2) {
+  if (v == null || v === '' || Number.isNaN(Number(v))) return 'n/a';
+  return Number(v).toFixed(d);
+}
 function resultClass(value) {
   if (value == null || value === '' || Number.isNaN(Number(value))) return '';
   return Number(value) > 0 ? 'positive' : Number(value) < 0 ? 'negative' : 'neutraltext';
@@ -18,106 +22,222 @@ function isConfirmed(sig) {
 function isWatch(sig) {
   return sig && /watch/.test(sig.bias || '') && (sig.score || 0) >= 5;
 }
-function renderSignalCard(sig, options = {}) {
-  const p = sig.pipeline || {};
-  const trade = sig.trade || {};
-  const liq = sig.liquidity_target || {};
-  const badgeClass = (value) => value ? 'ok' : 'wait';
-  const scoreClass = sig.score >= 6 ? 'score score-high' : sig.score >= 4 ? 'score score-mid' : 'score';
-  const liveTs = options.liveTs ? `<div><span class="label">Stored at</span><strong>${sig.ts || 'n/a'}</strong></div>` : '';
+function isActionable(sig) {
+  return isConfirmed(sig) && !sig.confirm_blocked_by_session && sig.trade && sig.trade.status === 'simulated';
+}
+function todayStartTs() {
+  const d = new Date();
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+function renderMetricCard(label, value, sub = '', cls = '') {
+  return `<div class="metric-card"><span class="metric-label">${label}</span><strong class="${cls}">${value}</strong>${sub ? `<span class="metric-sub">${sub}</span>` : ''}</div>`;
+}
+function renderCompactSignal(sig, mode = 'live') {
+  const side = sig.trade?.side || (sig.bias === 'bull_confirm' ? 'long' : sig.bias === 'bear_confirm' ? 'short' : 'watch');
+  const confirmSource = sig.confirm_source || 'n/a';
+  const blocked = sig.confirm_blocked_by_session ? '<span class="pill pill-warn">blocked session</span>' : '';
+  const line2 = mode === 'history'
+    ? `${fmtTime(sig.signal_time)} · ${sig.session || 'n/a'}`
+    : `${sig.session || 'n/a'} · ${sig.state || 'n/a'}`;
   return `
-    <article class="signal ${options.compact ? 'small-card' : ''}">
+    <article class="trade-card ${side === 'long' ? 'trade-long' : side === 'short' ? 'trade-short' : ''}">
+      <div class="trade-card-top">
+        <div>
+          <div class="trade-symbol">${sig.symbol || 'n/a'}</div>
+          <div class="trade-sub">${line2}</div>
+        </div>
+        <div class="trade-score">${sig.score ?? 'n/a'}</div>
+      </div>
+      <div class="trade-pills">
+        <span class="pill ${side === 'long' ? 'pill-long' : side === 'short' ? 'pill-short' : 'pill-neutral'}">${side}</span>
+        <span class="pill pill-neutral">${sig.trigger || 'wait'}</span>
+        <span class="pill pill-neutral">${confirmSource}</span>
+        ${blocked}
+      </div>
+      <div class="trade-grid">
+        <div><span class="label">Price</span><strong>${fmtNum(sig.price, 4)}</strong></div>
+        <div><span class="label">RSI</span><strong>${fmtNum(sig.rsi_main, 2)}</strong></div>
+        <div><span class="label">Entry</span><strong>${fmtNum(sig.trade?.entry ?? sig.price, 4)}</strong></div>
+        <div><span class="label">Stop</span><strong>${fmtNum(sig.trade?.stop, 4)}</strong></div>
+        <div><span class="label">Target</span><strong>${fmtNum(sig.trade?.target, 4)}</strong></div>
+        <div><span class="label">Liquidity</span><strong>${sig.liquidity_target?.type || 'n/a'}</strong></div>
+      </div>
+    </article>`;
+}
+function renderMonitorCard(sig, showPipeline = true) {
+  const p = sig.pipeline || {};
+  const liq = sig.liquidity_target || {};
+  const scoreClass = sig.score >= 6 ? 'score score-high' : sig.score >= 4 ? 'score score-mid' : 'score';
+  const confirmSource = sig.confirm_source ? `<span class="pill pill-neutral">${sig.confirm_source}</span>` : '';
+  const blocked = sig.confirm_blocked_by_session ? `<span class="pill pill-warn">blocked session</span>` : '';
+  return `
+    <article class="signal-card">
       <div class="topline">
-        <div><div class="symbol">${sig.symbol}</div><div class="subline">${sig.session} · ${sig.bias}</div></div>
+        <div>
+          <div class="symbol">${sig.symbol}</div>
+          <div class="subline">${sig.session} · ${sig.bias}</div>
+        </div>
         <div class="${scoreClass}">${sig.score ?? 'n/a'}</div>
       </div>
+      <div class="trade-pills compact-pills">
+        <span class="pill pill-neutral">${sig.trigger}</span>
+        ${confirmSource}
+        ${blocked}
+      </div>
       <div class="price-row">
-        <div><div class="label">Prix</div><div class="price">${sig.price != null ? Number(sig.price).toFixed(6) : 'n/a'}</div></div>
-        <div><div class="label">RSI</div><div class="value">${sig.rsi_main ?? 'n/a'}</div></div>
+        <div><div class="label">Prix</div><div class="price">${fmtNum(sig.price, 4)}</div></div>
+        <div><div class="label">RSI</div><div class="value">${fmtNum(sig.rsi_main, 2)}</div></div>
       </div>
       <div class="mini-grid">
         <div><span class="label">Signal time</span><strong>${fmtTime(sig.signal_time)}</strong></div>
         <div><span class="label">Interval</span><strong>${sig.signal_interval ?? 'n/a'}</strong></div>
         <div><span class="label">State</span><strong>${sig.state}</strong></div>
-        <div><span class="label">Trigger</span><strong>${sig.trigger}</strong></div>
         <div><span class="label">TP zone</span><strong>${sig.tp_zone ? 'yes' : 'no'}</strong></div>
-        <div><span class="label">Trade</span><strong>${trade.status || 'watch'} ${trade.side || ''}</strong></div>
-        ${liveTs}
       </div>
       <div class="liquidity-box">
         <span class="label">Liquidity target</span>
         <strong>${liq.type || 'n/a'} ${liq.level ?? ''}</strong>
         <div class="subline">${liq.reason || ''}</div>
       </div>
-      ${options.showPipeline ? `<div class="pipeline">
-        <span class="badge ${badgeClass(p.collect)}">collect</span>
-        <span class="badge ${badgeClass(p.liquidity)}">liquidity</span>
-        <span class="badge ${badgeClass(p.zone)}">zone</span>
-        <span class="badge ${badgeClass(p.confirm)}">confirm</span>
-        <span class="badge ${badgeClass(p.trade)}">trade</span>
+      ${showPipeline ? `<div class="pipeline">
+        <span class="badge ${p.collect ? 'ok' : 'wait'}">collect</span>
+        <span class="badge ${p.liquidity ? 'ok' : 'wait'}">liquidity</span>
+        <span class="badge ${p.zone ? 'ok' : 'wait'}">zone</span>
+        <span class="badge ${p.confirm ? 'ok' : 'wait'}">confirm</span>
+        <span class="badge ${p.trade ? 'ok' : 'wait'}">trade</span>
       </div>` : ''}
     </article>`;
 }
-function renderPlaceholder(elId, label) {
-  const el = document.getElementById(elId);
-  if (el) el.innerHTML = `<div class="stat-pill wide"><span class="k">${label}</span><strong>Aucune donnée</strong></div>`;
+function renderProcessCard(p) {
+  return `<article class="mini-card"><div class="topline"><div><div class="symbol">PID ${p.pid}</div><div class="subline">${p.etime}</div></div><button class="stopbtn" data-pid="${p.pid}">Stop</button></div><div class="liquidity-box"><span class="label">Commande</span><strong class="cmdline">${p.cmd}</strong></div></article>`;
+}
+function renderBacktestTradeRow(t) {
+  const ret = t.return_pct ?? t.unrealized_return_pct;
+  const rVal = t.r_multiple ?? t.unrealized_r_multiple;
+  return `
+    <article class="row-card">
+      <div class="row-main">
+        <div>
+          <div class="symbol">${t.symbol} · ${t.side} · ${t.status}</div>
+          <div class="subline">${fmtTime(t.entry_signal_time)} · ${t.entry_session} · ${t.entry_signal_bias}</div>
+        </div>
+        <div class="trade-pills compact-pills">
+          <span class="pill ${t.side === 'long' ? 'pill-long' : 'pill-short'}">${t.side}</span>
+          <span class="pill pill-neutral">${t.exit_reason ?? 'open'}</span>
+        </div>
+      </div>
+      <div class="row-grid">
+        <div><span class="label">Entry</span><strong>${fmtNum(t.entry_price, 4)}</strong></div>
+        <div><span class="label">Exit</span><strong>${fmtNum(t.exit_price ?? t.mark_price, 4)}</strong></div>
+        <div><span class="label">Stop</span><strong>${fmtNum(t.stop_price, 4)}</strong></div>
+        <div><span class="label">Target</span><strong>${fmtNum(t.target_price, 4)}</strong></div>
+        <div><span class="label">Return %</span><strong class="${resultClass(ret)}">${fmtNum(ret, 4)}</strong></div>
+        <div><span class="label">R</span><strong class="${resultClass(rVal)}">${fmtNum(rVal, 4)}</strong></div>
+      </div>
+    </article>`;
+}
+function renderHero() {
+  const el = document.getElementById('heroMetrics');
+  if (!el || !dashboardCache) return;
+  const signals = dashboardCache.signals || [];
+  const actionable = signals.filter(isActionable);
+  const watches = signals.filter(isWatch);
+  const confirms = liveConfirmedSignalsCache.length;
+  const top = [...signals].sort((a, b) => (b.score || 0) - (a.score || 0))[0];
+  el.innerHTML = [
+    renderMetricCard('Trades now', actionable.length, actionable[0] ? `${actionable[0].symbol} en tête` : 'aucune entrée active', actionable.length ? 'positive' : ''),
+    renderMetricCard('Watchlist', watches.length, watches[0] ? `${watches[0].symbol} à surveiller` : 'aucun setup mûr', watches.length ? '' : 'neutraltext'),
+    renderMetricCard('Confirmations live', confirms, 'historique confirmé stocké', confirms ? 'positive' : ''),
+    renderMetricCard('Top score', top ? String(top.score ?? 'n/a') : 'n/a', top ? `${top.symbol} · ${top.bias}` : 'aucun signal'),
+  ].join('');
 }
 function renderStatusBoard() {
   const el = document.getElementById('statusBoard');
   if (!el) return;
-  const runtimePaused = document.getElementById('runtimeToggle')?.dataset.paused === '1';
-  const procCount = processesCache.length;
-  const actionable = (dashboardCache?.signals || []).filter(isConfirmed).length;
-  const near = (dashboardCache?.signals || []).filter(isWatch).length;
-  const confirmedToday = liveConfirmedSignalsCache.filter(s => {
-    const d = new Date();
-    const today = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-    return s.signal_time && s.signal_time >= today;
-  }).length;
-  const closedTrades = backtestReportCache?.closed_trades ?? 'n/a';
-  const cards = [
-    ['Moteur', runtimePaused ? 'paused' : 'running', runtimePaused ? 'negative' : 'positive'],
-    ['Processus', String(procCount), procCount >= 2 ? 'positive' : 'negative'],
-    ['Actionnables', String(actionable), actionable > 0 ? 'positive' : 'neutraltext'],
-    ['Presque confirmés', String(near), near > 0 ? 'neutraltext' : 'negative'],
-    ['Confirmés jour', String(confirmedToday), confirmedToday > 0 ? 'positive' : 'neutraltext'],
-    ['Trades replay', String(closedTrades), Number(closedTrades) > 0 ? 'positive' : 'neutraltext'],
-  ];
-  el.innerHTML = cards.map(([k,v,cls]) => `<div class="stat-pill"><span class="k">${k}</span><strong class="${cls}">${v}</strong></div>`).join('');
-}
-function renderDecisionDeck() {
-  const actionableEl = document.getElementById('actionableSignals');
-  const watchEl = document.getElementById('watchSignals');
-  if (!actionableEl || !watchEl) return;
+  const paused = document.getElementById('runtimeToggle')?.dataset.paused === '1';
   const signals = dashboardCache?.signals || [];
-  const actionable = signals.filter(isConfirmed).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,6);
-  const near = signals.filter(isWatch).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,6);
-  actionableEl.innerHTML = actionable.length ? actionable.map(s => renderSignalCard(s, { compact:true, showPipeline:false })).join('') : '<div class="stat-pill wide"><span class="k">Live</span><strong>Aucune opportunité actionnable</strong></div>';
-  watchEl.innerHTML = near.length ? near.map(s => renderSignalCard(s, { compact:true, showPipeline:false })).join('') : '<div class="stat-pill wide"><span class="k">Watchlist</span><strong>Aucun setup proche</strong></div>';
+  const actionable = signals.filter(isActionable).length;
+  const blocked = signals.filter(s => s.confirm_blocked_by_session).length;
+  const coverage = dashboardCache?.stats?.batch_count || 0;
+  const rows = [
+    ['Moteur', paused ? 'paused' : 'running', paused ? 'negative' : 'positive'],
+    ['Processus', String(processesCache.length), processesCache.length >= 2 ? 'positive' : 'negative'],
+    ['Batch live', String(coverage), coverage ? 'positive' : 'negative'],
+    ['Actionnables', String(actionable), actionable ? 'positive' : 'neutraltext'],
+    ['Blocked session', String(blocked), blocked ? 'negative' : 'neutraltext'],
+    ['Backtest trades', String(backtestReportCache?.closed_trades ?? 0), Number(backtestReportCache?.closed_trades ?? 0) > 0 ? 'positive' : 'neutraltext'],
+  ];
+  el.innerHTML = rows.map(([k, v, cls]) => renderMetricCard(k, v, '', cls)).join('');
+}
+function renderStrategyRadar() {
+  const el = document.getElementById('strategyRadar');
+  if (!el || !dashboardCache) return;
+  const signals = dashboardCache.signals || [];
+  const confirms = signals.filter(isConfirmed);
+  const watches = signals.filter(isWatch);
+  const bulls = confirms.filter(s => s.bias === 'bull_confirm').length;
+  const bears = confirms.filter(s => s.bias === 'bear_confirm').length;
+  const rows = [
+    ['Confirm actifs', String(confirms.length), '', confirms.length ? 'positive' : 'neutraltext'],
+    ['Watch actifs', String(watches.length), '', watches.length ? '' : 'neutraltext'],
+    ['Long bias', String(bulls), '', bulls ? 'positive' : 'neutraltext'],
+    ['Short bias', String(bears), '', bears ? 'negative' : 'neutraltext'],
+  ];
+  el.innerHTML = rows.map(([a,b,c,d]) => renderMetricCard(a,b,c,d)).join('');
+}
+function renderDecisionBoards() {
+  const tradeNowEl = document.getElementById('tradeNowBoard');
+  const watchEl = document.getElementById('watchSignals');
+  if (!tradeNowEl || !watchEl) return;
+  const signals = dashboardCache?.signals || [];
+  const actionable = signals.filter(isActionable).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,8);
+  const watches = signals.filter(isWatch).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,6);
+  tradeNowEl.innerHTML = actionable.length ? actionable.map(s => renderCompactSignal(s)).join('') : '<div class="empty-state">Aucun trade confirmé à placer dans la fenêtre active.</div>';
+  watchEl.innerHTML = watches.length ? watches.map(s => renderCompactSignal(s)).join('') : '<div class="empty-state">Aucun setup proche d’une confirmation.</div>';
 }
 function renderSessionPulse() {
   const el = document.getElementById('sessionPulse');
   if (!el) return;
-  const sessions = { asia:0, london:0, newyork:0, other:0 };
+  const sessions = { asia:0, london:0, london_open:0, new_york:0, off_session:0 };
   (dashboardCache?.signals || []).forEach(sig => {
-    const s = (sig.session || 'other').toLowerCase();
-    if (sessions[s] != null) sessions[s] += 1; else sessions.other += 1;
+    const s = (sig.session || 'off_session').toLowerCase();
+    if (sessions[s] != null) sessions[s] += 1; else sessions.off_session += 1;
   });
-  el.innerHTML = Object.entries(sessions).map(([k,v]) => `<div class="stat-pill"><span class="k">${k}</span><strong>${v}</strong></div>`).join('');
+  el.innerHTML = Object.entries(sessions).map(([k,v]) => renderMetricCard(k, String(v))).join('');
 }
 function renderConfirmedToday() {
   const el = document.getElementById('confirmedToday');
   if (!el) return;
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const todaySignals = liveConfirmedSignalsCache.filter(s => s.signal_time && s.signal_time >= today);
+  const start = todayStartTs();
+  const todaySignals = liveConfirmedSignalsCache.filter(s => s.signal_time && s.signal_time >= start);
   const bulls = todaySignals.filter(s => s.bias === 'bull_confirm').length;
   const bears = todaySignals.filter(s => s.bias === 'bear_confirm').length;
-  const breaksUp = todaySignals.filter(s => s.trigger === 'break_up_confirm').length;
-  const breaksDown = todaySignals.filter(s => s.trigger === 'break_down_confirm').length;
+  const soft = todaySignals.filter(s => String(s.trigger || '').includes('_soft')).length;
+  const hard = todaySignals.filter(s => String(s.trigger || '').includes('break_') && !String(s.trigger || '').includes('_soft')).length;
   el.innerHTML = [
-    ['Total', todaySignals.length], ['Bull', bulls], ['Bear', bears], ['Break up', breaksUp], ['Break down', breaksDown], ['Unique symbols', new Set(todaySignals.map(s => s.symbol)).size]
-  ].map(([k,v]) => `<div class="stat-pill"><span class="k">${k}</span><strong>${v}</strong></div>`).join('');
+    renderMetricCard('Total', String(todaySignals.length), '', todaySignals.length ? 'positive' : 'neutraltext'),
+    renderMetricCard('Bull', String(bulls), '', bulls ? 'positive' : 'neutraltext'),
+    renderMetricCard('Bear', String(bears), '', bears ? 'negative' : 'neutraltext'),
+    renderMetricCard('Soft', String(soft)),
+    renderMetricCard('Hard', String(hard)),
+    renderMetricCard('Symbols', String(new Set(todaySignals.map(s => s.symbol)).size)),
+  ].join('');
+}
+function renderLiveConfirmedSignals() {
+  const container = document.getElementById('liveConfirmedSignals');
+  const meta = document.getElementById('liveConfirmedMeta');
+  if (!container) return;
+  const symbolQ = (document.getElementById('liveConfirmedFilterSymbol')?.value || '').trim().toUpperCase();
+  const biasQ = document.getElementById('liveConfirmedFilterBias')?.value || 'all';
+  const triggerQ = document.getElementById('liveConfirmedFilterTrigger')?.value || 'all';
+  const filtered = liveConfirmedSignalsCache.filter(sig => {
+    if (symbolQ && !(sig.symbol || '').includes(symbolQ)) return false;
+    if (biasQ !== 'all' && sig.bias !== biasQ) return false;
+    if (triggerQ !== 'all' && sig.trigger !== triggerQ) return false;
+    return true;
+  });
+  if (meta) meta.textContent = `${filtered.length} confirmation(s)`;
+  container.innerHTML = filtered.length ? filtered.map(sig => renderCompactSignal(sig, 'history')).join('') : '<div class="empty-state">Aucune confirmation disponible.</div>';
 }
 async function loadRuntime() {
   try {
@@ -151,19 +271,15 @@ async function loadProcesses() {
     const el = document.getElementById('processes');
     if (!el) return;
     if (!payload.ok || !Array.isArray(payload.processes)) {
-      el.innerHTML = '<div class="stat-pill wide"><span class="k">Processus</span><strong>Erreur chargement</strong></div>';
+      el.innerHTML = '<div class="empty-state">Erreur chargement processus.</div>';
       return;
     }
     processesCache = payload.processes;
     renderStatusBoard();
-    if (!payload.processes.length) {
-      el.innerHTML = '<div class="stat-pill wide"><span class="k">Processus</span><strong>Aucun processus trouvé</strong></div>';
-      return;
-    }
-    el.innerHTML = payload.processes.map(p => `<article class="signal small-card"><div class="topline"><div><div class="symbol">PID ${p.pid}</div><div class="subline">${p.etime}</div></div><button class="stopbtn" data-pid="${p.pid}">Stop</button></div><div class="liquidity-box"><span class="label">Commande</span><strong class="cmdline">${p.cmd}</strong></div></article>`).join('');
+    el.innerHTML = payload.processes.length ? payload.processes.map(renderProcessCard).join('') : '<div class="empty-state">Aucun processus trouvé.</div>';
     el.querySelectorAll('.stopbtn').forEach(btn => btn.addEventListener('click', () => stopProcess(Number(btn.dataset.pid))));
   } catch (err) {
-    document.getElementById('processes').innerHTML = `<div class="stat-pill wide"><span class="k">Processus</span><strong>Erreur: ${err}</strong></div>`;
+    document.getElementById('processes').innerHTML = `<div class="empty-state">Erreur: ${err}</div>`;
   }
 }
 async function loadCachedSymbols() {
@@ -172,7 +288,10 @@ async function loadCachedSymbols() {
     const payload = await res.json();
     const select = document.getElementById('cachedSymbolSelect');
     if (!select) return;
-    if (!payload.ok || !Array.isArray(payload.symbols) || !payload.symbols.length) { select.innerHTML = '<option value="">Aucune crypto en cache</option>'; return; }
+    if (!payload.ok || !Array.isArray(payload.symbols) || !payload.symbols.length) {
+      select.innerHTML = '<option value="">Aucune crypto en cache</option>';
+      return;
+    }
     select.innerHTML = payload.symbols.map(s => `<option value="${s}">${s}</option>`).join('');
   } catch {
     const select = document.getElementById('cachedSymbolSelect');
@@ -188,9 +307,9 @@ async function loadBacktestRuns() {
     if (!select) return;
     let html = '<option value="latest">Dernier backtest</option>';
     const runs = Array.isArray(payload.runs) ? payload.runs : [];
-    for (const run of runs) { html += `<option value="${run.run_id}">${run.symbol || '?'} · ${run.interval || '?'} · ${run.created_at || run.run_id}</option>`; }
+    for (const run of runs) html += `<option value="${run.run_id}">${run.symbol || '?'} · ${run.interval || '?'} · ${run.created_at || run.run_id}</option>`;
     select.innerHTML = html;
-    if (meta) meta.textContent = runs.length ? `${runs.length} backtest(s) sauvegardé(s)` : 'Aucun historique sauvegardé';
+    if (meta) meta.textContent = runs.length ? `${runs.length} run(s) sauvegardé(s)` : 'Aucun historique sauvegardé';
   } catch (err) {
     const meta = document.getElementById('backtestHistoryMeta');
     if (meta) meta.textContent = `Erreur historique: ${err}`;
@@ -218,8 +337,12 @@ function renderBacktest(report, trades) {
   backtestReportCache = report;
   renderStatusBoard();
   const el = document.getElementById('backtest');
-  const items = [['Run', report.run_id || 'latest'], ['Symbol', report.symbol], ['Interval', report.interval], ['Closed', report.closed_trades], ['Open', report.open_trades], ['Winrate', `${report.winrate_pct}%`], ['Avg', `${report.average_return_pct}%`], ['Median', `${report.median_return_pct}%`], ['Best', `${report.best_trade_pct}%`], ['Worst', `${report.worst_trade_pct}%`], ['PF', report.profit_factor ?? 'n/a'], ['Cum.', `${report.cumulative_return_pct}%`], ['Avg R', report.average_r_multiple ?? 'n/a'], ['Med R', report.median_r_multiple ?? 'n/a'], ['Total R', report.total_r ?? 'n/a'], ['Min RR', report.min_rr ?? 'n/a'], ['RR filtered', report.filtered_rr_count ?? 0]];
-  el.innerHTML = items.map(([k,v]) => `<div class="stat-pill"><span class="k">${k}</span><strong class="${resultClass(v)}">${v}</strong></div>`).join('');
+  const items = [
+    ['Symbol', report.symbol], ['Closed', report.closed_trades], ['Open', report.open_trades], ['Winrate', `${report.winrate_pct}%`],
+    ['Avg', `${report.average_return_pct}%`], ['Median', `${report.median_return_pct}%`], ['Best', `${report.best_trade_pct}%`], ['Worst', `${report.worst_trade_pct}%`],
+    ['PF', report.profit_factor ?? 'n/a'], ['Cum.', `${report.cumulative_return_pct}%`], ['Avg R', report.average_r_multiple ?? 'n/a'], ['Total R', report.total_r ?? 'n/a']
+  ];
+  el.innerHTML = items.map(([k,v]) => renderMetricCard(k, String(v), '', resultClass(v))).join('');
   const tradesContainer = document.getElementById('backtestTrades');
   const symbolQ = (document.getElementById('tradeFilterSymbol')?.value || '').trim().toUpperCase();
   const sideQ = document.getElementById('tradeFilterSide')?.value || 'all';
@@ -234,8 +357,7 @@ function renderBacktest(report, trades) {
     if (minR !== null && (rValue == null || Number(rValue) < minR)) return false;
     return true;
   });
-  if (!filteredTrades.length) { tradesContainer.innerHTML = '<div class="stat-pill wide"><span class="k">Trades</span><strong>Aucun trade détaillé</strong></div>'; return; }
-  tradesContainer.innerHTML = filteredTrades.slice(0, 120).map(t => `<article class="signal small-card"><div class="topline"><div><div class="symbol">${t.symbol} · ${t.side} · ${t.status}</div><div class="subline">${t.entry_session} · ${t.entry_signal_bias}</div></div><div class="score">${t.score}</div></div><div class="mini-grid"><div><span class="label">Signal time</span><strong>${fmtTime(t.entry_signal_time)}</strong></div><div><span class="label">Exit signal time</span><strong>${fmtTime(t.exit_signal_time)}</strong></div><div><span class="label">Entry</span><strong>${t.entry_price}</strong></div><div><span class="label">Exit</span><strong>${t.exit_price ?? t.mark_price ?? 'open'}</strong></div><div><span class="label">Stop</span><strong>${t.stop_price ?? 'n/a'}</strong></div><div><span class="label">Target</span><strong>${t.target_price ?? 'n/a'}</strong></div><div><span class="label">RSI entry</span><strong>${t.entry_rsi_main ?? 'n/a'}</strong></div><div><span class="label">RR entry</span><strong>${t.entry_reward_risk_ratio ?? 'n/a'}</strong></div><div><span class="label">Return %</span><strong class="${resultClass(t.return_pct ?? t.unrealized_return_pct)}">${t.return_pct ?? t.unrealized_return_pct ?? 'n/a'}</strong></div><div><span class="label">R</span><strong class="${resultClass(t.r_multiple ?? t.unrealized_r_multiple)}">${t.r_multiple ?? t.unrealized_r_multiple ?? 'n/a'}</strong></div><div><span class="label">Exit reason</span><strong>${t.exit_reason ?? 'n/a'}</strong></div><div><span class="label">Bars held</span><strong>${t.bars_held ?? 'n/a'}</strong></div></div><div class="liquidity-box"><span class="label">Liquidity target at entry</span><strong>${t.liquidity_target_at_entry?.type || 'n/a'} ${t.liquidity_target_at_entry?.level ?? ''}</strong><div class="subline">${t.liquidity_target_at_entry?.reason || ''}</div></div></article>`).join('');
+  tradesContainer.innerHTML = filteredTrades.length ? filteredTrades.slice(0, 120).map(renderBacktestTradeRow).join('') : '<div class="empty-state">Aucun trade dans ce replay.</div>';
 }
 async function loadBacktest(runId = 'latest') {
   try {
@@ -243,34 +365,22 @@ async function loadBacktest(runId = 'latest') {
       const [reportRes, tradesRes] = await Promise.all([fetch('/api/backtest_report?_=' + Date.now()), fetch('/data/backtest_trades.json?_=' + Date.now()).catch(() => null)]);
       const payload = await reportRes.json();
       const report = payload.report;
-      if (!report) { renderPlaceholder('backtest','Backtest'); renderPlaceholder('backtestTrades','Trades'); return; }
+      if (!report) {
+        document.getElementById('backtest').innerHTML = '<div class="empty-state">Aucun rapport backtest.</div>';
+        document.getElementById('backtestTrades').innerHTML = '<div class="empty-state">Aucun trade backtest.</div>';
+        return;
+      }
       const trades = tradesRes ? await tradesRes.json() : [];
-      renderBacktest(report, trades); return;
+      renderBacktest(report, trades);
+      return;
     }
     const res = await fetch(`/api/backtest-run?run_id=${encodeURIComponent(runId)}&_=${Date.now()}`);
     const payload = await res.json();
     if (!payload.ok) throw new Error(payload.error || 'run load failed');
     renderBacktest(payload.report, payload.trades || []);
   } catch (err) {
-    document.getElementById('backtest').innerHTML = `<div class="stat-pill wide"><span class="k">Backtest</span><strong>Erreur: ${err}</strong></div>`;
+    document.getElementById('backtest').innerHTML = `<div class="empty-state">Erreur backtest: ${err}</div>`;
   }
-}
-function renderLiveConfirmedSignals() {
-  const container = document.getElementById('liveConfirmedSignals');
-  const meta = document.getElementById('liveConfirmedMeta');
-  if (!container) return;
-  const symbolQ = (document.getElementById('liveConfirmedFilterSymbol')?.value || '').trim().toUpperCase();
-  const biasQ = document.getElementById('liveConfirmedFilterBias')?.value || 'all';
-  const triggerQ = document.getElementById('liveConfirmedFilterTrigger')?.value || 'all';
-  const filtered = liveConfirmedSignalsCache.filter(sig => {
-    if (symbolQ && !(sig.symbol || '').includes(symbolQ)) return false;
-    if (biasQ !== 'all' && sig.bias !== biasQ) return false;
-    if (triggerQ !== 'all' && sig.trigger !== triggerQ) return false;
-    return true;
-  });
-  if (meta) meta.textContent = `${filtered.length} confirmation(s) affichée(s)`;
-  if (!filtered.length) { container.innerHTML = '<div class="stat-pill wide"><span class="k">Live</span><strong>Aucun signal confirmé trouvé</strong></div>'; return; }
-  container.innerHTML = filtered.map(sig => renderSignalCard(sig, { compact:true, liveTs:true, showPipeline:false })).join('');
 }
 async function loadLiveConfirmedSignals() {
   const limit = Number(document.getElementById('liveConfirmedLimit')?.value || '100');
@@ -280,12 +390,13 @@ async function loadLiveConfirmedSignals() {
     liveConfirmedSignalsCache = Array.isArray(payload.signals) ? payload.signals : [];
     renderLiveConfirmedSignals();
     renderConfirmedToday();
+    renderHero();
     renderStatusBoard();
   } catch (err) {
     const container = document.getElementById('liveConfirmedSignals');
     const meta = document.getElementById('liveConfirmedMeta');
     if (meta) meta.textContent = `Erreur historique live: ${err}`;
-    if (container) container.innerHTML = '<div class="stat-pill wide"><span class="k">Live</span><strong>Erreur chargement</strong></div>';
+    if (container) container.innerHTML = '<div class="empty-state">Erreur chargement confirmations.</div>';
   }
 }
 async function loadDashboard() {
@@ -294,29 +405,52 @@ async function loadDashboard() {
   dashboardCache = data;
   const mode = data.runtime?.mode ? ` · ${data.runtime.mode}` : '';
   document.getElementById('meta').textContent = 'Dernière génération: ' + data.generated_at + mode;
-  document.getElementById('stats').innerHTML = `<div class="stat-pill"><span class="k">Total marchés</span><strong>${data.stats.all_symbols_count}</strong></div><div class="stat-pill"><span class="k">Batch actif</span><strong>${data.stats.batch_count}</strong></div><div class="stat-pill"><span class="k">Refresh</span><strong>${data.stats.loop_interval_seconds}s</strong></div>`;
+  document.getElementById('batchMeta').textContent = `${data.batch_symbols?.length || 0} symbole(s)`;
   const q = (document.getElementById('filterSymbol')?.value || '').trim().toUpperCase();
   const bias = document.getElementById('filterBias')?.value || 'all';
   const minScore = Number(document.getElementById('filterScore')?.value || '0');
   const showTopOnly = document.getElementById('toggleTopOnly')?.checked || false;
   const showPipeline = document.getElementById('togglePipeline')?.checked ?? true;
   const sourceSignals = showTopOnly ? (data.top_signals || []) : (data.signals || []);
-  const filtered = sourceSignals.filter(sig => { if (q && !sig.symbol.includes(q)) return false; if (bias !== 'all' && sig.bias !== bias) return false; if ((sig.score || 0) < minScore) return false; return true; });
-  document.getElementById('top').innerHTML = (data.top_signals || []).length ? (data.top_signals || []).map(sig => renderSignalCard(sig, { showPipeline })).join('') : '<div class="stat-pill wide"><span class="k">Top</span><strong>Aucun top signal</strong></div>';
-  document.getElementById('batch').innerHTML = data.batch_symbols.length ? data.batch_symbols.map(s => `<span class="badge neutral">${s}</span>`).join(' ') : '<span class="badge neutral">batch vide</span>';
-  document.getElementById('signals').innerHTML = filtered.length ? filtered.map(sig => renderSignalCard(sig, { showPipeline })).join('') : '<div class="stat-pill wide"><span class="k">Live</span><strong>Aucun signal dans le batch</strong></div>';
-  renderDecisionDeck();
+  const filtered = sourceSignals.filter(sig => {
+    if (q && !sig.symbol.includes(q)) return false;
+    if (bias !== 'all' && sig.bias !== bias) return false;
+    if ((sig.score || 0) < minScore) return false;
+    return true;
+  });
+  document.getElementById('top').innerHTML = (data.top_signals || []).length ? (data.top_signals || []).map(sig => renderMonitorCard(sig, showPipeline)).join('') : '<div class="empty-state">Aucun top signal.</div>';
+  document.getElementById('batch').innerHTML = data.batch_symbols?.length ? data.batch_symbols.map(s => `<span class="badge neutral">${s}</span>`).join(' ') : '<span class="badge neutral">batch vide</span>';
+  document.getElementById('signals').innerHTML = filtered.length ? filtered.map(sig => renderMonitorCard(sig, showPipeline)).join('') : '<div class="empty-state">Aucun signal dans le batch.</div>';
+  renderHero();
+  renderStrategyRadar();
+  renderDecisionBoards();
   renderSessionPulse();
   renderStatusBoard();
 }
 function bindControls() {
-  ['filterSymbol','filterBias','filterScore','toggleTopOnly','togglePipeline','toggleTrade','tradeFilterSymbol','tradeFilterSide','tradeFilterMinR','tradeFilterStatus'].forEach(id => { const el = document.getElementById(id); if (!el) return; el.addEventListener('input', () => { if (id.startsWith('tradeFilter')) loadBacktest(currentBacktestRunId); else loadDashboard(); }); el.addEventListener('change', () => { if (id.startsWith('tradeFilter')) loadBacktest(currentBacktestRunId); else loadDashboard(); }); });
-  ['liveConfirmedFilterSymbol','liveConfirmedFilterBias','liveConfirmedFilterTrigger'].forEach(id => { const el = document.getElementById(id); if (!el) return; el.addEventListener('input', renderLiveConfirmedSignals); el.addEventListener('change', renderLiveConfirmedSignals); });
+  ['filterSymbol','filterBias','filterScore','toggleTopOnly','togglePipeline','tradeFilterSymbol','tradeFilterSide','tradeFilterMinR','tradeFilterStatus'].forEach(id => {
+    const el = document.getElementById(id); if (!el) return;
+    el.addEventListener('input', () => { if (id.startsWith('tradeFilter')) loadBacktest(currentBacktestRunId); else loadDashboard(); });
+    el.addEventListener('change', () => { if (id.startsWith('tradeFilter')) loadBacktest(currentBacktestRunId); else loadDashboard(); });
+  });
+  ['liveConfirmedFilterSymbol','liveConfirmedFilterBias','liveConfirmedFilterTrigger'].forEach(id => {
+    const el = document.getElementById(id); if (!el) return;
+    el.addEventListener('input', renderLiveConfirmedSignals);
+    el.addEventListener('change', renderLiveConfirmedSignals);
+  });
   const liveLimit = document.getElementById('liveConfirmedLimit'); if (liveLimit) liveLimit.addEventListener('change', loadLiveConfirmedSignals);
   const rt = document.getElementById('runtimeToggle'); if (rt) rt.addEventListener('click', toggleRuntime);
   const backtestBtn = document.getElementById('runBacktestBtn'); if (backtestBtn) backtestBtn.addEventListener('click', runQuickBacktest);
   const historyBtn = document.getElementById('loadBacktestHistoryBtn'); if (historyBtn) historyBtn.addEventListener('click', loadSelectedBacktest);
 }
 bindControls();
-Promise.all([loadRuntime(), loadProcesses(), loadCachedSymbols(), loadBacktestRuns(), loadDashboard(), loadBacktest('latest'), loadLiveConfirmedSignals()]).catch(err => { document.getElementById('meta').textContent = 'Erreur chargement dashboard: ' + err; });
-setInterval(() => { loadRuntime(); loadProcesses(); loadDashboard(); loadLiveConfirmedSignals(); if (currentBacktestRunId === 'latest') loadBacktest('latest'); }, 15000);
+Promise.all([loadRuntime(), loadProcesses(), loadCachedSymbols(), loadBacktestRuns(), loadDashboard(), loadBacktest('latest'), loadLiveConfirmedSignals()]).catch(err => {
+  document.getElementById('meta').textContent = 'Erreur chargement dashboard: ' + err;
+});
+setInterval(() => {
+  loadRuntime();
+  loadProcesses();
+  loadDashboard();
+  loadLiveConfirmedSignals();
+  if (currentBacktestRunId === 'latest') loadBacktest('latest');
+}, 15000);
