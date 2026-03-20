@@ -45,7 +45,9 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
     high_htf, low_htf = recent_extremes(candles_htf, min(len(candles_htf), cfg["swing_window"] * 6))
     prev_high = max(c["high"] for c in candles_main[-6:-1])
     prev_low = min(c["low"] for c in candles_main[-6:-1])
+    prev_mid = (prev_high + prev_low) / 2
     last = candles_main[-1]
+    prev_bar = candles_main[-2] if len(candles_main) >= 2 else candles_main[-1]
     signal_open_time = last.get("open_time")
     signal_close_time = last.get("close_time")
     signal_interval = infer_interval_label(candles_main)
@@ -60,6 +62,7 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
     bias = "neutral"
     score = 0
     tp_zone = False
+    confirm_source = "none"
     pipeline = {"collect": True, "liquidity": False, "zone": False, "confirm": False, "trade": False}
     trade = {"status": "watch", "side": "none", "entry": None, "stop": None, "target": None}
 
@@ -98,16 +101,44 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
         bias = "bull_watch"
         pipeline["zone"] = True
 
-    if utad_watch and last["close"] < prev_low:
+    bear_strong_confirm = utad_watch and last["close"] < prev_low
+    bull_strong_confirm = spring_watch and last["close"] > prev_high
+
+    bear_soft_confirm = utad_watch and (
+        last["close"] < prev_mid
+        and last["close"] < last["open"]
+        and last["close"] < prev_bar["close"]
+    )
+    bull_soft_confirm = spring_watch and (
+        last["close"] > prev_mid
+        and last["close"] > last["open"]
+        and last["close"] > prev_bar["close"]
+    )
+
+    if bear_strong_confirm:
         trigger = "break_down_confirm"
         bias = "bear_confirm"
         pipeline["confirm"] = True
+        confirm_source = "5m_break"
         score += 3
-    elif spring_watch and last["close"] > prev_high:
+    elif bull_strong_confirm:
         trigger = "break_up_confirm"
         bias = "bull_confirm"
         pipeline["confirm"] = True
+        confirm_source = "5m_break"
         score += 3
+    elif bear_soft_confirm:
+        trigger = "break_down_confirm_soft"
+        bias = "bear_confirm"
+        pipeline["confirm"] = True
+        confirm_source = "5m_soft"
+        score += 2
+    elif bull_soft_confirm:
+        trigger = "break_up_confirm_soft"
+        bias = "bull_confirm"
+        pipeline["confirm"] = True
+        confirm_source = "5m_soft"
+        score += 2
 
     if session in {"london_open", "london", "new_york"}:
         score += 1
@@ -132,10 +163,10 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
         low_htf=low_htf,
     )
 
-    if trigger == "break_down_confirm":
+    if trigger in {"break_down_confirm", "break_down_confirm_soft"}:
         trade = {"status": "simulated", "side": "short", "entry": price, "stop": high_main, "target": low_main}
         pipeline["trade"] = True
-    elif trigger == "break_up_confirm":
+    elif trigger in {"break_up_confirm", "break_up_confirm_soft"}:
         trade = {"status": "simulated", "side": "long", "entry": price, "stop": low_main, "target": high_main}
         pipeline["trade"] = True
 
@@ -163,6 +194,7 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
         "bias": bias,
         "tp_zone": tp_zone,
         "score": score,
+        "confirm_source": confirm_source,
         "pipeline": pipeline,
         "trade": trade,
         "liquidity_target": liquidity_target,
