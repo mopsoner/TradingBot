@@ -64,6 +64,7 @@ def discover_symbols(client: BinanceRestClient, cfg: dict[str, Any]) -> list[str
         spot_only=sd["spot_only"],
         max_symbols_total=sd["max_symbols_total"],
         margin_only=sd.get("margin_only", False),
+        isolated_only=sd.get("isolated_only", False),
     )
 
 
@@ -167,6 +168,7 @@ def build_dashboard(all_symbols: list[str], batch: list[str], results: list[dict
             "loop_interval_seconds": cfg["poll_seconds"],
             "macro_liquidity_timeframe": "4h",
             "live_run_id": run_id,
+            "isolated_only": bool(cfg.get("symbol_discovery", {}).get("isolated_only", False)),
         },
         "live_monitor": {
             "last_tick_at": generated_at,
@@ -186,7 +188,11 @@ def build_dashboard(all_symbols: list[str], batch: list[str], results: list[dict
 
 def list_symbols() -> None:
     cfg = load_config()
-    client = BinanceRestClient(cfg["binance_rest_base"])
+    client = BinanceRestClient(
+        cfg["binance_rest_base"],
+        api_key=cfg.get("binance_api_key"),
+        api_secret=cfg.get("binance_api_secret"),
+    )
     symbols = discover_symbols(client, cfg)
     print(headline(f"Discovered {len(symbols)} symbols"))
     for s in symbols:
@@ -206,7 +212,11 @@ def main() -> None:
     cfg = load_config()
     init_db(cfg["database_path"])
     init_ohlc_cache(cfg["ohlc_cache_db_path"])
-    client = BinanceRestClient(cfg["binance_rest_base"])
+    client = BinanceRestClient(
+        cfg["binance_rest_base"],
+        api_key=cfg.get("binance_api_key"),
+        api_secret=cfg.get("binance_api_secret"),
+    )
 
     def tick() -> None:
         runtime_state = load_runtime_state(cfg)
