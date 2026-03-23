@@ -127,10 +127,31 @@ def scan_batch(client: BinanceRestClient, batch: list[str], cfg: dict[str, Any])
     return results
 
 
+def _stage_name(signal: dict[str, Any]) -> str:
+    pipeline = signal.get("pipeline", {})
+    if pipeline.get("trade"):
+        return "trade"
+    if pipeline.get("confirm"):
+        return "confirm"
+    if pipeline.get("zone"):
+        return "zone"
+    if pipeline.get("liquidity"):
+        return "liquidity"
+    if pipeline.get("collect"):
+        return "collect"
+    return "none"
+
+
 def build_dashboard(all_symbols: list[str], batch: list[str], results: list[dict[str, Any]], cfg: dict[str, Any], runtime_state: dict[str, Any]) -> dict[str, Any]:
     top = sorted(results, key=lambda x: x.get("score", 0), reverse=True)
+    generated_at = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+    stage_counts = {"collect": 0, "liquidity": 0, "zone": 0, "confirm": 0, "trade": 0, "none": 0}
+    for sig in results:
+        stage_counts[_stage_name(sig)] = stage_counts.get(_stage_name(sig), 0) + 1
+    actionable_count = sum(1 for sig in results if sig.get("pipeline", {}).get("trade") and not sig.get("confirm_blocked_by_session", False))
+    blocked_count = sum(1 for sig in results if sig.get("confirm_blocked_by_session", False))
     return {
-        "generated_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+        "generated_at": generated_at,
         "runtime": {
             "paused": bool(runtime_state.get("paused", False)),
             "mode": "paused" if runtime_state.get("paused", False) else "running",
@@ -140,6 +161,14 @@ def build_dashboard(all_symbols: list[str], batch: list[str], results: list[dict
             "batch_count": len(batch),
             "loop_interval_seconds": cfg["poll_seconds"],
             "macro_liquidity_timeframe": "4h",
+        },
+        "live_monitor": {
+            "last_tick_at": generated_at,
+            "scanned_symbols": len(results),
+            "recent_symbols": [sig.get("symbol") for sig in results[:12]],
+            "stage_counts": stage_counts,
+            "actionable_count": actionable_count,
+            "blocked_count": blocked_count,
         },
         "batch_symbols": batch,
         "top_signals": top[:10],

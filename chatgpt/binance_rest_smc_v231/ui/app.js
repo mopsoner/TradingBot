@@ -84,19 +84,24 @@ function renderHero(signals) {
     metric('Top score', String(maxScore), maxScore >= 6 ? 'positive' : ''),
   ].join('');
 }
-function renderStatus(signals) {
-  const el = document.getElementById('statusBoard');
+function renderLivePulse() {
+  const el = document.getElementById('livePulse');
+  const recentEl = document.getElementById('recentSymbols');
   const paused = document.getElementById('runtimeToggle')?.dataset.paused === '1';
-  const stageCounts = { collect:0, liquidity:0, zone:0, confirm:0, trade:0 };
-  signals.forEach(sig => { stageCounts[stageName(sig)] = (stageCounts[stageName(sig)] || 0) + 1; });
+  const monitor = dashboardCache?.live_monitor || {};
+  const stageCounts = monitor.stage_counts || {};
   el.innerHTML = [
     metric('Moteur', paused ? 'paused' : 'running', paused ? 'negative' : 'positive'),
-    metric('Collect', String(stageCounts.collect || 0)),
-    metric('Liquidity', String(stageCounts.liquidity || 0)),
-    metric('Zone', String(stageCounts.zone || 0)),
-    metric('Confirm', String(stageCounts.confirm || 0), stageCounts.confirm ? 'positive' : ''),
-    metric('Trade', String(stageCounts.trade || 0), stageCounts.trade ? 'positive' : ''),
+    metric('Dernier tick', monitor.last_tick_at ? fmtTime(Date.parse(monitor.last_tick_at)) : 'n/a'),
+    metric('Scannés', String(monitor.scanned_symbols ?? 0), (monitor.scanned_symbols ?? 0) > 0 ? 'positive' : 'negative'),
+    metric('Wait / collect', String((stageCounts.collect || 0) + (stageCounts.none || 0))),
+    metric('Watch / zone', String((stageCounts.liquidity || 0) + (stageCounts.zone || 0))),
+    metric('Confirm', String(stageCounts.confirm || 0), (stageCounts.confirm || 0) > 0 ? 'positive' : ''),
+    metric('Trade', String(stageCounts.trade || 0), (stageCounts.trade || 0) > 0 ? 'positive' : ''),
+    metric('Blocked', String(monitor.blocked_count ?? 0), (monitor.blocked_count ?? 0) > 0 ? 'negative' : ''),
   ].join('');
+  const recent = Array.isArray(monitor.recent_symbols) ? monitor.recent_symbols : [];
+  recentEl.innerHTML = recent.length ? recent.map(s => `<span class="badge neutral">${s}</span>`).join(' ') : '<span class="hint">Aucun symbole traité</span>';
 }
 function renderTradeNow(signals) {
   const el = document.getElementById('tradeNowBoard');
@@ -140,7 +145,7 @@ async function loadRuntime() {
     btn.textContent = paused ? 'Resume batch' : 'Pause batch';
     btn.dataset.paused = paused ? '1' : '0';
     btn.classList.toggle('paused-btn', paused);
-    if (dashboardCache?.signals) renderStatus(dashboardCache.signals || []);
+    if (dashboardCache?.signals) renderLivePulse();
   } catch {}
 }
 async function toggleRuntime() {
@@ -158,7 +163,7 @@ async function loadDashboard() {
   document.getElementById('meta').textContent = 'Dernière génération: ' + data.generated_at + mode;
   const signals = data.signals || [];
   renderHero(signals);
-  renderStatus(signals);
+  renderLivePulse();
   renderTradeNow(signals);
   renderTable(signals);
 }
