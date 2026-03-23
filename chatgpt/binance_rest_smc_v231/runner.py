@@ -8,16 +8,12 @@ from typing import Any
 from uuid import uuid4
 
 from collector import BinanceRestClient, safe_sleep
+from config_utils import load_config
 from console_colors import error, headline, info, muted, signal_line, success, warning
 from pipeline import build_batch_signal
 from storage import append_log, complete_live_run, init_db, init_ohlc_cache, load_cached_ohlc, save_setup_journal, save_signal, start_live_run, upsert_ohlc, write_dashboard
 
 RUNTIME_DEFAULT = {"paused": False}
-
-
-def load_config() -> dict[str, Any]:
-    with open("config.json", "r", encoding="utf-8") as f:
-        return json.load(f)
 
 
 def runtime_control_path(cfg: dict[str, Any]) -> str:
@@ -58,6 +54,10 @@ def _save_batch_index(path: str, index: int) -> None:
 
 def discover_symbols(client: BinanceRestClient, cfg: dict[str, Any]) -> list[str]:
     sd = cfg["symbol_discovery"]
+    if sd.get("use_static_symbols") and sd.get("static_symbols"):
+        symbols = [str(s).upper() for s in sd.get("static_symbols", [])]
+        symbols.sort()
+        return symbols[: sd["max_symbols_total"]]
     return client.discover_symbols(
         quote_assets=sd["quote_assets"],
         status=sd["status"],
@@ -169,6 +169,7 @@ def build_dashboard(all_symbols: list[str], batch: list[str], results: list[dict
             "macro_liquidity_timeframe": "4h",
             "live_run_id": run_id,
             "isolated_only": bool(cfg.get("symbol_discovery", {}).get("isolated_only", False)),
+            "use_static_symbols": bool(cfg.get("symbol_discovery", {}).get("use_static_symbols", False)),
         },
         "live_monitor": {
             "last_tick_at": generated_at,

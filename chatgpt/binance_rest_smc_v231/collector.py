@@ -75,8 +75,13 @@ class BinanceRestClient:
         out.sort()
         return out[:max_symbols_total]
 
-    def klines(self, symbol: str, interval: str, limit: int) -> list[dict[str, Any]]:
-        raw = self._get("/api/v3/klines", {"symbol": symbol, "interval": interval, "limit": limit})
+    def klines(self, symbol: str, interval: str, limit: int, start_time: int | None = None, end_time: int | None = None) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"symbol": symbol, "interval": interval, "limit": limit}
+        if start_time is not None:
+            params["startTime"] = start_time
+        if end_time is not None:
+            params["endTime"] = end_time
+        raw = self._get("/api/v3/klines", params)
         out: list[dict[str, Any]] = []
         for row in raw:
             out.append(
@@ -93,5 +98,5 @@ class BinanceRestClient:
         return out
 
 
-def safe_sleep(seconds: int) -> None:
+def safe_sleep(seconds: float) -> None:
     time.sleep(seconds)
