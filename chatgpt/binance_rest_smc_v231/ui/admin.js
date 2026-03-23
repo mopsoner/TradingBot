@@ -22,6 +22,12 @@ function setStatus(text, isError = false) {
   meta.classList.toggle('negative', !!isError);
 }
 
+function maskSecret(value) {
+  if (!value) return 'missing';
+  if (value.length <= 6) return 'saved';
+  return `${value.slice(0, 3)}***${value.slice(-3)}`;
+}
+
 async function loadConfig() {
   const res = await fetch('/api/config?_=' + Date.now());
   const payload = await res.json();
@@ -47,7 +53,7 @@ async function loadConfig() {
   setValue('history_limit', currentConfig.backtest?.history_limit);
   setValue('min_score', currentConfig.backtest?.min_score);
   setValue('min_rr', currentConfig.backtest?.min_rr);
-  setStatus('Config chargée');
+  setStatus(`Config chargée · key=${currentConfig.binance_api_key ? 'saved' : 'missing'} · secret=${maskSecret(currentConfig.binance_api_secret || '')}`);
 }
 
 async function saveConfig() {
@@ -86,9 +92,8 @@ async function saveConfig() {
     setStatus('Erreur: ' + payload.error, true);
     return;
   }
-  currentConfig = next;
-  setText('bt_interval_display', currentConfig.backtest?.interval || 'n/a');
-  setStatus('Config sauvegardée');
+  await loadConfig();
+  setStatus(`Config sauvegardée · key=${next.binance_api_key ? 'saved' : 'missing'} · secret=${maskSecret(next.binance_api_secret || '')}`);
 }
 
 document.getElementById('reloadBtn').addEventListener('click', loadConfig);
