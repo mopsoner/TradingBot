@@ -51,6 +51,14 @@ class Handler(SimpleHTTPRequestHandler):
         except Exception:
             return ROOT / 'data/signals.db'
 
+    def _ohlc_db_path(self) -> Path:
+        try:
+            cfg = json.loads(CONFIG_PATH.read_text(encoding='utf-8'))
+            custom = cfg.get('ohlc_cache_db_path', 'data/ohlc_cache.db')
+            return ROOT / custom if not str(custom).startswith('/') else Path(custom)
+        except Exception:
+            return ROOT / 'data/ohlc_cache.db'
+
     def _list_processes(self) -> list[dict]:
         try:
             output = subprocess.check_output(['ps', '-eo', 'pid,etime,cmd'], text=True)
@@ -77,7 +85,9 @@ class Handler(SimpleHTTPRequestHandler):
         if not DATA_DIR.exists():
             return []
         out = []
-        for p in sorted(DATA_DIR.glob('*.json')):
+        for p in sorted(DATA_DIR.glob('*')):
+            if p.is_dir():
+                continue
             try:
                 stat = p.stat()
                 out.append({'name': p.name, 'size': stat.st_size, 'mtime': int(stat.st_mtime * 1000), 'url': f'/data/{p.name}'})
@@ -87,8 +97,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _list_cached_symbols(self) -> list[str]:
         try:
-            cfg = json.loads(CONFIG_PATH.read_text(encoding='utf-8'))
-            db_path = ROOT / cfg.get('ohlc_cache_db_path', 'data/ohlc_cache.db')
+            db_path = self._ohlc_db_path()
             if not db_path.exists():
                 return []
             with sqlite3.connect(db_path) as conn:
@@ -137,6 +146,135 @@ class Handler(SimpleHTTPRequestHandler):
             if len(out) >= limit:
                 break
         return out
+
+    def _list_live_runs(self, limit: int = 50) -> list[dict]:
+        db_path = self._db_path()
+        if not db_path.exists():
+            return []
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(
+                "SELECT run_id, started_at, completed_at, runtime_mode, all_symbols_count, batch_count, scanned_count, wait_count, watch_count, confirm_count, trade_count, blocked_count, error_count, batch_symbols_json, recent_symbols_json, stats_json FROM live_runs ORDER BY id DESC LIMIT ?",
+                (max(1, min(limit, 200)),),
+            ).fetchall()
+        out = []
+        for r in rows:
+            out.append({
+                'run_id': r[0], 'started_at': r[1], 'completed_at': r[2], 'runtime_mode': r[3],
+                'all_symbols_count': r[4], 'batch_count': r[5], 'scanned_count': r[6],
+                'wait_count': r[7], 'watch_count': r[8], 'confirm_count': r[9], 'trade_count': r[10],
+                'blocked_count': r[11], 'error_count': r[12],
+                'batch_symbols': json.loads(r[13] or '[]'), 'recent_symbols': json.loads(r[14] or '[]'), 'stats': json.loads(r[15] or '{}'),
+            })
+        return out
+
+    def _list_setup_journal(self, limit: int = 200, symbol: str | None = None, stage: str | None = None, actionability: str | None = None) -> list[dict]:
+        db_path = self._db_path()
+        if not db_path.exists():
+            return []
+        q = "SELECT id, ts, run_id, symbol, session, stage, accepted, actionability, score, bias, trigger, state, reason, confirm_source, liquidity_type, liquidity_level, entry_price, stop_price, target_price, payload FROM setup_journal"
+        where = []
+        params: list[object] = []
+        if symbol:
+            where.append("symbol = ?")
+            params.append(symbol.upper())
+        if stage and stage != 'all':
+            where.append("stage = ?")
+            params.append(stage)
+        if actionability and actionability != 'all':
+            where.append("actionability = ?")
+            params.append(actionability)
+        if where:
+            q += " WHERE " + " AND ".join(where)
+        q += " ORDER BY id DESC LIMIT ?"
+        params.append(max(1, min(limit, 500)))
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(q, tuple(params)).fetchall()
+        out = []
+        for r in rows:
+            try:
+                payload = json.loads(r[19] or '{}')
+            except Exception:
+                payload = {}
+            out.append({
+                'id': r[0], 'ts': r[1], 'run_id': r[2], 'symbol': r[3], 'session': r[4], 'stage': r[5], 'accepted': bool(r[6]),
+                'actionability': r[7], 'score': r[8], 'bias': r[9], 'trigger': r[10], 'state': r[11], 'reason': r[12],
+                'confirm_source': r[13], 'liquidity_type': r[14], 'liquidity_level': r[15], 'entry_price': r[16], 'stop_price': r[17], 'target_price': r[18],
+                'payload': payload,
+            })
+        return out
+
+    def _system_health(self) -> dict:
+        runtime = {'paused': False}
+        try:
+            p = self._runtime_path()
+            if p.exists():
+                runtime = json.loads(p.read_text(encoding='utf-8'))
+        except Exception:
+            pass
+        dashboard_path = ROOT / 'data' / 'dashboard.json'
+        dashboard = None
+        if dashboard_path.exists():
+            try:
+                dashboard = json.loads(dashboard_path.read_text(encoding='utf-8'))
+            except Exception:
+                dashboard = None
+        db_ok = False
+        ohlc_ok = False
+        try:
+            with sqlite3.connect(self._db_path()) as conn:
+                db_ok = conn.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+        except Exception:
+            db_ok = False
+        try:
+            with sqlite3.connect(self._ohlc_db_path()) as conn:
+                ohlc_ok = conn.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+        except Exception:
+            ohlc_ok = False
+        runs = self._list_live_runs(limit=1)
+        latest_run = runs[0] if runs else None
+        processes = self._list_processes()
+        last_log_line = None
+        log_path = ROOT / 'logs' / 'runner_boot.log'
+        if log_path.exists():
+            try:
+                lines = log_path.read_text(encoding='utf-8', errors='ignore').splitlines()
+                last_log_line = lines[-1] if lines else None
+            except Exception:
+                last_log_line = None
+        return {
+            'runtime': runtime,
+            'dashboard_generated_at': dashboard.get('generated_at') if dashboard else None,
+            'dashboard_mode': dashboard.get('runtime', {}).get('mode') if dashboard else None,
+            'db_ok': db_ok,
+            'ohlc_ok': ohlc_ok,
+            'process_count': len(processes),
+            'runner_detected': any('runner.py' in p.get('cmd', '') for p in processes),
+            'latest_run': latest_run,
+            'last_log_line': last_log_line,
+        }
+
+    def _data_coverage(self) -> dict:
+        db_path = self._ohlc_db_path()
+        if not db_path.exists():
+            return {'rows': [], 'symbols': [], 'intervals': []}
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(
+                "SELECT symbol, interval, COUNT(*) as n, MIN(open_time), MAX(close_time) FROM ohlc_cache GROUP BY symbol, interval ORDER BY symbol ASC, interval ASC"
+            ).fetchall()
+        coverage_rows = []
+        symbols = set()
+        intervals = set()
+        for r in rows:
+            symbols.add(r[0])
+            intervals.add(r[1])
+            coverage_rows.append({
+                'symbol': r[0],
+                'interval': r[1],
+                'count': r[2],
+                'first_open_time': r[3],
+                'last_close_time': r[4],
+            })
+        return {'rows': coverage_rows, 'symbols': sorted(symbols), 'intervals': sorted(intervals)}
 
     def _list_backtest_runs(self) -> list[dict]:
         if not BACKTEST_RUNS_INDEX.exists():
@@ -202,6 +340,26 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json(200, {"ok": True, "signals": signals})
             except Exception as exc:
                 return self._json(500, {"ok": False, "error": str(exc)})
+        if path.startswith('/api/live-runs'):
+            try:
+                limit = int((query.get('limit') or ['50'])[0])
+                return self._json(200, {"ok": True, "runs": self._list_live_runs(limit=limit)})
+            except Exception as exc:
+                return self._json(500, {"ok": False, "error": str(exc)})
+        if path.startswith('/api/setup-journal'):
+            try:
+                limit = int((query.get('limit') or ['200'])[0])
+                symbol = (query.get('symbol') or [None])[0]
+                stage = (query.get('stage') or [None])[0]
+                actionability = (query.get('actionability') or [None])[0]
+                rows = self._list_setup_journal(limit=limit, symbol=symbol, stage=stage, actionability=actionability)
+                return self._json(200, {"ok": True, "rows": rows})
+            except Exception as exc:
+                return self._json(500, {"ok": False, "error": str(exc)})
+        if path.startswith('/api/system-health'):
+            return self._json(200, {"ok": True, "health": self._system_health()})
+        if path.startswith('/api/data-coverage'):
+            return self._json(200, {"ok": True, "coverage": self._data_coverage()})
         if path.startswith('/api/runtime'):
             p = self._runtime_path()
             if not p.exists():

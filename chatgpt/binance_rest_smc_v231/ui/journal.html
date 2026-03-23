@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Journal - Binance REST SMC Lite</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <h1>Journal des setups</h1>
+      <p id="journalMeta">Chargement...</p>
+    </div>
+    <nav class="topnav">
+      <a href="/ui/">Dashboard</a>
+      <a href="/ui/journal.html" class="active">Journal</a>
+      <a href="/ui/backtest.html">Backtest</a>
+      <a href="/ui/admin.html">Réglages</a>
+      <a href="/ui/data.html">Données</a>
+    </nav>
+  </header>
+  <main class="page-shell">
+    <section class="card hero-simple">
+      <div>
+        <span class="eyebrow">Journal</span>
+        <h2>Acceptés, watch, blocked, wait</h2>
+        <p>Cette page te montre pourquoi chaque setup a avancé, bloqué, ou échoué.</p>
+      </div>
+    </section>
+    <section class="card">
+      <div class="section-head"><h2>Filtres</h2></div>
+      <div class="toolbar-grid">
+        <input id="journalSymbol" type="text" placeholder="Symbole (ETH)">
+        <select id="journalStage">
+          <option value="all">Toutes étapes</option>
+          <option value="collect">collect</option>
+          <option value="liquidity">liquidity</option>
+          <option value="zone">zone</option>
+          <option value="confirm">confirm</option>
+          <option value="trade">trade</option>
+        </select>
+        <select id="journalActionability">
+          <option value="all">Tous statuts</option>
+          <option value="actionable">actionable</option>
+          <option value="watch">watch</option>
+          <option value="blocked">blocked</option>
+          <option value="wait">wait</option>
+        </select>
+        <select id="journalLimit">
+          <option value="100">100</option>
+          <option value="200" selected>200</option>
+          <option value="300">300</option>
+        </select>
+      </div>
+    </section>
+    <section class="card">
+      <div class="section-head"><h2>Entrées du journal</h2></div>
+      <div id="journalRows" class="list-stack"></div>
+    </section>
+  </main>
+  <script src="journal.js"></script>
+</body>
+</html>

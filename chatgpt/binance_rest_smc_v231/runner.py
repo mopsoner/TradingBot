@@ -5,11 +5,12 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from collector import BinanceRestClient, safe_sleep
 from console_colors import error, headline, info, muted, signal_line, success, warning
 from pipeline import build_batch_signal
-from storage import append_log, init_db, init_ohlc_cache, load_cached_ohlc, save_signal, upsert_ohlc, write_dashboard
+from storage import append_log, complete_live_run, init_db, init_ohlc_cache, load_cached_ohlc, save_setup_journal, save_signal, start_live_run, upsert_ohlc, write_dashboard
 
 RUNTIME_DEFAULT = {"paused": False}
 
@@ -94,9 +95,10 @@ def get_candles(client: BinanceRestClient, cache_db: str, symbol: str, interval:
     return fetched
 
 
-def scan_batch(client: BinanceRestClient, batch: list[str], cfg: dict[str, Any]) -> list[dict[str, Any]]:
+def scan_batch(client: BinanceRestClient, batch: list[str], cfg: dict[str, Any], run_id: str) -> tuple[list[dict[str, Any]], int]:
     results: list[dict[str, Any]] = []
     cache_db = cfg["ohlc_cache_db_path"]
+    error_count = 0
     for symbol in batch:
         try:
             candles_1m = get_candles(client, cache_db, symbol, "1m", cfg["lookback_limit"])
@@ -104,6 +106,7 @@ def scan_batch(client: BinanceRestClient, batch: list[str], cfg: dict[str, Any])
             candles_1h = get_candles(client, cache_db, symbol, "1h", max(120, cfg["lookback_limit"]))
             candles_4h = get_candles(client, cache_db, symbol, "4h", max(90, cfg["lookback_limit"]))
             signal = build_batch_signal(symbol, candles_1m, candles_5m, candles_1h, candles_4h, cfg)
+            signal["live_run_id"] = run_id
             results.append(signal)
             line = (
                 f"[{datetime.now(timezone.utc).isoformat()}] {signal['symbol']} session={signal['session']} "
@@ -120,11 +123,13 @@ def scan_batch(client: BinanceRestClient, batch: list[str], cfg: dict[str, Any])
             ))
             append_log(cfg["log_path"], line)
             save_signal(cfg["database_path"], signal)
+            save_setup_journal(cfg["database_path"], run_id, signal)
         except Exception as exc:
+            error_count += 1
             line = f"[{datetime.now(timezone.utc).isoformat()}] ERROR symbol={symbol} err={exc}"
             print(error(line))
             append_log(cfg["log_path"], line)
-    return results
+    return results, error_count
 
 
 def _stage_name(signal: dict[str, Any]) -> str:
@@ -142,7 +147,7 @@ def _stage_name(signal: dict[str, Any]) -> str:
     return "none"
 
 
-def build_dashboard(all_symbols: list[str], batch: list[str], results: list[dict[str, Any]], cfg: dict[str, Any], runtime_state: dict[str, Any]) -> dict[str, Any]:
+def build_dashboard(all_symbols: list[str], batch: list[str], results: list[dict[str, Any]], cfg: dict[str, Any], runtime_state: dict[str, Any], run_id: str, error_count: int) -> dict[str, Any]:
     top = sorted(results, key=lambda x: x.get("score", 0), reverse=True)
     generated_at = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
     stage_counts = {"collect": 0, "liquidity": 0, "zone": 0, "confirm": 0, "trade": 0, "none": 0}
@@ -161,14 +166,17 @@ def build_dashboard(all_symbols: list[str], batch: list[str], results: list[dict
             "batch_count": len(batch),
             "loop_interval_seconds": cfg["poll_seconds"],
             "macro_liquidity_timeframe": "4h",
+            "live_run_id": run_id,
         },
         "live_monitor": {
             "last_tick_at": generated_at,
+            "live_run_id": run_id,
             "scanned_symbols": len(results),
             "recent_symbols": [sig.get("symbol") for sig in results[:12]],
             "stage_counts": stage_counts,
             "actionable_count": actionable_count,
             "blocked_count": blocked_count,
+            "error_count": error_count,
         },
         "batch_symbols": batch,
         "top_signals": top[:10],
@@ -205,14 +213,19 @@ def main() -> None:
         all_symbols = discover_symbols(client, cfg)
         batch = select_batch(all_symbols, cfg)
         results: list[dict[str, Any]] = []
-        header = f"[{datetime.now(timezone.utc).isoformat()}] loop mode={'paused' if runtime_state.get('paused', False) else 'running'} all={len(all_symbols)} batch={len(batch)}"
+        errors = 0
+        run_started_at = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+        run_id = f"live_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:6]}"
+        start_live_run(cfg["database_path"], run_id, run_started_at, "paused" if runtime_state.get("paused", False) else "running", len(all_symbols), batch)
+        header = f"[{datetime.now(timezone.utc).isoformat()}] loop mode={'paused' if runtime_state.get('paused', False) else 'running'} all={len(all_symbols)} batch={len(batch)} run_id={run_id}"
         print(warning(header) if runtime_state.get("paused", False) else headline(header))
         if batch:
             print(muted(f"Batch symbols: {', '.join(batch)}"))
         if not runtime_state.get("paused", False):
-            results = scan_batch(client, batch, cfg)
-        dashboard = build_dashboard(all_symbols, batch, results, cfg, runtime_state)
+            results, errors = scan_batch(client, batch, cfg, run_id)
+        dashboard = build_dashboard(all_symbols, batch, results, cfg, runtime_state, run_id, errors)
         write_dashboard(cfg["dashboard_path"], dashboard)
+        complete_live_run(cfg["database_path"], run_id, datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'), results, errors)
         print(success(f"Dashboard written: {cfg['dashboard_path']} with {len(results)} signal(s)"))
 
     if args.once:

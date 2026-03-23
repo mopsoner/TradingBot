@@ -4,6 +4,10 @@ function fmtTime(ms) {
   if (!ms) return 'n/a';
   try { return new Date(ms).toLocaleString(); } catch { return String(ms); }
 }
+function fmtIso(iso) {
+  if (!iso) return 'n/a';
+  try { return new Date(iso).toLocaleString(); } catch { return String(iso); }
+}
 function fmtNum(v, d = 2) {
   if (v == null || v === '' || Number.isNaN(Number(v))) return 'n/a';
   return Number(v).toFixed(d);
@@ -92,7 +96,7 @@ function renderLivePulse() {
   const stageCounts = monitor.stage_counts || {};
   el.innerHTML = [
     metric('Moteur', paused ? 'paused' : 'running', paused ? 'negative' : 'positive'),
-    metric('Dernier tick', monitor.last_tick_at ? fmtTime(Date.parse(monitor.last_tick_at)) : 'n/a'),
+    metric('Dernier tick', monitor.last_tick_at ? fmtIso(monitor.last_tick_at) : 'n/a'),
     metric('Scannés', String(monitor.scanned_symbols ?? 0), (monitor.scanned_symbols ?? 0) > 0 ? 'positive' : 'negative'),
     metric('Wait / collect', String((stageCounts.collect || 0) + (stageCounts.none || 0))),
     metric('Watch / zone', String((stageCounts.liquidity || 0) + (stageCounts.zone || 0))),
@@ -107,6 +111,44 @@ function renderTradeNow(signals) {
   const el = document.getElementById('tradeNowBoard');
   const actionable = applySort(signals.filter(isActionable)).slice(0, 6);
   el.innerHTML = actionable.length ? actionable.map(renderTradeCard).join('') : '<div class="empty-state">Aucun trade confirmé à placer pour l’instant.</div>';
+}
+function renderLiveRuns(runs) {
+  const el = document.getElementById('liveRuns');
+  if (!el) return;
+  if (!runs.length) {
+    el.innerHTML = '<div class="empty-state">Aucun run live enregistré.</div>';
+    return;
+  }
+  el.innerHTML = runs.slice(0, 8).map(run => `
+    <article class="row-card">
+      <div class="row-main">
+        <div>
+          <div class="symbol">${run.run_id}</div>
+          <div class="subline">${fmtIso(run.started_at)} → ${fmtIso(run.completed_at)}</div>
+        </div>
+        <div class="trade-pills">${pill(run.runtime_mode || 'n/a')}${pill(`batch ${run.batch_count || 0}`)}${pill(`scan ${run.scanned_count || 0}`)}</div>
+      </div>
+      <div class="row-grid">
+        <div><span class="label">Wait</span><strong>${run.wait_count ?? 0}</strong></div>
+        <div><span class="label">Watch</span><strong>${run.watch_count ?? 0}</strong></div>
+        <div><span class="label">Confirm</span><strong class="positive">${run.confirm_count ?? 0}</strong></div>
+        <div><span class="label">Trade</span><strong class="positive">${run.trade_count ?? 0}</strong></div>
+        <div><span class="label">Blocked</span><strong class="negative">${run.blocked_count ?? 0}</strong></div>
+        <div><span class="label">Errors</span><strong class="${(run.error_count || 0) > 0 ? 'negative' : ''}">${run.error_count ?? 0}</strong></div>
+      </div>
+    </article>`).join('');
+}
+function renderSystemHealth(health) {
+  const el = document.getElementById('systemHealth');
+  if (!el || !health) return;
+  el.innerHTML = [
+    metric('Runner', health.runner_detected ? 'yes' : 'no', health.runner_detected ? 'positive' : 'negative'),
+    metric('Runtime', health.runtime?.paused ? 'paused' : 'running', health.runtime?.paused ? 'negative' : 'positive'),
+    metric('Signals DB', health.db_ok ? 'ok' : 'bad', health.db_ok ? 'positive' : 'negative'),
+    metric('OHLC DB', health.ohlc_ok ? 'ok' : 'bad', health.ohlc_ok ? 'positive' : 'negative'),
+    metric('Dashboard', health.dashboard_generated_at ? fmtIso(health.dashboard_generated_at) : 'n/a'),
+    metric('Processes', String(health.process_count ?? 0), (health.process_count ?? 0) > 0 ? 'positive' : 'negative'),
+  ].join('');
 }
 function renderTable(signals) {
   const tbody = document.getElementById('strategyTableBody');
@@ -155,6 +197,16 @@ async function toggleRuntime() {
   const payload = await res.json();
   if (payload.ok) { await loadRuntime(); await loadDashboard(); }
 }
+async function loadLiveRuns() {
+  const res = await fetch('/api/live-runs?limit=20&_=' + Date.now());
+  const payload = await res.json();
+  renderLiveRuns(Array.isArray(payload.runs) ? payload.runs : []);
+}
+async function loadSystemHealth() {
+  const res = await fetch('/api/system-health?_=' + Date.now());
+  const payload = await res.json();
+  renderSystemHealth(payload.health || null);
+}
 async function loadDashboard() {
   const res = await fetch('/data/dashboard.json?_=' + Date.now());
   const data = await res.json();
@@ -178,7 +230,7 @@ function bindControls() {
   if (rt) rt.addEventListener('click', toggleRuntime);
 }
 bindControls();
-Promise.all([loadRuntime(), loadDashboard()]).catch(err => {
+Promise.all([loadRuntime(), loadDashboard(), loadLiveRuns(), loadSystemHealth()]).catch(err => {
   document.getElementById('meta').textContent = 'Erreur chargement dashboard: ' + err;
 });
-setInterval(() => { loadRuntime(); loadDashboard(); }, 15000);
+setInterval(() => { loadRuntime(); loadDashboard(); loadLiveRuns(); loadSystemHealth(); }, 15000);

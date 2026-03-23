@@ -14,6 +14,7 @@
     </div>
     <nav class="topnav">
       <a href="/ui/">Dashboard</a>
+      <a href="/ui/journal.html">Journal</a>
       <a href="/ui/backtest.html">Backtest</a>
       <a href="/ui/admin.html">Réglages</a>
       <a href="/ui/data.html" class="active">Données</a>
@@ -22,15 +23,32 @@
   <main class="page-shell">
     <section class="card hero-simple">
       <div>
-        <span class="eyebrow">Exports</span>
-        <h2>Fichiers produits par le moteur</h2>
-        <p>Téléchargement direct des rapports, runs sauvegardés et fichiers de travail du dossier data.</p>
+        <span class="eyebrow">Data ops</span>
+        <h2>Couverture, santé système, exports</h2>
+        <p>Cette page sépare les données du dashboard principal pour garder la vue live simple.</p>
+      </div>
+    </section>
+    <section class="summary-grid">
+      <section class="card">
+        <div class="section-head"><h2>Santé système</h2></div>
+        <div id="systemHealth" class="metric-grid compact-grid"></div>
+      </section>
+      <section class="card">
+        <div class="section-head"><h2>Couverture OHLC</h2></div>
+        <div id="coverageSummary" class="metric-grid compact-grid"></div>
+      </section>
+    </section>
+    <section class="card table-card">
+      <div class="section-head"><h2>Couverture par symbole / timeframe</h2></div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Symbol</th><th>Interval</th><th>Count</th><th>First</th><th>Last</th></tr></thead>
+          <tbody id="coverageRows"></tbody>
+        </table>
       </div>
     </section>
     <section class="card">
-      <div class="section-head">
-        <h2>Exports disponibles</h2>
-      </div>
+      <div class="section-head"><h2>Exports disponibles</h2></div>
       <div id="dataFiles" class="list-stack"></div>
     </section>
   </main>
