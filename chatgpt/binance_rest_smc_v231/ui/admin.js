@@ -27,6 +27,8 @@ async function loadConfig() {
   const payload = await res.json();
   if (!payload.ok) throw new Error(payload.error || 'Config load failed');
   currentConfig = payload.config;
+  setValue('binance_api_key', currentConfig.binance_api_key);
+  setValue('binance_api_secret', currentConfig.binance_api_secret);
   setValue('poll_seconds', currentConfig.poll_seconds);
   setValue('lookback_limit', currentConfig.lookback_limit);
   setValue('rsi_period', currentConfig.rsi_period);
@@ -51,6 +53,8 @@ async function loadConfig() {
 async function saveConfig() {
   if (!currentConfig) return;
   const next = JSON.parse(JSON.stringify(currentConfig));
+  next.binance_api_key = document.getElementById('binance_api_key')?.value || '';
+  next.binance_api_secret = document.getElementById('binance_api_secret')?.value || '';
   next.poll_seconds = getNum('poll_seconds', next.poll_seconds);
   next.lookback_limit = getNum('lookback_limit', next.lookback_limit);
   next.rsi_period = getNum('rsi_period', next.rsi_period);
