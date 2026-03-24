@@ -57,15 +57,20 @@ class BinanceRestClient:
     ) -> list[str]:
         info = self.exchange_info()
         isolated_symbols: set[str] | None = None
+        fallback_to_margin_filter = margin_only
         if isolated_only:
-            isolated_symbols = self.isolated_margin_pairs()
+            try:
+                isolated_symbols = self.isolated_margin_pairs()
+            except Exception:
+                isolated_symbols = None
+                fallback_to_margin_filter = True
         out: list[str] = []
         for symbol in info.get("symbols", []):
             if spot_only and not symbol.get("isSpotTradingAllowed", False):
                 continue
             if isolated_symbols is not None and symbol.get("symbol") not in isolated_symbols:
                 continue
-            elif margin_only and not symbol.get("isMarginTradingAllowed", False):
+            elif fallback_to_margin_filter and not symbol.get("isMarginTradingAllowed", False):
                 continue
             if symbol.get("status") != status:
                 continue
