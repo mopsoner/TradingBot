@@ -76,6 +76,7 @@ def build_signal(
     eq = equal_highs_lows(candles_main, cfg["equal_level_tolerance_pct"], lookback=20)
     asia_high, asia_low = session_extremes(candles_main, cfg["session_timezone_offset_hours"], "asia")
     london_high, london_low = session_extremes(candles_main, cfg["session_timezone_offset_hours"], "london")
+    session_confirm_filter_enabled = bool(cfg.get("session_confirm_filter_enabled", True))
 
     state = "neutral"
     trigger = "wait"
@@ -153,15 +154,17 @@ def build_signal(
         confirm_candidate = ("break_up_confirm_soft", "bull_confirm", "5m_soft")
         confirm_score_bonus = 2
 
+    session_confirm_allowed = (session in ALLOWED_CONFIRM_SESSIONS) or (not session_confirm_filter_enabled)
+
     if confirm_candidate is not None:
-        if session in ALLOWED_CONFIRM_SESSIONS:
+        if session_confirm_allowed:
             trigger, bias, confirm_source = confirm_candidate
             pipeline["confirm"] = True
             score += confirm_score_bonus
         else:
             confirm_blocked_by_session = True
 
-    if session in ALLOWED_CONFIRM_SESSIONS:
+    if session_confirm_allowed:
         score += 1
 
     if session == "london_open" and rsi_main is not None and rsi_main >= cfg["signals"]["overbought"]:
@@ -222,6 +225,7 @@ def build_signal(
         "score": score,
         "confirm_source": confirm_source,
         "confirm_blocked_by_session": confirm_blocked_by_session,
+        "session_confirm_filter_enabled": session_confirm_filter_enabled,
         "pipeline": pipeline,
         "trade": trade,
         "liquidity_target": liquidity_target,
