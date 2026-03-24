@@ -1,42 +1,36 @@
 {
   "binance_rest_base": "https://api.binance.com",
-  "binance_api_key": "YOUR_BINANCE_API_KEY",
-  "binance_api_secret": "YOUR_BINANCE_API_SECRET",
-
+  "binance_api_key": "",
+  "binance_api_secret": "",
   "generated_config_path": "config.generated.json",
-
   "database_path": "data/signals.db",
   "ohlc_cache_db_path": "data/ohlc_cache.db",
   "dashboard_path": "data/dashboard.json",
   "log_path": "logs/runner_boot.log",
   "runtime_control_path": "data/runtime_control.json",
-
   "poll_seconds": 60,
   "lookback_limit": 180,
   "rsi_period": 14,
   "swing_window": 8,
   "equal_level_tolerance_pct": 0.0015,
   "session_timezone_offset_hours": -4,
-
   "signals": {
     "overbought": 70,
     "oversold": 30,
     "price_near_extreme_pct": 0.0025
   },
-
   "symbol_discovery": {
     "quote_assets": ["USDC"],
     "status": "TRADING",
     "spot_only": true,
-    "margin_only": false,
-    "isolated_only": true,
+    "margin_only": true,
+    "isolated_only": false,
     "use_static_symbols": false,
     "static_symbols": [],
     "max_symbols_total": 300,
     "batch_size": 15,
     "batch_rotation_file": "data/batch_rotation.json"
   },
-
   "bootstrap": {
     "intervals": ["1m", "5m", "1h", "4h"],
     "request_pause_seconds": 0.08,
@@ -48,14 +42,12 @@
       "4h": 365
     }
   },
-
   "backtest": {
     "symbol": "ETHUSDC",
     "history_limit": 3000,
     "min_score": 5,
     "min_rr": 0.8
   },
-
   "backtest_report_path": "data/backtest_report.json",
   "backtest_trades_path": "data/backtest_trades.json",
   "backtest_runs_dir": "data/backtests"

@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import hashlib
-import hmac
 import time
 from typing import Any
-from urllib.parse import urlencode
 
 import requests
 
@@ -23,28 +20,8 @@ class BinanceRestClient:
         response.raise_for_status()
         return response.json()
 
-    def _signed_get(self, path: str, params: dict[str, Any] | None = None) -> Any:
-        if not self.api_key or not self.api_secret:
-            raise RuntimeError("isolated_only requires Binance API key and secret")
-        query = dict(params or {})
-        query["timestamp"] = int(time.time() * 1000)
-        qs = urlencode(query, doseq=True)
-        signature = hmac.new(self.api_secret.encode("utf-8"), qs.encode("utf-8"), hashlib.sha256).hexdigest()
-        query["signature"] = signature
-        return self._get(path, query, headers={"X-MBX-APIKEY": self.api_key})
-
     def exchange_info(self) -> dict[str, Any]:
         return self._get("/api/v3/exchangeInfo")
-
-    def isolated_margin_pairs(self) -> set[str]:
-        rows = self._signed_get("/sapi/v1/margin/isolated/allPairs")
-        out: set[str] = set()
-        if isinstance(rows, list):
-            for row in rows:
-                symbol = row.get("symbol")
-                if symbol:
-                    out.add(symbol)
-        return out
 
     def discover_symbols(
         self,
@@ -56,21 +33,11 @@ class BinanceRestClient:
         isolated_only: bool = False,
     ) -> list[str]:
         info = self.exchange_info()
-        isolated_symbols: set[str] | None = None
-        fallback_to_margin_filter = margin_only
-        if isolated_only:
-            try:
-                isolated_symbols = self.isolated_margin_pairs()
-            except Exception:
-                isolated_symbols = None
-                fallback_to_margin_filter = True
         out: list[str] = []
         for symbol in info.get("symbols", []):
             if spot_only and not symbol.get("isSpotTradingAllowed", False):
                 continue
-            if isolated_symbols is not None and symbol.get("symbol") not in isolated_symbols:
-                continue
-            elif fallback_to_margin_filter and not symbol.get("isMarginTradingAllowed", False):
+            if margin_only and not symbol.get("isMarginTradingAllowed", False):
                 continue
             if symbol.get("status") != status:
                 continue
