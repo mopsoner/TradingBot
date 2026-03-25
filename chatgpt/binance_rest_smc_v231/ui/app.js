@@ -39,9 +39,12 @@ function metric(label, value, cls = '', sub = '') {
 function pill(text, cls = 'pill-neutral') {
   return `<span class="pill ${cls}">${text}</span>`;
 }
+function tradingViewUrl(symbol) {
+  return `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(`BINANCE:${symbol}`)}`;
+}
 function renderTradeCard(sig) {
   const side = sig.trade?.side || (sig.bias === 'bull_confirm' ? 'long' : 'short');
-  return `<article class="trade-card ${side === 'long' ? 'trade-long' : 'trade-short'}"><div class="trade-card-top"><div><div class="trade-symbol">${sig.symbol}</div><div class="trade-sub">${sig.session} · ${sig.trigger}</div></div><div class="trade-score">${sig.score ?? 'n/a'}</div></div><div class="trade-pills">${pill(side, side === 'long' ? 'pill-long' : 'pill-short')}${pill(sig.confirm_source || 'n/a')}${sig.liquidity_target?.type ? pill(sig.liquidity_target.type) : ''}</div><div class="trade-grid"><div><span class="label">Entry</span><strong>${fmtNum(sig.trade?.entry ?? sig.price, 4)}</strong></div><div><span class="label">Stop</span><strong>${fmtNum(sig.trade?.stop, 4)}</strong></div><div><span class="label">Target</span><strong>${fmtNum(sig.trade?.target, 4)}</strong></div><div><span class="label">RSI</span><strong>${fmtNum(sig.rsi_main, 2)}</strong></div></div></article>`;
+  return `<article class="trade-card ${side === 'long' ? 'trade-long' : 'trade-short'}"><div class="trade-card-top"><div><div class="trade-symbol">${sig.symbol}</div><div class="trade-sub">${sig.session} · ${sig.trigger}</div></div><div class="trade-score">${sig.score ?? 'n/a'}</div></div><div class="trade-pills">${pill(side, side === 'long' ? 'pill-long' : 'pill-short')}${pill(sig.confirm_source || 'n/a')}${sig.liquidity_target?.type ? pill(sig.liquidity_target.type) : ''}<a class="navbtn" href="${tradingViewUrl(sig.symbol)}" target="_blank" rel="noopener noreferrer">TradingView</a></div><div class="trade-grid"><div><span class="label">Entry</span><strong>${fmtNum(sig.trade?.entry ?? sig.price, 4)}</strong></div><div><span class="label">Stop</span><strong>${fmtNum(sig.trade?.stop, 4)}</strong></div><div><span class="label">Target</span><strong>${fmtNum(sig.trade?.target, 4)}</strong></div><div><span class="label">RSI</span><strong>${fmtNum(sig.rsi_main, 2)}</strong></div></div></article>`;
 }
 function applyFilters(signals) {
   const symbolQ = (document.getElementById('filterSymbol')?.value || '').trim().toUpperCase();
@@ -156,7 +159,7 @@ function renderTable(signals) {
   const filtered = applySort(applyFilters(signals));
   if (meta) meta.textContent = `${filtered.length} ligne(s) affichée(s)`;
   if (!filtered.length) {
-    tbody.innerHTML = '<tr><td colspan="11" class="empty-cell">Aucune crypto ne correspond aux filtres.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="12" class="empty-cell">Aucune crypto ne correspond aux filtres.</td></tr>';
     return;
   }
   tbody.innerHTML = filtered.map(sig => {
@@ -164,6 +167,7 @@ function renderTable(signals) {
     const confirmText = sig.confirm_blocked_by_session ? 'blocked session' : (sig.confirm_source || 'n/a');
     return `<tr>
       <td><strong>${sig.symbol || 'n/a'}</strong></td>
+      <td><a class="navbtn" href="${tradingViewUrl(sig.symbol || '')}" target="_blank" rel="noopener noreferrer">TV</a></td>
       <td><span class="score-chip ${(sig.score||0)>=6 ? 'score-good' : (sig.score||0)>=4 ? 'score-mid' : ''}">${sig.score ?? 0}</span></td>
       <td>${pill(stageName(sig))}</td>
       <td>${pill(sig.bias || 'neutral', String(sig.bias || '').includes('bull') ? 'pill-long' : String(sig.bias || '').includes('bear') ? 'pill-short' : 'pill-neutral')}</td>
