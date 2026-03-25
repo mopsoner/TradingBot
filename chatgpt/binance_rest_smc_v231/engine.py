@@ -125,6 +125,20 @@ def build_signal(
         bias = "bull_watch"
         pipeline["zone"] = True
 
+    volume_last = float(last.get("volume", 0.0) or 0.0)
+    previous_volumes = [float(c.get("volume", 0.0) or 0.0) for c in candles_main[-11:-1]]
+    volume_avg_prev = (sum(previous_volumes) / len(previous_volumes)) if previous_volumes else None
+    volume_ratio = (volume_last / volume_avg_prev) if volume_avg_prev and volume_avg_prev > 0 else None
+    volume_score_bonus = 0
+    if volume_ratio is not None:
+        if volume_ratio >= 2.0:
+            volume_score_bonus = 2
+        elif volume_ratio >= 1.3:
+            volume_score_bonus = 1
+        elif volume_ratio <= 0.7:
+            volume_score_bonus = -1
+        score += volume_score_bonus
+
     bear_strong_confirm = utad_watch and last["close"] < prev_low
     bull_strong_confirm = spring_watch and last["close"] > prev_high
 
@@ -218,6 +232,10 @@ def build_signal(
         "london_low": london_low,
         "equal_highs": eq["equal_highs"],
         "equal_lows": eq["equal_lows"],
+        "volume_last": volume_last,
+        "volume_avg_prev": volume_avg_prev,
+        "volume_ratio": volume_ratio,
+        "volume_score_bonus": volume_score_bonus,
         "state": state,
         "trigger": trigger,
         "bias": bias,
